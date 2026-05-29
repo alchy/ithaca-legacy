@@ -62,10 +62,12 @@ public:
     void vlog(const char* component, Severity severity,
               const char* format, va_list args);
 
-    // -- RT-safe API (lock-free ring buffer) --
-    // Format do stack bufferu, pak atomic publish do ring entry. Zadne
-    // alokace, zadne mutexy. Caller MUSI volat flushRTBuffer() z non-RT
-    // threadu, jinak ring overflow → dropped messages.
+    // -- RT-safe API (SPSC ring buffer) --
+    // Single-producer: logRT smi volat jen JEDEN (audio/RT) thread. Format do
+    // entry, pak release-publish write indexu. Zadne alokace, zadne mutexy. RT
+    // thread NIKDY neblokuje: kdyz je ring plny (flush z non-RT threadu nestiha),
+    // zprava se ZAHODI a zapocita do rtDroppedCount(). Caller MUSI pravidelne
+    // volat flushRTBuffer() z non-RT threadu, jinak rostou drop-y.
     void logRT(const char* component, Severity severity, const char* format, ...)
 #if defined(__GNUC__) || defined(__clang__)
         __attribute__((format(printf, 4, 5)))
@@ -76,6 +78,8 @@ public:
     // Vyprazdni ring buffer → console + file. Volat z non-RT threadu.
     // Vraci pocet flushnutych zprav.
     int flushRTBuffer();
+    // Pocet RT zprav zahozenych kvuli plnemu ring bufferu (flush nestihal).
+    uint64_t rtDroppedCount() const { return rt_dropped_.load(std::memory_order_relaxed); }
 
 private:
     static constexpr size_t COMPONENT_MAX  = 32;
@@ -87,8 +91,7 @@ private:
         char     message[MESSAGE_MAX];
         uint64_t timestamp_us;
         Severity severity;
-        std::atomic<bool> ready;
-        Entry() : timestamp_us(0), severity(Severity::Info), ready(false) {
+        Entry() : timestamp_us(0), severity(Severity::Info) {
             component[0] = '\0';
             message[0]   = '\0';
         }
@@ -97,6 +100,7 @@ private:
     std::array<Entry, RT_BUFFER_SIZE> rt_buffer_;
     std::atomic<size_t> rt_write_idx_{0};
     std::atomic<size_t> rt_read_idx_{0};
+    std::atomic<uint64_t> rt_dropped_{0};
 
     std::string           log_file_path_;
     std::ofstream         log_file_;

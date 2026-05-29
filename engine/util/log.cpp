@@ -135,32 +135,40 @@ void Logger::logRT(const char* component, Severity severity,
 void Logger::vlogRT(const char* component, Severity severity,
                     const char* format, va_list args) {
     if (!shouldLog(severity)) return;
-    // Rezervuj si slot v ring bufferu (relaxed je OK — single audio producer).
-    size_t idx = rt_write_idx_.fetch_add(1, std::memory_order_relaxed)
-               % RT_BUFFER_SIZE;
-    Entry& e = rt_buffer_[idx];
+    // SPSC: sem zapisuje jen jediny (audio/RT) thread, ten je vlastnikem
+    // write indexu. Synchronizace se ctenarem (flushRTBuffer) je pres publish
+    // write indexu nize (release parovan s acquire ve flush).
+    const size_t w = rt_write_idx_.load(std::memory_order_relaxed);
+    const size_t r = rt_read_idx_.load(std::memory_order_acquire);
+    if (w - r >= RT_BUFFER_SIZE) {
+        // Ring je plny — flush z non-RT threadu nestiha. RT thread NESMI
+        // blokovat, takze zpravu zahodime a jen zvedneme citac pro diagnostiku.
+        rt_dropped_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    Entry& e = rt_buffer_[w % RT_BUFFER_SIZE];
     std::vsnprintf(e.message, MESSAGE_MAX, format, args);
     std::strncpy(e.component, component, COMPONENT_MAX - 1);
     e.component[COMPONENT_MAX - 1] = '\0';
     e.severity     = severity;
     e.timestamp_us = nowMicros();
-    e.ready.store(true, std::memory_order_release);
+    // Publikuj az kdyz je cely entry zapsany — release zaruci, ze ctenar,
+    // ktery uvidi novy write index (acquire), uvidi i kompletni data entry.
+    rt_write_idx_.store(w + 1, std::memory_order_release);
 }
 
 int Logger::flushRTBuffer() {
-    int flushed = 0;
     std::lock_guard<std::mutex> lk(log_mutex_);
-    while (true) {
-        size_t r = rt_read_idx_.load(std::memory_order_relaxed);
-        size_t w = rt_write_idx_.load(std::memory_order_acquire);
-        if (r >= w) break;
+    size_t r = rt_read_idx_.load(std::memory_order_relaxed);
+    const size_t w = rt_write_idx_.load(std::memory_order_acquire);
+    int flushed = 0;
+    while (r < w) {
         Entry& e = rt_buffer_[r % RT_BUFFER_SIZE];
-        if (!e.ready.load(std::memory_order_acquire)) break;
         writeEntry(e.component, e.severity, e.message, e.timestamp_us);
-        e.ready.store(false, std::memory_order_release);
-        rt_read_idx_.store(r + 1, std::memory_order_relaxed);
-        flushed++;
+        ++r;
+        ++flushed;
     }
+    rt_read_idx_.store(r, std::memory_order_release);
     return flushed;
 }
 

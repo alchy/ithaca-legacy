@@ -46,6 +46,21 @@ TEST_CASE("logRT zapise do ring bufferu a flushRTBuffer ho vyprazdni") {
     CHECK(lg.flushRTBuffer() == 0);
 }
 
+TEST_CASE("logRT pretece pri prekroceni kapacity ringu a zahozene zpravy se pocitaji") {
+    log::Logger lg;
+    lg.setMinSeverity(log::Severity::Debug);
+    lg.setOutputMode(/*console=*/false, /*file=*/false);  // tichy pro test
+    // RT_BUFFER_SIZE je 1024 (privatni konstanta). Zapis 1500 zprav bez flushe.
+    const int N = 1500;
+    for (int i = 0; i < N; ++i)
+        lg.logRT("test", log::Severity::Info, "zprava %d", i);
+    // Ring pojme 1024 → flush vrati presne 1024, zbytek je zahozeny.
+    CHECK(lg.flushRTBuffer() == 1024);
+    CHECK(lg.rtDroppedCount() == (uint64_t)(N - 1024));
+    // Po flushe je ring prazdny.
+    CHECK(lg.flushRTBuffer() == 0);
+}
+
 TEST_CASE("version string neni prazdny") {
     CHECK(std::string(ITHACA_VERSION).size() > 0);
 }
