@@ -24,6 +24,7 @@ add_subdirectory(third-party)
 add_library(ithaca_core STATIC
     engine/util/log.cpp
     engine/io/wav_reader.cpp
+    engine/sample/bank_index.cpp
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)

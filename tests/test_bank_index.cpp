@@ -1,0 +1,38 @@
+// tests/test_bank_index.cpp
+// Testuje ciste parsovaci funkce nazvu a detekci formatu.
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest.h"
+
+#include "sample/bank_index.h"
+
+#include <string>
+
+using namespace ithaca;
+
+TEST_CASE("parseLegacyName rozparsuje mNNN-velV-fSS.wav") {
+    ParsedName p = parseLegacyName("m060-vel3-f48.wav");
+    REQUIRE(p.ok);
+    CHECK(p.midi == 60);
+    CHECK(p.vel == 3);
+    CHECK(p.sr_tag == 48);
+}
+
+TEST_CASE("parseLegacyName akceptuje hranice (m021-vel0, m108-vel7)") {
+    ParsedName a = parseLegacyName("m021-vel0-f48.wav");
+    REQUIRE(a.ok); CHECK(a.midi == 21); CHECK(a.vel == 0);
+    ParsedName b = parseLegacyName("m108-vel7-f96.wav");
+    REQUIRE(b.ok); CHECK(b.midi == 108); CHECK(b.vel == 7); CHECK(b.sr_tag == 96);
+}
+
+TEST_CASE("parseLegacyName odmitne nelegacy nazvy") {
+    CHECK_FALSE(parseLegacyName("m60-front-abc123.wav").ok);   // extended
+    CHECK_FALSE(parseLegacyName("nahodny.wav").ok);
+    CHECK_FALSE(parseLegacyName("m060-v003-f48.wav").ok);      // 16-vrstva varianta nepodporovana
+}
+
+TEST_CASE("detectFormatFromName rozpozna legacy vs extended") {
+    CHECK(detectFormatFromName("m060-vel3-f48.wav") == BankFormat::Legacy);
+    CHECK(detectFormatFromName("m60-front-abc123.wav") == BankFormat::Extended);
+    CHECK(detectFormatFromName("m60-soundboard-abc123.wav") == BankFormat::Extended);
+    CHECK(detectFormatFromName("readme.txt") == BankFormat::Unknown);
+}
