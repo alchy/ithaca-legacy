@@ -1,0 +1,21 @@
+# build artifacts
+/build/
+compile_commands.json
+
+# vendored deps (stahuji se pres tools/fetch-third-party.sh, necommituji se)
+/third-party/doctest/
+/third-party/nlohmann_json/
+/third-party/miniaudio/
+/third-party/rtmidi/
+/third-party/.staging/
+
+# test outputs
+/test-samples/
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+
+# logs
+*.log
