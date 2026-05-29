@@ -26,6 +26,7 @@ add_library(ithaca_core STATIC
     engine/io/wav_reader.cpp
     engine/sample/bank_index.cpp
     engine/sample/sample_loader.cpp
+    engine/sample/sample_store.cpp
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)

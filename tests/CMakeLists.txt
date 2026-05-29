@@ -14,3 +14,7 @@ add_test(NAME test_bank_index COMMAND test_bank_index)
 add_executable(test_sample_loader test_sample_loader.cpp)
 target_link_libraries(test_sample_loader PRIVATE ithaca_core doctest)
 add_test(NAME test_sample_loader COMMAND test_sample_loader)
+
+add_executable(test_sample_store test_sample_store.cpp)
+target_link_libraries(test_sample_store PRIVATE ithaca_core doctest)
+add_test(NAME test_sample_store COMMAND test_sample_store)
