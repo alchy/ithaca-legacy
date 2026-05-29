@@ -369,7 +369,12 @@ parametry rezonance, mic mix, atd.
 ### 7.3 Tech stack
 
 - Audio backend: miniaudio (vendored, vc. Pi/ALSA). MIDI: RtMidi.
-- Sample rate: engine fix na 48 kHz; WAV s jinym SR se resampluje pri note-on (linearne).
+- Sample rate: nove samply budou nahravany ve TREch SR spektrech — **44100 / 48000 / 96000 Hz**
+  (rozhodnuto 2026-05-29). Engine s nimi musi umet pracovat. Vychozi model: engine ma
+  konfigurovatelny vystupni/zpracovaci SR; samply v jinem SR nez engine se resampluji pri
+  note-on. Legacy banky nesou SR tag v nazvu (`fSS`, napr. f48); pro novy format se doresi, zda
+  SR tag ponechat nebo cist z WAV hlavicky (faze 7). Detail kvality resamplingu (linearni vs
+  vyssi rad) k doladeni.
 - Logger: icr2-style RT-safe.
 - Jazyk: cestina bez diakritiky v komentarich, docs, README; identifikatory anglicky;
   komentovat spise vice (explicit > implicit).
