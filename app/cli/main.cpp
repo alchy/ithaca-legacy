@@ -10,10 +10,13 @@
 #include "sample/sample_store.h"
 #include "util/log.h"
 #include "util/version.h"
+#include "engine.h"
+#include "render/batch_renderer.h"
 
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using namespace ithaca;
 
@@ -25,19 +28,23 @@ static void printUsage(const char* argv0) {
         "  %s --version\n"
         "  %s --selftest [--log-level <lvl>]\n"
         "  %s --inspect <dir> [--log-level <lvl>]\n"
+        "  %s --render <dir> --out <wav> [--log-level <lvl>]\n"
         "\n"
         "Volby:\n"
         "  --version            vypise verzi a skonci\n"
         "  --log-level <lvl>    debug | info | warn | error | fatal (default info)\n"
         "  --selftest           self-test loggeru (exit 0 = OK)\n"
         "  --inspect <dir>      nacti banku a vypis prehled\n"
+        "  --render <dir>       nacti banku a renderuj test noty do --out WAV\n"
+        "  --out <wav>          vystupni WAV pro --render\n"
         "  --help, -h           tato napoveda\n",
-        ITHACA_VERSION, argv0, argv0, argv0);
+        ITHACA_VERSION, argv0, argv0, argv0, argv0);
 }
 
 int main(int argc, char* argv[]) {
     bool do_selftest = false;
     std::string inspect_dir;
+    std::string render_dir, render_out;
     log::Severity level = log::Severity::Info;
 
     for (int i = 1; i < argc; ++i) {
@@ -54,6 +61,10 @@ int main(int argc, char* argv[]) {
             do_selftest = true;
         } else if (a == "--inspect" && i + 1 < argc) {
             inspect_dir = argv[++i];
+        } else if (a == "--render" && i + 1 < argc) {
+            render_dir = argv[++i];
+        } else if (a == "--out" && i + 1 < argc) {
+            render_out = argv[++i];
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n\n", a.c_str());
             printUsage(argv[0]);
@@ -64,6 +75,27 @@ int main(int argc, char* argv[]) {
     auto& L = log::Logger::default_();
     L.setMinSeverity(level);
     L.setOutputMode(/*console=*/true, /*file=*/false);
+
+    if (!render_dir.empty()) {
+        if (render_out.empty()) {
+            LOG_ERROR("render", "--render vyzaduje --out <wav>");
+            return 1;
+        }
+        Engine eng;
+        EngineConfig cfg;
+        // Pro rychly render nacti jen par not kolem stredu klaviatury.
+        cfg.midi_from = 57; cfg.midi_to = 72;
+        if (!eng.init(cfg) || !eng.loadBank(render_dir)) {
+            LOG_ERROR("render", "Nelze nacist banku: %s", render_dir.c_str());
+            return 1;
+        }
+        std::vector<BatchNote> notes = {
+            {60, 100, 1.0f}, {64, 100, 1.0f}, {67, 100, 1.0f},   // C-E-G akord po sobe
+        };
+        int n = renderNotes(eng, notes, render_out, /*tail_s=*/0.5f);
+        LOG_INFO("render", "Hotovo: %d not → %s", n, render_out.c_str());
+        return n > 0 ? 0 : 1;
+    }
 
     if (!inspect_dir.empty()) {
         LOG_INFO("inspect", "Nacitam banku: %s", inspect_dir.c_str());

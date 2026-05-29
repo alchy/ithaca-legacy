@@ -38,3 +38,7 @@ add_test(NAME test_midi_queue COMMAND test_midi_queue)
 add_executable(test_engine test_engine.cpp)
 target_link_libraries(test_engine PRIVATE ithaca_core doctest)
 add_test(NAME test_engine COMMAND test_engine)
+
+add_executable(test_batch_renderer test_batch_renderer.cpp)
+target_link_libraries(test_batch_renderer PRIVATE ithaca_core doctest)
+add_test(NAME test_batch_renderer COMMAND test_batch_renderer)
