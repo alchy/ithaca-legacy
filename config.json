@@ -1,0 +1,10 @@
+{
+  "preload_ms": 150,
+  "resonance_window_ms": 500,
+  "cache_budget_mb": 2400,
+  "max_voices": 128,
+  "stream_threads": 2,
+  "render_threads": 0,
+  "midi_channel": 0,
+  "log_level": "info"
+}

@@ -329,6 +329,21 @@ TEST_CASE("logRT zapise do ring bufferu a flushRTBuffer ho vyprazdni") {
     CHECK(lg.flushRTBuffer() == 0);
 }
 
+TEST_CASE("logRT pretece pri prekroceni kapacity ringu a zahozene zpravy se pocitaji") {
+    log::Logger lg;
+    lg.setMinSeverity(log::Severity::Debug);
+    lg.setOutputMode(/*console=*/false, /*file=*/false);  // tichy pro test
+    // RT_BUFFER_SIZE je 1024 (privatni konstanta). Zapis 1500 zprav bez flushe.
+    const int N = 1500;
+    for (int i = 0; i < N; ++i)
+        lg.logRT("test", log::Severity::Info, "zprava %d", i);
+    // Ring pojme 1024 → flush vrati presne 1024, zbytek je zahozeny.
+    CHECK(lg.flushRTBuffer() == 1024);
+    CHECK(lg.rtDroppedCount() == (uint64_t)(N - 1024));
+    // Po flushe je ring prazdny.
+    CHECK(lg.flushRTBuffer() == 0);
+}
+
 TEST_CASE("version string neni prazdny") {
     CHECK(std::string(ITHACA_VERSION).size() > 0);
 }
@@ -409,10 +424,12 @@ public:
     void vlog(const char* component, Severity severity,
               const char* format, va_list args);
 
-    // -- RT-safe API (lock-free ring buffer) --
-    // Format do stack bufferu, pak atomic publish do ring entry. Zadne
-    // alokace, zadne mutexy. Caller MUSI volat flushRTBuffer() z non-RT
-    // threadu, jinak ring overflow → dropped messages.
+    // -- RT-safe API (SPSC ring buffer) --
+    // Single-producer: logRT smi volat jen JEDEN (audio/RT) thread. Format do
+    // entry, pak release-publish write indexu. Zadne alokace, zadne mutexy. RT
+    // thread NIKDY neblokuje: kdyz je ring plny (flush z non-RT threadu nestiha),
+    // zprava se ZAHODI a zapocita do rtDroppedCount(). Caller MUSI pravidelne
+    // volat flushRTBuffer() z non-RT threadu, jinak rostou drop-y.
     void logRT(const char* component, Severity severity, const char* format, ...)
 #if defined(__GNUC__) || defined(__clang__)
         __attribute__((format(printf, 4, 5)))
@@ -423,6 +440,8 @@ public:
     // Vyprazdni ring buffer → console + file. Volat z non-RT threadu.
     // Vraci pocet flushnutych zprav.
     int flushRTBuffer();
+    // Pocet RT zprav zahozenych kvuli plnemu ring bufferu (flush nestihal).
+    uint64_t rtDroppedCount() const { return rt_dropped_.load(std::memory_order_relaxed); }
 
 private:
     static constexpr size_t COMPONENT_MAX  = 32;
@@ -434,8 +453,7 @@ private:
         char     message[MESSAGE_MAX];
         uint64_t timestamp_us;
         Severity severity;
-        std::atomic<bool> ready;
-        Entry() : timestamp_us(0), severity(Severity::Info), ready(false) {
+        Entry() : timestamp_us(0), severity(Severity::Info) {
             component[0] = '\0';
             message[0]   = '\0';
         }
@@ -444,6 +462,7 @@ private:
     std::array<Entry, RT_BUFFER_SIZE> rt_buffer_;
     std::atomic<size_t> rt_write_idx_{0};
     std::atomic<size_t> rt_read_idx_{0};
+    std::atomic<uint64_t> rt_dropped_{0};
 
     std::string           log_file_path_;
     std::ofstream         log_file_;
@@ -619,37 +638,55 @@ void Logger::logRT(const char* component, Severity severity,
 void Logger::vlogRT(const char* component, Severity severity,
                     const char* format, va_list args) {
     if (!shouldLog(severity)) return;
-    // Rezervuj si slot v ring bufferu (relaxed je OK — single audio producer).
-    size_t idx = rt_write_idx_.fetch_add(1, std::memory_order_relaxed)
-               % RT_BUFFER_SIZE;
-    Entry& e = rt_buffer_[idx];
+    // SPSC: sem zapisuje jen jediny (audio/RT) thread, ten je vlastnikem
+    // write indexu. Synchronizace se ctenarem (flushRTBuffer) je pres publish
+    // write indexu nize (release parovan s acquire ve flush).
+    const size_t w = rt_write_idx_.load(std::memory_order_relaxed);
+    const size_t r = rt_read_idx_.load(std::memory_order_acquire);
+    if (w - r >= RT_BUFFER_SIZE) {
+        // Ring je plny — flush z non-RT threadu nestiha. RT thread NESMI
+        // blokovat, takze zpravu zahodime a jen zvedneme citac pro diagnostiku.
+        rt_dropped_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    Entry& e = rt_buffer_[w % RT_BUFFER_SIZE];
     std::vsnprintf(e.message, MESSAGE_MAX, format, args);
     std::strncpy(e.component, component, COMPONENT_MAX - 1);
     e.component[COMPONENT_MAX - 1] = '\0';
     e.severity     = severity;
     e.timestamp_us = nowMicros();
-    e.ready.store(true, std::memory_order_release);
+    // Publikuj az kdyz je cely entry zapsany — release zaruci, ze ctenar,
+    // ktery uvidi novy write index (acquire), uvidi i kompletni data entry.
+    rt_write_idx_.store(w + 1, std::memory_order_release);
 }
 
 int Logger::flushRTBuffer() {
-    int flushed = 0;
     std::lock_guard<std::mutex> lk(log_mutex_);
-    while (true) {
-        size_t r = rt_read_idx_.load(std::memory_order_relaxed);
-        size_t w = rt_write_idx_.load(std::memory_order_acquire);
-        if (r >= w) break;
+    size_t r = rt_read_idx_.load(std::memory_order_relaxed);
+    const size_t w = rt_write_idx_.load(std::memory_order_acquire);
+    int flushed = 0;
+    while (r < w) {
         Entry& e = rt_buffer_[r % RT_BUFFER_SIZE];
-        if (!e.ready.load(std::memory_order_acquire)) break;
         writeEntry(e.component, e.severity, e.message, e.timestamp_us);
-        e.ready.store(false, std::memory_order_release);
-        rt_read_idx_.store(r + 1, std::memory_order_relaxed);
-        flushed++;
+        ++r;
+        ++flushed;
     }
+    rt_read_idx_.store(r, std::memory_order_release);
     return flushed;
 }
 
 } // namespace ithaca::log
 ```
+
+Pozn. — SPSC drop-on-full design (oprava race z code review):
+Puvodni vlogRT rezervoval slot pres `fetch_add % SIZE` a NIKDY nekontroloval,
+zda slot jeste neobsahuje neprectenou zpravu → pri preteceni (> RT_BUFFER_SIZE
+zapisu pred flushem) producent prepsal slot, ktery flusher soubezne cetl =
+data race / torn read. Per-entry `ready` flag to neresil. Oprava: korektni
+SPSC ring (jeden RT producent = audio thread, jeden konzument = flushRTBuffer
+serializovany mutexem). Synchronizace je pres publish write indexu
+(release/acquire), `ready` flag uplne odstranen. Na plnem ringu se zprava
+zahodi a zapocita do `rt_dropped_` (citac dostupny pres `rtDroppedCount()`).
 
 - [ ] **Step 5: Commit** (build a spusteni testu prijde az v Task 5–6, kdy existuje CMake)
 
