@@ -70,6 +70,11 @@ Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova.
   nepodstatna. Je to **posledni token pred `.wav`**, takze ho regexp snadno vyzobne.
 - **Zadny velocity-degree token.** Velocity se DETEKUJE: loader zmeri peak RMS jen z
   `front` samplu. Soundboard se RMS nemeri — dohleda se podle HASH.
+- **Soundboard je VOLITELNY (2026-05-29):** kdyz k `front` samplu chybi HASH-parovany
+  `soundboard` WAV, loader to jen ZALOGUJE a pokracuje s tim, co ma (jen front). Soundboard
+  nemusi v prvni fazi nahravani vubec existovat. Zadny front sampl se kvuli chybejicimu
+  soundboardu nezahazuje. (Symetricky: front je povinny — je z nej velocity; osamoceny
+  soundboard bez front se preskoci a zaloguje.)
 
 ### 2.2 Mereni RMS a dynamicke sloty
 
