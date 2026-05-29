@@ -12,10 +12,11 @@ compile_commands.json
 # test outputs
 /test-samples/
 
-# OS / editor
+# OS / editor / tooling
 .DS_Store
 *.swp
 *~
+.cache/
 
 # logs
 *.log

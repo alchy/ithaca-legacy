@@ -24,6 +24,17 @@ TEST_CASE("parseLegacyName akceptuje hranice (m021-vel0, m108-vel7)") {
     REQUIRE(b.ok); CHECK(b.midi == 108); CHECK(b.vel == 7); CHECK(b.sr_tag == 96);
 }
 
+TEST_CASE("parseLegacyName akceptuje vsechny tri SR tagy (44/48/96)") {
+    // Hard pozadavek: nove samply prijdou ve 44100/48000/96000 Hz → f44/f48/f96.
+    // Zamyka, ze bound \d{2,3} v legacy regexu zadny z nich neodrizne.
+    ParsedName a = parseLegacyName("m060-vel3-f44.wav");
+    REQUIRE(a.ok); CHECK(a.sr_tag == 44);
+    ParsedName b = parseLegacyName("m060-vel3-f48.wav");
+    REQUIRE(b.ok); CHECK(b.sr_tag == 48);
+    ParsedName c = parseLegacyName("m060-vel3-f96.wav");
+    REQUIRE(c.ok); CHECK(c.sr_tag == 96);
+}
+
 TEST_CASE("parseLegacyName odmitne nelegacy nazvy") {
     CHECK_FALSE(parseLegacyName("m60-front-abc123.wav").ok);   // extended
     CHECK_FALSE(parseLegacyName("nahodny.wav").ok);
