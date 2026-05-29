@@ -30,3 +30,11 @@ add_test(NAME test_patch_manager COMMAND test_patch_manager)
 add_executable(test_voice_pool test_voice_pool.cpp)
 target_link_libraries(test_voice_pool PRIVATE ithaca_core doctest)
 add_test(NAME test_voice_pool COMMAND test_voice_pool)
+
+add_executable(test_midi_queue test_midi_queue.cpp)
+target_link_libraries(test_midi_queue PRIVATE ithaca_core doctest)
+add_test(NAME test_midi_queue COMMAND test_midi_queue)
+
+add_executable(test_engine test_engine.cpp)
+target_link_libraries(test_engine PRIVATE ithaca_core doctest)
+add_test(NAME test_engine COMMAND test_engine)

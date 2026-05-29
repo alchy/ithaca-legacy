@@ -31,6 +31,7 @@ add_library(ithaca_core STATIC
     engine/voice/patch_manager.cpp
     engine/voice/voice.cpp
     engine/voice/voice_pool.cpp
+    engine/engine.cpp
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)
