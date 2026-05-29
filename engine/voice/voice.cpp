@@ -68,6 +68,13 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
     const float* data = mic_->data.data();
     const int max_frames = mic_->frames;
 
+    // Sleduje, zda tento volani neco zapsalo do vystupu. Hlas, kteremu sample
+    // dohraje uprostred bloku, JESTE v tomto bloku vyrobil zvuk — proto musi
+    // vratit true, i kdyz uz neni active_ (jinak by volajici prisel o posledni
+    // znejici blok). Bez tohoto priznaku by se prvni blok kratkeho samplu
+    // tvaril jako ticho.
+    bool produced = false;
+
     for (int i = 0; i < n_samples; ++i) {
         // Damping crossfade (zbytek predchoziho tonu pri retriggeru).
         if (damping_ && damp_pos_ < damp_len_) {
@@ -103,12 +110,14 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
         float g = vel_gain_ * env;
         out_l[i] += sL * g * pan_l_;
         out_r[i] += sR * g * pan_r_;
+        produced = true;
 
         if (!active_) break;
     }
     // Damping muze dobehnout i kdyz uz tlo neni aktivni — hlas je "aktivni"
-    // dokud bud hraje tlo, nebo dobiha damping.
-    return active_ || damping_;
+    // dokud bud hraje tlo, dobiha damping, NEBO prave v tomto bloku jeste neco
+    // zaznelo (sample dohral uprostred bloku).
+    return active_ || damping_ || produced;
 }
 
 } // namespace ithaca
