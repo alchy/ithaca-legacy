@@ -1,6 +1,7 @@
 // engine/util/log.cpp — implementace RT-safe loggeru (viz log.h).
 #include "util/log.h"
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
