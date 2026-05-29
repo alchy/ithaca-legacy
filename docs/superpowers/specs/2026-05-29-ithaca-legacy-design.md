@@ -308,6 +308,14 @@ Jako icr2: engine umi **bind na konkretni MIDI kanal (1–16)** nebo **OMNI** (p
 kanaly). Je to jen filtr na vstupu MIDI fronty — pred zarazenim do fronty se zahodi udalosti
 z nepozadovaneho kanalu. Konfigurovatelne (`midi_channel`: 0 = OMNI, 1–16 = konkretni kanal).
 
+### 5.8 Vyber a refresh MIDI portu
+
+Jako icr2: engine musi umet **vyjmenovat dostupne MIDI vstupni porty** ze systemu, **otevrit /
+prepnout port za behu** a **znovu naskenovat (refresh)**, kdyz se pripoji nove zarizeni (typicky
+tlacitko v GUI). Patri do `midi_input` (enumerace + open/close pres RtMidi); fasada `engine` to
+vystavi frontendu (`listMidiPorts()`, `openMidiPort(idx)`, `refreshMidiPorts()`). Vychozi port je
+konfigurovatelny (jmeno nebo index). Headless CLI vybira port z configu/CLI argumentu.
+
 ---
 
 ## 6. Signalni retezec a DSP
