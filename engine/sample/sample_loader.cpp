@@ -2,6 +2,7 @@
 #include "sample/sample_loader.h"
 
 #include <cmath>
+#include <cstddef>   // size_t (libc++ ho z <cmath> negarantuje)
 
 namespace ithaca {
 
