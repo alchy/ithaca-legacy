@@ -43,6 +43,9 @@ bool parseHeader(std::FILE* f, FmtInfo& fmt,
             std::fread(raw, 1, to_read, f);
             fmt.audio_format = raw[0];
             fmt.channels     = raw[1];
+            // Pozn.: WAV je little-endian a vsechny cilove platformy (x86/ARM
+            // vc. Raspberry Pi) jsou tez LE, takze cteme primo. Pripadny
+            // big-endian port by zde musel byte-swapovat.
             std::memcpy(&fmt.sample_rate, &raw[2], 4);
             fmt.bits         = raw[7];
             fmt.have         = true;
@@ -127,8 +130,23 @@ WavInfo peekWavInfo(const std::string& path) {
     if (!f) return out;
     FmtInfo fmt; uint32_t data_size = 0; bool found_data = false;
     bool ok = parseHeader(f, fmt, data_size, found_data);
+    if (!ok || !found_data) {
+        std::fclose(f);
+        return out;
+    }
+
+    // parseHeader nechal soubor pozicovany na zacatku data chunku. Header muze
+    // lhat (oriznuty/streamovany soubor), takze data_size orizneme na skutecny
+    // zbytek souboru do EOF.
+    long data_pos = std::ftell(f);
+    std::fseek(f, 0, SEEK_END);
+    long file_end = std::ftell(f);
+    if (data_pos >= 0 && file_end >= data_pos) {
+        uint32_t avail = (uint32_t)(file_end - data_pos);
+        if (avail < data_size) data_size = avail;
+    }
     std::fclose(f);
-    if (!ok || !found_data) return out;
+
     const int bytes_per_sample = fmt.bits / 8;
     if (bytes_per_sample <= 0 || fmt.channels == 0) return out;
     out.channels    = fmt.channels;

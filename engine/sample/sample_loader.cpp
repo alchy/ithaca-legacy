@@ -40,8 +40,9 @@ PeakResult slidingPeakRms(const float* data, int frames, int sample_rate) {
 float measurePeakRmsDb(const float* data, int frames, int sample_rate) {
     if (frames <= 0 || data == nullptr) return kSilenceFloorDb;
     PeakResult r = slidingPeakRms(data, frames, sample_rate);
-    if (r.max_rms <= 1e-7f) return kSilenceFloorDb;   // ~-140 dB → ticho
+    if (r.max_rms <= 0.f) return kSilenceFloorDb;   // uplne ticho → vyhni se log10(0)
     float db = 20.f * std::log10(r.max_rms);
+    // Jediny zdroj pravdy pro podlahu je kSilenceFloorDb — vse pod ni se na ni orizne.
     return db < kSilenceFloorDb ? kSilenceFloorDb : db;
 }
 
