@@ -26,3 +26,7 @@ add_test(NAME test_wav_writer COMMAND test_wav_writer)
 add_executable(test_patch_manager test_patch_manager.cpp)
 target_link_libraries(test_patch_manager PRIVATE ithaca_core doctest)
 add_test(NAME test_patch_manager COMMAND test_patch_manager)
+
+add_executable(test_voice_pool test_voice_pool.cpp)
+target_link_libraries(test_voice_pool PRIVATE ithaca_core doctest)
+add_test(NAME test_voice_pool COMMAND test_voice_pool)
