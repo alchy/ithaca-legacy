@@ -36,3 +36,15 @@ TEST_CASE("detectFormatFromName rozpozna legacy vs extended") {
     CHECK(detectFormatFromName("m60-soundboard-abc123.wav") == BankFormat::Extended);
     CHECK(detectFormatFromName("readme.txt") == BankFormat::Unknown);
 }
+
+TEST_CASE("parseLegacyName nespadne na prehnane dlouhych cislech") {
+    CHECK_FALSE(parseLegacyName("m060-vel3-f99999999999.wav").ok);  // SR tag moc dlouhy → nematchne
+    CHECK_FALSE(parseLegacyName("m9999-vel3-f48.wav").ok);          // nota moc dlouha
+}
+TEST_CASE("parseExtendedName nespadne na prehnane dlouhe note") {
+    CHECK_FALSE(parseExtendedName("m999999999999-front-abc.wav").ok);  // nota moc dlouha → nematchne
+}
+TEST_CASE("scanBank prezije adresar nelze — vrati Unknown bez vyjimky") {
+    BankScan s = scanBank("/tmp/ithaca_nope_zzz_xyz");
+    CHECK(s.format == BankFormat::Unknown);
+}
