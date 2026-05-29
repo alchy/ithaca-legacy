@@ -24,6 +24,7 @@ add_subdirectory(third-party)
 add_library(ithaca_core STATIC
     engine/util/log.cpp
     engine/io/wav_reader.cpp
+    engine/io/wav_writer.cpp
     engine/sample/bank_index.cpp
     engine/sample/sample_loader.cpp
     engine/sample/sample_store.cpp
