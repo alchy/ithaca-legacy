@@ -59,8 +59,8 @@ ne jako finalni obsah.
 Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova.
 
 **Legacy format** (soucasne banky, single stereo par):
-- `mNNN-velV-fSS.wav` — 8 velocity vrstev (napr. `m060-vel3-f48.wav`).
-- `mNNN-vVVV-fSS.wav` — varianta s vice vrstvami (napr. 16; `m060-v007-f48.wav`).
+- `mNNN-velV-fSS.wav` — 8 velocity vrstev (napr. `m060-vel3-f48.wav`). Jen tato varianta;
+  16-vrstvou variantu (`mNNN-vVVV-fSS.wav`) NEpodporujeme.
 
 **Extended format** (nove banky, multi-mic):
 - `mNN-MIC-HASH.wav`, napr. `m60-front-HASH.wav` + `m60-soundboard-HASH.wav`.
@@ -82,8 +82,8 @@ Sjednocene pravidlo skupinovani (pro extended format, RMS z front samplu):
 
 Tim vznika **dynamicky pocet slotu per nota**: m60 s 20 samply → N slotu × round-robin
 varianty; nota s 5 samply → mene slotu. MIDI velocity 0–127 se mapuje na tuto per-nota
-dynamickou krivku s interpolaci mezi sousednimi sloty. Legacy banka projde stejnou cestou
-— RMS hodnoty vyjdou diskretni → 8 (resp. 16) slotu. **Jeden kod pro oba formaty.**
+dynamickou krivku s interpolaci mezi sousednimi sloty. Legacy banka (8 vrstev) projde stejnou
+cestou — namapuje se na 8 slotu podle `vel` tokenu. **Jeden kod pro oba formaty.**
 
 - Round-robin tolerance: default ±1.5 dB, konfigurovatelne.
 - Round-robin vyber: nahodny, s pravidlem "neopakuj naposledy hranou variantu".
@@ -104,11 +104,17 @@ Dusledky:
 - Default mic mix je konfiguracni polozka (navrh: oba pary 50/50). Zadna banka zatim neni.
 - Legacy banky jsou single stereo par; multi-mic plati pro novy format.
 
-### 2.4 Pitch-shift pro chybejici noty
+### 2.4 Pitch-shift pro chybejici noty (fallback ve dvou osach)
 
-Kdyz nota nema sampl, engine transponuje z nejblizsi nahrane noty. Dulezite uz na zacatku
-pro testovani (uzivatel bude mit jen par samplu pro roztrousene noty). `patch_manager`:
-"najdi nejblizsi nahranou notu + transponuj na cilovou vysku".
+Kdyz pro pozadovany (nota, velocity) neni sampl, engine hleda nahradu ve DVOU osach:
+1. **Osa noty:** najdi nejblizsi nahranou notu a transponuj ji pitch-shiftem na cilovou vysku.
+2. **Osa velocity:** v te (puvodni i nahradni) note vezmi nejblizsi dostupny velocity slot
+   k pozadovane velocity.
+
+Obe osy musi fungovat soucasne — typicky na zacatku testovani, kdy je jen par roztrousenych
+samplu: chybi cela nota → vezme se sousedni nota, a i v ni se vezme nejblizsi velocity slot.
+icr dnes resi jen velocity fallback (nearest layer), notu netransponuje vubec; my potrebujeme
+oboji. `patch_manager`: "najdi nejblizsi (nota, velocity) + transponuj na cilovou vysku".
 
 ---
 
@@ -185,6 +191,20 @@ MIDI/GUI thread                        — plni MIDI frontu, cte atomicke metry
 Ring buffery jsou pre-alokovane v poolu a prirazuji se jen aktivnim hlasum, ktere
 streamuji. Mutovany mic se nestreamuje → jeho ring buffery i disk I/O odpadaji.
 
+### 4.3a Preload pro rezonancni okno (dva preload regiony)
+
+Rezonancni hlas (viz 5.5) startuje od peak RMS a hraje sustain region. Standardni preload
+ale drzi jen ZACATEK samplu (`[0 .. attack]`), takze sustain region od peak RMS dal lezi na
+disku — rezonance by cekala na stream (latence) nebo by nemela z ceho hrat. Proto sampl,
+ktery slouzi jako ZDROJ rezonance, musi mit v RAM preload nejen attack, ale i dostatecny
+kus OD peak RMS dal (rezonancni okno). Tedy dva preload regiony na MicLayer:
+`[0 .. attack_konec]` + `[peak_RMS .. peak_RMS + resonance_window_ms]`.
+
+Pozn.: u piana je peak RMS casto brzy (uvnitr attacku), takze "az do peak RMS" byva uz v
+prvnim regionu; kriticky je ten DRUHY region — dost samplu OD peak RMS dal (sustain), ktery
+v zakladnim preloadu chybi. `resonance_window_ms` je konfigurovatelne. Loader peak RMS i
+hranice attack/sustain meri v tomtez mericim pruchodu (viz 2.2), takze obe pozice zna.
+
 ### 4.4 Underrun
 
 Kdyz disk nestiha naplnit ring (SD karta, moc hlasu), hlas **rychle vyfaduje do ticha**
@@ -195,10 +215,12 @@ Kdyz disk nestiha naplnit ring (SD karta, moc hlasu), hlas **rychle vyfaduje do 
 ```json
 {
   "preload_ms": 150,
+  "resonance_window_ms": 500,
   "cache_budget_mb": 2400,
   "max_voices": 128,
   "stream_threads": 2,
-  "render_threads": 0
+  "render_threads": 0,
+  "midi_channel": 0
 }
 ```
 
@@ -279,6 +301,12 @@ Provazani (dulezite — promyslet pri implementaci):
 
 Pri zaplneni poolu kradni **nejtissi sampl z celeho poolu** (maskuje se lip nez preruseni
 streamovaneho hlasu). Uvolneni ring bufferu streamovaneho hlasu je v poradku.
+
+### 5.7 MIDI kanalovy filtr
+
+Jako icr2: engine umi **bind na konkretni MIDI kanal (1–16)** nebo **OMNI** (prijima vsechny
+kanaly). Je to jen filtr na vstupu MIDI fronty — pred zarazenim do fronty se zahodi udalosti
+z nepozadovaneho kanalu. Konfigurovatelne (`midi_channel`: 0 = OMNI, 1–16 = konkretni kanal).
 
 ---
 
