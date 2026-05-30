@@ -24,12 +24,48 @@ inline const char* bankFormatName(BankFormat f) {
     return "unknown";
 }
 
-// Jedna mic perspektiva jednoho uhozu. Faze 2: cela data v RAM.
+// Rezim, jak je MicLayer drzen v pameti:
+// - FullyLoaded: kratky sampl, vejde se cely do preload_head (zadny streaming).
+// - Streamed:    dlouhy sampl, preload_head ma jen zacatek, zbytek se streamuje
+//                z `file` cestou ring bufferu.
+enum class MicLayerMode { FullyLoaded, Streamed };
+
+// Reference na zdrojovy WAV — drzi cestu a klicove metadata.
+struct SampleFile {
+    std::string path;
+    int  frames      = 0;     // celkovy pocet frames v souboru
+    int  sample_rate = 0;
+    bool valid       = false;
+};
+
+// Jedna mic perspektiva jednoho uhozu. Faze 4: preload jen zacatek (head) +
+// rezonancni okno (od peak RMS pozice) v RAM; zbytek lezi v souboru a streamuje
+// se. Kratky sampl drzi cely v preload_head a `mode = FullyLoaded`.
 struct MicLayer {
-    std::string        mic_name;     // legacy: "stereo"; extended: "front"/"soundboard"
-    std::vector<float> data;         // interleaved stereo [L,R,...]
-    int                frames = 0;
-    int                sample_rate = 0;
+    std::string mic_name;            // legacy: "stereo"; extended: "main"/"micpos-A"/...
+    SampleFile  file;                // odkaz na zdrojovy soubor
+    MicLayerMode mode = MicLayerMode::FullyLoaded;
+
+    // Preload region "hlava": [0..head_frames). VZDY pritomny (i pro kratke,
+    // ktere ho maji = celemu samplu).
+    std::vector<float> preload_head;     // interleaved stereo
+    int head_frames = 0;
+
+    // Preload region "rezonance": [resonance_start_frame..+resonance_frames).
+    // Pouziva se az ve fazi 5 (rezonancni hlasy). Ve fazi 4 muze byt prazdny
+    // pokud peak_RMS lezi v preload_head (jiz pokryto) nebo pro kratke samply.
+    std::vector<float> preload_resonance;
+    int resonance_start_frame = 0;
+    int resonance_frames      = 0;
+
+    // KOMPAT pro faze 2-3: do faze 5 ponechavame nazev `data` jako alias na
+    // preload_head; voice (Task 3) si bude radeji sahat primo na preload_head.
+    // Po dokonceni faze 5 muzeme `data` smazat.
+    const std::vector<float>& data() const { return preload_head; }
+    // Frames pristupne v RAM od zacatku samplu (= head_frames).
+    int  frames_in_ram_head() const { return head_frames; }
+    // Pro voice: kolik frames samplu existuje celkove (file.frames).
+    int  total_frames() const { return file.frames; }
 };
 
 // Jeden uhoz: 1..N mic perspektiv hranych synchronne. Legacy: 1 (stereo).

@@ -6,13 +6,15 @@
 #include "sample/sample_loader.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 
 namespace ithaca {
 
 Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
                     int cache_budget_mb,
-                    int midi_from, int midi_to) {
+                    int midi_from, int midi_to,
+                    int preload_ms) {
     Bank bank;
     bank.path = dir;
     bank.name = std::filesystem::path(dir).filename().string();
@@ -38,26 +40,59 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
                bank.name.c_str(), scan.files.size());
 
     // Nacti kazdy soubor, zmer, vloz jako jeden VelocitySlot do prislusne noty.
+    // Faze 4: misto cele WAV cteme jen preload_head (a v dalsi fazi rezonancni
+    // okno). Kratky sampl (vejde se do 2*preload) drzime cely v RAM jako
+    // FullyLoaded; dlouhy oznacime Streamed (zbytek dotece pres ring buffer).
     for (const auto& entry : scan.files) {
         const ParsedName& p = entry.parsed;
         if (p.midi < 0 || p.midi > 127) continue;
         if (p.midi < midi_from || p.midi > midi_to) continue;   // mimo pozadovany rozsah
 
-        WavData w = readWav(entry.full_path);
-        if (!w.valid) {
+        WavInfo info = peekWavInfo(entry.full_path);
+        if (!info.valid) {
             logger.log("bank", log::Severity::Warning,
-                       "Nelze nacist: %s", p.filename.c_str());
+                       "Nelze precist hlavicku: %s", p.filename.c_str());
             continue;
         }
 
-        float rms = measurePeakRmsDb(w.samples.data(), w.frames, w.sample_rate);
-        int   ae  = findAttackEnd(w.samples.data(), w.frames, w.sample_rate);
-
         MicLayer mic;
-        mic.mic_name    = "stereo";
-        mic.frames      = w.frames;
-        mic.sample_rate = w.sample_rate;
-        mic.data        = std::move(w.samples);
+        mic.mic_name         = "stereo";
+        mic.file.path        = entry.full_path;
+        mic.file.frames      = info.frames;
+        mic.file.sample_rate = info.sample_rate;
+        mic.file.valid       = true;
+
+        // "Kratky" sampl = vejde se do 2 * preload_ms. Drzime cely v RAM (head).
+        const int preload_frames =
+            (int)((int64_t)preload_ms * info.sample_rate / 1000);
+        const int short_threshold_frames = preload_frames * 2;
+        if (info.frames <= short_threshold_frames) {
+            mic.mode        = MicLayerMode::FullyLoaded;
+            mic.head_frames = info.frames;
+        } else {
+            mic.mode        = MicLayerMode::Streamed;
+            mic.head_frames = preload_frames;
+        }
+
+        // Nacti preload_head [0 .. head_frames).
+        WavData head = readWavRange(entry.full_path, 0, mic.head_frames);
+        if (!head.valid || head.frames < mic.head_frames) {
+            logger.log("bank", log::Severity::Warning,
+                       "Nelze nacist preload hlavicky: %s", p.filename.c_str());
+            continue;
+        }
+        mic.preload_head = std::move(head.samples);
+
+        // preload_resonance ve fazi 4 zatim prazdny (rezonance je faze 5).
+
+        // peak_rms_db / attack_end_frame meri z preload_head — typicky u piana
+        // pokryva attack (peak RMS lezi v prvnich ~10-50 ms). U dlouheho samplu
+        // by sice byl idealne meren z resonance regionu (faze 5), ale pro
+        // velocity krivku staci preload.
+        float rms = measurePeakRmsDb(mic.preload_head.data(),
+                                     mic.head_frames, info.sample_rate);
+        int   ae  = findAttackEnd  (mic.preload_head.data(),
+                                     mic.head_frames, info.sample_rate);
 
         SampleAsset asset;
         asset.peak_rms_db      = rms;
@@ -72,8 +107,10 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
         bank.notes[p.midi].recorded = true;
 
         const MicLayer& m = bank.notes[p.midi].slots.back().variants[0].mics[0];
-        bank.total_frames += (size_t)m.frames;
-        bank.total_bytes  += m.data.size() * sizeof(float);
+        // total_frames: pocitej REZIDENTNI v RAM (head + resonance).
+        bank.total_frames += (size_t)m.head_frames + (size_t)m.resonance_frames;
+        bank.total_bytes  += (m.preload_head.size() + m.preload_resonance.size())
+                             * sizeof(float);
         bank.loaded_samples++;
     }
 

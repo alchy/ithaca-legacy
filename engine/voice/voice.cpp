@@ -9,13 +9,15 @@ namespace ithaca {
 void Voice::prepareDamp(float engine_sr) {
     // Vytvor kratky fade-out ze soucasne pozice → damp_buf_, aby novy ton
     // (retrigger) nelupnul. Funguje jen kdyz hlas hraje a ma data.
+    // Faze 4: cteme z preload_head; max_frames = head_frames. Voice pri prekro-
+    // ceni hlavy ZATIM utichne (Task 4 prida ring buffer / streaming).
     if (!active_ || !mic_) { damping_ = false; return; }
     int pos = (int)position_;
-    if (pos >= mic_->frames) { damping_ = false; return; }
+    if (pos >= mic_->head_frames) { damping_ = false; return; }
     int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr), kDampMaxFrames);
-    int avail = (std::min)(damp_frames, mic_->frames - pos);
+    int avail = (std::min)(damp_frames, mic_->head_frames - pos);
     if (avail <= 0) { damping_ = false; return; }
-    const float* src = mic_->data.data() + (size_t)pos * 2;
+    const float* src = mic_->preload_head.data() + (size_t)pos * 2;
     float env = vel_gain_;
     if (releasing_) env *= rel_gain_;
     float step = 1.f / (float)avail;
@@ -33,11 +35,11 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
                   float pan_l, float pan_r, float engine_sr) {
     asset_ = asset;
     mic_   = (asset && !asset->mics.empty()) ? &asset->mics[0] : nullptr;
-    active_    = (mic_ != nullptr && mic_->frames > 0);
+    active_    = (mic_ != nullptr && mic_->head_frames > 0);
     releasing_ = false;
     in_onset_  = true;
     position_  = 0.0;
-    double sample_sr = mic_ ? (double)mic_->sample_rate : (double)engine_sr;
+    double sample_sr = mic_ ? (double)mic_->file.sample_rate : (double)engine_sr;
     pos_inc_ = pitch_ratio * (sample_sr / (double)engine_sr);
     vel_gain_  = vel_gain;
     onset_gain_ = 0.f;
@@ -64,9 +66,12 @@ float Voice::currentLevel() const noexcept {
 }
 
 bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
-    if (!mic_ || mic_->frames <= 0) { active_ = false; return false; }
-    const float* data = mic_->data.data();
-    const int max_frames = mic_->frames;
+    if (!mic_ || mic_->head_frames <= 0) { active_ = false; return false; }
+    const float* data = mic_->preload_head.data();
+    // Faze 4 (Task 3): voice cte JEN z preload_head. Pri prekroceni hlavy hlas
+    // utichne — streaming z ringu prijde v Tasku 4. U dlouhych Streamed samplu
+    // tim padne not docasne po ~preload_ms; je to vedome stagovani.
+    const int max_frames = mic_->head_frames;
 
     // Sleduje, zda tento volani neco zapsalo do vystupu. Hlas, kteremu sample
     // dohraje uprostred bloku, JESTE v tomto bloku vyrobil zvuk — proto musi

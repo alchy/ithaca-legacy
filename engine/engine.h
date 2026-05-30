@@ -26,6 +26,7 @@ struct EngineConfig {
     float keyboard_spread = 0.6f;
     int   midi_from      = 0;        // rozsah nacitane banky (rychle testy)
     int   midi_to        = 127;
+    int   preload_ms     = 150;      // delka head preload (faze 4 streaming)
 };
 
 class Engine {
