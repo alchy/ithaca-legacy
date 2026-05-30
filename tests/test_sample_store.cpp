@@ -106,9 +106,11 @@ TEST_CASE("loadLegacyBank: dlouhy sampl je Streamed, nacita jen preload head") {
 
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);
+    // resonance_window_ms=0 -> preload_resonance zustane prazdny (faze 4 semantika).
     Bank bank = loadLegacyBank(dir, L, /*cache_budget_mb=*/0,
                                /*midi_from=*/0, /*midi_to=*/127,
-                               /*preload_ms=*/150);
+                               /*preload_ms=*/150,
+                               /*resonance_window_ms=*/0);
     fs::remove_all(dir);
 
     REQUIRE(bank.loaded_samples == 1);
@@ -118,11 +120,39 @@ TEST_CASE("loadLegacyBank: dlouhy sampl je Streamed, nacita jen preload head") {
     CHECK(mic.head_frames == 7200);       // 150 ms * 48000 / 1000
     CHECK(mic.file.frames == 60000);
     CHECK(mic.file.sample_rate == 48000);
-    // V RAM lezi jen preload_head; preload_resonance ve fazi 4 prazdny.
+    // V RAM lezi jen preload_head; preload_resonance pri rwin=0 prazdny.
     CHECK(mic.preload_head.size() == 7200u * 2u);
     CHECK(mic.preload_resonance.empty());
     // total_bytes pocita jen rezidentni preload (NE cely soubor).
     CHECK(bank.total_bytes == 7200u * 2u * sizeof(float));
+}
+
+TEST_CASE("loadLegacyBank: Streamed sampl nacita i preload_resonance") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_resonance";
+    fs::remove_all(dir); fs::create_directories(dir);
+    // 60 000 frames @48k = 1.25 s -> Streamed (>2*preload_ms=14400 pro 150 ms).
+    writeConstWav(dir + "/m060-vel4-f48.wav", 0.5f, 48000, 60000);
+
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    Bank bank = loadLegacyBank(dir, L, /*cache_budget_mb=*/0,
+                               /*midi_from=*/0, /*midi_to=*/127,
+                               /*preload_ms=*/150,
+                               /*resonance_window_ms=*/200);
+    fs::remove_all(dir);
+
+    REQUIRE(bank.notes[60].recorded);
+    const SampleAsset& a = bank.notes[60].slots[0].variants[0];
+    const MicLayer& mic  = a.mics[0];
+    CHECK(mic.mode == MicLayerMode::Streamed);
+    CHECK(mic.head_frames == 7200);
+    CHECK(mic.resonance_frames > 0);
+    CHECK((int)mic.preload_resonance.size() == mic.resonance_frames * 2);
+    CHECK(mic.resonance_start_frame == a.attack_end_frame);
+    // attack_end_frame na konstantnim signalu by mel byt brzy — over ze se vejde do preloadu.
+    CHECK(mic.resonance_start_frame >= 0);
+    CHECK(mic.resonance_start_frame < mic.file.frames);
 }
 
 TEST_CASE("loadLegacyBank vrati prazdnou banku pro neexistujici adresar") {

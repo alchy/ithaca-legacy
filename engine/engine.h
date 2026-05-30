@@ -28,6 +28,7 @@ struct EngineConfig {
     int   midi_from      = 0;        // rozsah nacitane banky (rychle testy)
     int   midi_to        = 127;
     int   preload_ms     = 150;      // preload velikost hlavy samplu v ms; ovlivnuje RAM i streaming bezpecnost
+    int   resonance_window_ms = 500;  // delka preload_resonance regionu (Streamed mic)
     // -- Faze 4 streaming --
     int   stream_threads        = 1;      // pocet worker threads (zatim 1)
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)

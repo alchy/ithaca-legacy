@@ -23,6 +23,7 @@ namespace ithaca {
 Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
                     int cache_budget_mb = 0,
                     int midi_from = 0, int midi_to = 127,
-                    int preload_ms = 150);
+                    int preload_ms = 150,
+                    int resonance_window_ms = 500);
 
 } // namespace ithaca
