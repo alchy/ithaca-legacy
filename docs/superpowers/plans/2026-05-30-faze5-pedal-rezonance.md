@@ -100,23 +100,30 @@ Pred zacatkem prace: vytvor a prepni se na vetev `faze5-pedal-rezonance` z `main
 
 ---
 
-## Task 1: `PedalState` — citelny snapshot pedalu + undamped set (TDD)
+## Task 1: `PedalState` — spojity damping vektor (TDD)
 
 **Files:**
 - Create: `engine/pedal/pedal_state.h`, `engine/pedal/pedal_state.cpp`
 - Test: `tests/test_pedal_state.cpp`
 - Modify: `CMakeLists.txt`, `tests/CMakeLists.txt`
 
-Drzi aktualni `cc64` (0–127) a bitmap `undamped[128]`. API je dvoukolejne: producent volani
-z MIDI threadu (`setSustainCC`, `noteOn`, `noteOff`, `allNotesOff` — bezi pri drainu MidiQueue
-na audio threadu) + cteci API pro `resonance_engine` (audio thread). Vse atomicky/lock-free
-(jen flagy + uint128 bitmap).
+Drzi aktualni `cc64` (0–127) a **`damping_[128]` — per-string damping koeficient v [0, 1]**
+(NE binarni bitmap, viz spec 5.5). Sustain pedal je SPOJITY parametr, ne on/off prah:
+- `damping_[N] = 1.0` → struna zni volne (drzena klavesa nebo plne zveduty pedal)
+- `damping_[N] = 0.0` → struna ztlumena
+- mezi tim → half-pedal (tlumitko se jen dotyka struny, rezonance prirozene tlumena)
+
+`damping_[N]` slouzi rezonancnimu enginu jako multiplikator excitacniho gainu — pri half-pedal je
+rezonance prirozene tisi. Pri zmene CC64 (rec. pomalym pohybem pedalu) vsechny existujici
+rezonancni hlasy aktualizuji svuj `target_gain` (resi ResonanceVoice/Engine, ne PedalState).
+
+API je jednovlaknove (vse na audio threadu pri MidiQueue drain).
 
 - [ ] **Step 1: Napis selhavajici test `tests/test_pedal_state.cpp`**
 
 ```cpp
 // tests/test_pedal_state.cpp
-// Cisty stavovy automat — bez audio/MIDI thread interakce.
+// PedalState je SPOJITY: damping_[N] in [0, 1] dle CC64 a stavu klaves.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
@@ -124,56 +131,75 @@ na audio threadu) + cteci API pro `resonance_engine` (audio thread). Vse atomick
 
 using namespace ithaca;
 
-TEST_CASE("PedalState: pedal UP (CC64=0) — undamped = jen held keys") {
+TEST_CASE("PedalState: pedal UP (CC=0) — undamped jen drzene klavesy") {
     PedalState p;
-    p.noteOn(60);  p.noteOn(64);  p.noteOn(67);
+    p.noteOn(60); p.noteOn(64); p.noteOn(67);
     p.setSustainCC(0);
-    CHECK(p.isUndamped(60));
-    CHECK(p.isUndamped(64));
-    CHECK(p.isUndamped(67));
-    CHECK_FALSE(p.isUndamped(72));
-    CHECK_FALSE(p.isUndamped(50));
-    p.noteOff(64);  // tlumitka dole = klavesa hned tlumi
-    CHECK_FALSE(p.isUndamped(64));
+    CHECK(p.dampingFor(60) == doctest::Approx(1.0f));   // drzena = vzdy 1.0
+    CHECK(p.dampingFor(64) == doctest::Approx(1.0f));
+    CHECK(p.dampingFor(67) == doctest::Approx(1.0f));
+    CHECK(p.dampingFor(72) == doctest::Approx(0.0f));   // ne drzena + pedal up = 0
+    CHECK(p.dampingFor(50) == doctest::Approx(0.0f));
+    p.noteOff(64);  // klavesa pustena, pedal up = ztlumi se
+    CHECK(p.dampingFor(64) == doctest::Approx(0.0f));
 }
 
-TEST_CASE("PedalState: pedal DOWN (CC64>=64) — undamped = vsechny struny") {
+TEST_CASE("PedalState: pedal DOWN (CC=127) — vsechny struny undamped (1.0)") {
     PedalState p;
     p.noteOn(60);
     p.setSustainCC(127);
-    for (int n = 0; n < 128; ++n) CHECK(p.isUndamped(n));
-    // note-off s pedalem dole nemeni undamped (struna stale nezatlumena pedalem).
+    for (int n = 0; n < 128; ++n)
+        CHECK(p.dampingFor(n) == doctest::Approx(1.0f));
+    // note-off s pedalem dole nemeni damping (pedal drzi sustain).
     p.noteOff(60);
-    CHECK(p.isUndamped(60));
+    CHECK(p.dampingFor(60) == doctest::Approx(1.0f));
 }
 
-TEST_CASE("PedalState: pedal UP behem drzene noty — undamped se prepocita") {
+TEST_CASE("PedalState: half-pedal (CC=64) — ne-drzene maji 0.5, drzene 1.0") {
     PedalState p;
-    p.noteOn(60); p.noteOn(64);
-    p.setSustainCC(127);
-    CHECK(p.isUndamped(72));        // pedal dolu -> vse undamped
-    p.setSustainCC(0);              // pedal nahoru
-    CHECK(p.isUndamped(60));        // 60 stale drzene
-    CHECK(p.isUndamped(64));        // 64 stale drzene
-    CHECK_FALSE(p.isUndamped(72));  // 72 nikdy nebylo drzene -> tlumeno
+    p.noteOn(60);
+    p.setSustainCC(64);
+    CHECK(p.dampingFor(60) == doctest::Approx(1.0f));        // drzena = vzdy 1.0
+    CHECK(p.dampingFor(72) == doctest::Approx(64.f/127.f).epsilon(0.001));
+    // CC=32 = ~25% pedalu
+    p.setSustainCC(32);
+    CHECK(p.dampingFor(72) == doctest::Approx(32.f/127.f).epsilon(0.001));
 }
 
-TEST_CASE("PedalState: half-pedal prah") {
+TEST_CASE("PedalState: spojita zmena CC se promita lineárne") {
     PedalState p;
-    // 0..63 = up, 64..127 = down (klasicky MIDI prah).
+    // bez drzeni: damping ne-drzene noty = cc/127
+    for (int cc : {0, 16, 32, 48, 64, 80, 96, 112, 127}) {
+        p.setSustainCC((uint8_t)cc);
+        float expected = (float)cc / 127.f;
+        CHECK(p.dampingFor(50) == doctest::Approx(expected).epsilon(0.001));
+    }
+}
+
+TEST_CASE("PedalState: isUndamped pouziva epsilon prah") {
+    PedalState p;
+    p.setSustainCC(0);
+    CHECK_FALSE(p.isUndamped(50));     // damping = 0
+    p.setSustainCC(1);                  // ~0.008 — slabe lize
+    CHECK(p.isUndamped(50));           // > 0.001 epsilon
+}
+
+TEST_CASE("PedalState: helper isPedalDown / sustainCC pro half-pedal release scaling") {
+    PedalState p;
+    // 0..63 = up, 64..127 = down (klasicky MIDI prah pro on/off).
     p.setSustainCC(63);  CHECK_FALSE(p.isPedalDown());
     p.setSustainCC(64);  CHECK(p.isPedalDown());
-    // Continuous hodnota pro half-pedal scaling (faze 5: release_ms scaling).
+    // Continuous hodnota pro release scaling (faze 5: scaledReleaseMs).
     p.setSustainCC(96);  CHECK(p.sustainCC() == 96);
 }
 
-TEST_CASE("PedalState: allNotesOff — vsechny klavesy pusteny") {
+TEST_CASE("PedalState: allNotesOff — drzene klavesy se uvolni") {
     PedalState p;
     p.noteOn(60); p.noteOn(64);
     p.setSustainCC(0);
     p.allNotesOff();
-    CHECK_FALSE(p.isUndamped(60));
-    CHECK_FALSE(p.isUndamped(64));
+    CHECK(p.dampingFor(60) == doctest::Approx(0.0f));
+    CHECK(p.dampingFor(64) == doctest::Approx(0.0f));
 }
 ```
 
@@ -183,22 +209,38 @@ TEST_CASE("PedalState: allNotesOff — vsechny klavesy pusteny") {
 #pragma once
 // engine/pedal/pedal_state.h
 // --------------------------
-// PedalState drzi aktualni stav sustain pedalu (CC64, 0-127) a bitmap
-// "undamped" strun (struny, ktere prave nemaji tlumitko). Volani z audio
-// threadu (drain MidiQueue). Vse v lokalnim stavu — zadne atomiky, protoze
-// modify+read jsou na stejnem (audio) threadu. GUI/MIDI thread posila zmeny
-// VYHRADNE pres MidiQueue (vzor jako noteOn/noteOff).
+// PedalState drzi aktualni stav sustain pedalu (CC64, 0-127) a **spojite**
+// damping_[128] (per-string damping koeficient v [0, 1]). Sustain pedal NENI
+// on/off prah — je to spojity parametr, ktery se promita do hlasitosti
+// doznivani i rezonance (half-pedal).
+//
+// Vzorec per strunu N:
+//   damping_[N] = 1.0           pokud N je drzena (held)
+//   damping_[N] = cc64_ / 127.0 pokud N neni drzena
+//
+// Resonance engine pouzije damping_[N] jako multiplikator excitacniho gainu:
+//   excite = (vel/127) × harm × strength × damping_[N]
+//
+// API je jednovlaknove — vsechna volani z audio threadu pri drainu MidiQueue.
+// GUI/MIDI thread posila zmeny VYHRADNE pres MidiQueue (jako noteOn/noteOff).
 
 #include <bitset>
 #include <cstdint>
 
 namespace ithaca {
 
-// Prah CC64 podle MIDI konvence (>=64 = pedal dolu).
+// Prah CC64 podle MIDI konvence (>=64 = pedal dolu); slouzi jen pro helper
+// `isPedalDown()` a release-time scaling (5.4). Damping je VZDY spojite.
 constexpr uint8_t kPedalDownThreshold = 64;
+
+// Epsilon prah pro `isUndamped()` eligibility check — pod nim je rezonance
+// tak slaba, ze ji povazujeme za prakticky ztlumenou.
+constexpr float kDampingEpsilon = 0.001f;
 
 class PedalState {
 public:
+    PedalState() { recompute(); }
+
     // Update z MidiEvent::Sustain (audio thread, drain MidiQueue).
     void setSustainCC(uint8_t cc);
     // Bookkeeping z note-on/off (audio thread, drain MidiQueue).
@@ -206,26 +248,28 @@ public:
     void noteOff(int midi);
     void allNotesOff();
 
-    // Read API (audio thread, volane resonance_engine).
-    bool isPedalDown() const { return cc64_ >= kPedalDownThreshold; }
-    uint8_t sustainCC()  const { return cc64_; }
-    bool isUndamped(int midi) const;
-    bool isHeld(int midi)     const { return midi >= 0 && midi < 128 && held_[midi]; }
+    // -- Read API (audio thread, volane resonance_engine + Engine release scaling) --
 
-    // Pro pedal UP -> resonance_engine bude fade-out tech, co nejsou held.
-    // Vrati seznam not, ktere v dusledku prechodu pedalu (down -> up) prestaly
-    // byt undamped. Pouziva resonance_engine, aby uvolnil prislusne rezonancni
-    // hlasy. Volani po setSustainCC, ktery prepl down -> up.
-    int notesNoLongerUndamped(int* out_buf, int out_cap) const;
+    // Per-string damping koeficient [0, 1]. 1.0 = struna zni volne, 0.0 = ztlumena.
+    float dampingFor(int midi) const;
+
+    // Rychly bool: damping > epsilon (= prakticky undamped).
+    bool isUndamped(int midi) const { return dampingFor(midi) > kDampingEpsilon; }
+
+    // Drzena klavesa?
+    bool isHeld(int midi) const { return midi >= 0 && midi < 128 && held_[(size_t)midi]; }
+
+    // Helpery pro continuous release-time scaling a UI (5.4 spec).
+    bool   isPedalDown() const { return cc64_ >= kPedalDownThreshold; }
+    uint8_t sustainCC()  const { return cc64_; }
 
 private:
-    // Recompute undamped_ podle (cc64_, held_).
+    // Recompute damping_ podle (cc64_, held_).
     void recompute();
 
-    uint8_t        cc64_ = 0;
+    uint8_t          cc64_ = 0;
     std::bitset<128> held_;        // klavesa drzena (note-on bez note-off)
-    std::bitset<128> undamped_;    // aktualni undamped strun set
-    std::bitset<128> prev_undamped_; // pred posledni recompute (pro diff)
+    float            damping_[128] = {};  // per-string damping [0..1]
 };
 
 } // namespace ithaca
@@ -262,27 +306,16 @@ void PedalState::allNotesOff() {
 }
 
 void PedalState::recompute() {
-    prev_undamped_ = undamped_;
-    if (isPedalDown()) {
-        undamped_.set();             // vsechny struny undamped
-    } else {
-        undamped_ = held_;           // jen drzene
+    // Spojita damping mapa: drzena klavesa vzdy 1.0, ne-drzena = cc64/127.
+    const float lift = (float)cc64_ / 127.f;
+    for (int n = 0; n < 128; ++n) {
+        damping_[n] = held_[(size_t)n] ? 1.f : lift;
     }
 }
 
-bool PedalState::isUndamped(int midi) const {
-    if (midi < 0 || midi > 127) return false;
-    return undamped_[(size_t)midi];
-}
-
-int PedalState::notesNoLongerUndamped(int* out_buf, int out_cap) const {
-    // Vrati indexy bitu, ktere byly v prev_undamped_ a uz nejsou v undamped_.
-    int n = 0;
-    for (int m = 0; m < 128 && n < out_cap; ++m) {
-        if (prev_undamped_[(size_t)m] && !undamped_[(size_t)m])
-            out_buf[n++] = m;
-    }
-    return n;
+float PedalState::dampingFor(int midi) const {
+    if (midi < 0 || midi > 127) return 0.f;
+    return damping_[midi];
 }
 
 } // namespace ithaca
