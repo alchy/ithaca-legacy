@@ -106,13 +106,20 @@ test: build
 
 .PHONY: smoke
 smoke: build
-	@printf "Smoke test — ithaca-cli --selftest\n"
-	@if [ -x $(BUILD_DIR)/ithaca-cli$(EXE) ]; then \
-	    $(BUILD_DIR)/ithaca-cli$(EXE) --selftest; \
+	@printf "Smoke test — batch render do test-samples/smoke.wav\n"
+	@mkdir -p test-samples/_smoke_bank test-samples
+	@# Vyrob 1 fixture WAV (1s stereo 48k konst. amplituda) pres maly python helper.
+	@python3 -c "import wave,struct; \
+f=wave.open('test-samples/_smoke_bank/m060-vel4-f48.wav','wb'); \
+f.setnchannels(2); f.setsampwidth(2); f.setframerate(48000); \
+f.writeframes(b''.join(struct.pack('<hh',8000,8000) for _ in range(48000))); f.close()"
+	@if [ -x $(BUILD_DIR)/ithaca-cli ]; then \
+	    $(BUILD_DIR)/ithaca-cli --render test-samples/_smoke_bank --out test-samples/smoke.wav; \
 	else \
-	    printf "ithaca-cli nenalezen v $(BUILD_DIR)/\n" && exit 1; \
+	    printf "ithaca-cli nenalezen\n" && exit 1; \
 	fi
-	@printf "Smoke OK.\n"
+	@rm -rf test-samples/_smoke_bank
+	@printf "Smoke OK — test-samples/smoke.wav\n"
 
 .PHONY: clean
 clean:
