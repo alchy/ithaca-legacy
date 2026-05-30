@@ -1,0 +1,222 @@
+// engine/resonance/resonance_engine.cpp — viz resonance_engine.h.
+//
+// Implementacni poznamky k design rozhodnutim (delegovane z planu na implementaci):
+//
+// 1) FadingOut accessor: ResonanceVoice::fadingOut() vystavuje is_fading_out_.
+//    onPlayedNoteOn pak preskoci N, ktere prave fade-uji (rule B in-progress).
+//    Bez toho by nova excitace addExcitation() resetla is_fading_out_ → fight
+//    s rule-B fade. Cista varianta — explicitni "rule B drzi slot dokud nedohaje".
+//
+// 2) panForNote: stejny vzorec jako VoicePool::panForNote, jen s pevnou
+//    keyboard_spread = kResonanceKeyboardSpread (= 0.6, default jako EngineConfig).
+//    Rezonance je obecne mnohem tisi nez main voice, takze presny pan detail
+//    malo zalezi — drzime default bez konfigurace skrz ResonanceEngine.
+//
+// 3) decay_per_block_: per-blok exponencialni decay last_excite. Default odpovida
+//    tau ~5 s pri block_size=256 @ 48k (=> ~5.3 ms/blok => exp(-5.3/5000) ≈ 0.998).
+//    Engine si po setBlockSize zavola setExciteDecayTimeMs s realnym sr.
+//
+// 4) Voice budget: pri prekroceni max_voices_ kradneme NEJTISSI rezonancni hlas
+//    pres fadeOut() (NE hard cut — ten by lupnul). Nikdy nekrademe main voice
+//    (jine pole). Pri "nelze najit obet" (vse uz fade-uje) ukoncime — dalsi
+//    rezonance prosto nealokujeme, ale neuvolnujeme tvrde existujici.
+#include "resonance/resonance_engine.h"
+
+#include "pedal/pedal_state.h"
+#include "resonance/harmonic_proximity.h"
+#include "sample/sample_types.h"
+#include "voice/voice_pool.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace ithaca {
+
+ResonanceEngine::ResonanceEngine(int max_resonance_voices)
+    : max_voices_(std::max(1, max_resonance_voices)) {
+    // voices_ default initialized — vsechny unique_ptr null (lazy konstrukce
+    // pri prvni rezonanci dane noty).
+}
+
+void ResonanceEngine::setStreamEngine(StreamEngine* se) {
+    stream_ = se;
+    // Existujici hlasy taky aktualizuj (pripad: setStreamEngine po prvni note-on).
+    for (auto& v : voices_) {
+        if (v) v->setStreamEngine(se);
+    }
+}
+
+void ResonanceEngine::setStrength(float s) {
+    if (s < 0.f) s = 0.f;
+    if (s > 1.f) s = 1.f;
+    strength_.store(s, std::memory_order_relaxed);
+}
+
+float ResonanceEngine::strength() const {
+    return strength_.load(std::memory_order_relaxed);
+}
+
+void ResonanceEngine::setExciteDecayTimeMs(float tau_ms, int block_size, float engine_sr) {
+    if (tau_ms <= 0.f || block_size <= 0 || engine_sr <= 0.f) return;
+    // block_ms = block_size * 1000 / engine_sr; decay = exp(-block_ms/tau_ms).
+    const float block_ms = (float)block_size * 1000.f / engine_sr;
+    decay_per_block_     = std::exp(-block_ms / tau_ms);
+    if (decay_per_block_ < 0.f) decay_per_block_ = 0.f;
+    if (decay_per_block_ > 1.f) decay_per_block_ = 1.f;
+}
+
+void ResonanceEngine::onSelfNoteOn(int played_midi, float engine_sr) {
+    // Rule B: note-on N kdyz rezonance N hraje → fast fade + zablokovani dalsi
+    // eligibility. Eligibility filter (1) pak blokuje, dokud hraje main voice N.
+    if (played_midi < 0 || played_midi >= 128) return;
+    auto& slot = voices_[(size_t)played_midi];
+    if (slot && slot->active() && !slot->fadingOut()) {
+        slot->fadeOut(engine_sr);
+        excite_state_[played_midi].last_excite = 0.f;
+    }
+}
+
+void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
+                                     const Bank& bank, const VoicePool& pool,
+                                     const PedalState& pedal, float engine_sr) {
+    if (played_midi < 0 || played_midi >= 128) return;
+    const float str = strength_.load(std::memory_order_relaxed);
+    // Velocity skala [0..1]. (Velocity 0 je note-off ekvivalent — caller by sem
+    // neposlal, ale defensive.)
+    const float vel_norm = (float)velocity / 127.f;
+    if (vel_norm <= 0.f || str <= 0.f) return;
+
+    for (int N = 0; N < 128; ++N) {
+        if (N == played_midi) continue;              // play-on-self
+        // Eligibility filter 5.5.1 (1):
+        if (!pedal.isUndamped(N)) continue;          // damping <= eps → ineligibilni
+        if (pool.hasActiveMainVoice(N)) continue;    // main voice N existuje → ineligibilni
+        // Rule B in-progress: rezonance N prave fade-uje — neprzme to.
+        auto& slot = voices_[(size_t)N];
+        if (slot && slot->active() && slot->fadingOut()) continue;
+
+        // Harmonicky model:
+        const float harm = harmonicProximity(N, played_midi);
+        if (harm < kResonanceHarmonicMin) continue;
+
+        // Holy excitation BEZ damping multiplikatoru (damping aplikuje
+        // processBlock per-blok pres setTargetGain — tim se zmeny pedalu
+        // promitaji plynule do hlasitosti existujici rezonance).
+        const float excite = vel_norm * harm * str;
+        if (excite < kResonanceExciteMinGain) continue;
+
+        if (slot && slot->active()) {
+            // Per-nota uniqueness 5.5.1 (2): existujici slot, jen aktualizuj
+            // amplitudu. max() drzi nejvyssi z N excitaci v pohledu na blok
+            // (smerodatne pro decay-derived target_gain v processBlock).
+            excite_state_[N].last_excite =
+                std::max(excite_state_[N].last_excite, excite);
+            slot->addExcitation(excite);
+            continue;
+        }
+
+        // Alokuj novy rezonancni hlas. Nejdriv najdi sampl pro N.
+        const NoteSlots& ns = bank.notes[N];
+        if (!ns.recorded || ns.slots.empty() ||
+            ns.slots[0].variants.empty() ||
+            ns.slots[0].variants[0].mics.empty()) {
+            continue;  // nahravka pro N chybi — rezonance neni z ceho hrat
+        }
+        const SampleAsset& a = ns.slots[0].variants[0];
+        const MicLayer*    m = &a.mics[0];
+
+        // Lazy konstrukce unique_ptr per slot N.
+        if (!slot) slot = std::make_unique<ResonanceVoice>();
+        slot->setStreamEngine(stream_);
+
+        float pl, pr;
+        panForNote(N, pl, pr);
+
+        // Initial target = excite * damping_[N]. Damping pri full sustain = 1.0,
+        // pri half-pedal = ~0.5 → rezonance startuje tise. processBlock pak
+        // udrzuje target podle aktualniho dampingu.
+        const float init_gain = excite * pedal.dampingFor(N);
+        slot->start(N, m, init_gain, pl, pr, engine_sr);
+        excite_state_[N].last_excite = excite;
+
+        // Krad pri prekroceni rozpoctu (NIKDY ne main voice — jine pole).
+        enforceVoiceBudget(engine_sr);
+    }
+}
+
+bool ResonanceEngine::processBlock(float* out_l, float* out_r, int n_samples,
+                                   const PedalState& pedal) noexcept {
+    // 1) Per-blok decay last_excite + update target_gain podle pedalu.
+    //    Aplikujeme jen na hlasy, ktere NEJSOU ve fade-out (rule B / target=0)
+    //    — ty si rampu drzi po cele dobe fade-out.
+    for (int N = 0; N < 128; ++N) {
+        auto& slot = voices_[(size_t)N];
+        if (!slot || !slot->active() || slot->fadingOut()) continue;
+        excite_state_[N].last_excite *= decay_per_block_;
+        const float target = excite_state_[N].last_excite * pedal.dampingFor(N);
+        slot->setTargetGain(target);
+    }
+    // 2) Render vsech hlasu. Kazdy hlas si sam zaznamena active_=false pri
+    //    dosazeni nulovho gainu — pri pristim onPlayedNoteOn ho mozeme zalozit
+    //    od znova (slot zustava alokovany, jen active()=false).
+    bool any = false;
+    for (int N = 0; N < 128; ++N) {
+        auto& slot = voices_[(size_t)N];
+        if (!slot) continue;
+        if (slot->process(out_l, out_r, n_samples)) any = true;
+    }
+    return any;
+}
+
+int ResonanceEngine::activeCount() const noexcept {
+    int n = 0;
+    for (const auto& slot : voices_) {
+        if (slot && slot->active()) n++;
+    }
+    return n;
+}
+
+bool ResonanceEngine::isResonating(int midi) const noexcept {
+    if (midi < 0 || midi >= 128) return false;
+    const auto& slot = voices_[(size_t)midi];
+    return slot && slot->active();
+}
+
+float ResonanceEngine::currentLevelFor(int midi) const noexcept {
+    if (midi < 0 || midi >= 128) return 0.f;
+    const auto& slot = voices_[(size_t)midi];
+    if (!slot || !slot->active()) return 0.f;
+    return slot->currentLevel();
+}
+
+void ResonanceEngine::enforceVoiceBudget(float engine_sr) {
+    // Spocti aktivni (NE-fadingOut, NE-fadingOut hlasy do limitu nepocitame jen
+    // do "kdo by sel ukoncit" — ale do total activeCount() pocitame). Kdyz
+    // total > max, najdi nejtissi NE-fadingOut hlas a posli fadeOut().
+    while (activeCount() > max_voices_) {
+        int   victim_idx   = -1;
+        float victim_level = 1e30f;
+        for (int N = 0; N < 128; ++N) {
+            const auto& slot = voices_[(size_t)N];
+            if (!slot || !slot->active()) continue;
+            if (slot->fadingOut()) continue;  // uz fade-uje, neopakovat
+            const float lvl = slot->currentLevel();
+            if (lvl < victim_level) { victim_level = lvl; victim_idx = N; }
+        }
+        if (victim_idx < 0) break;  // vse uz fade-uje, nic vic neudelame
+        voices_[(size_t)victim_idx]->fadeOut(engine_sr);
+        excite_state_[victim_idx].last_excite = 0.f;
+    }
+}
+
+void ResonanceEngine::panForNote(int midi, float& pan_l, float& pan_r) {
+    // Stejny vzorec jako VoicePool::panForNote(midi, kResonanceKeyboardSpread, ...).
+    constexpr float kPi = 3.14159265f;
+    const float angle = (kPi / 4.f)
+                      + ((float)midi - 64.5f) / 87.f
+                        * kResonanceKeyboardSpread * 0.5f;
+    pan_l = std::cos(angle);
+    pan_r = std::sin(angle);
+}
+
+} // namespace ithaca

@@ -82,6 +82,11 @@ public:
     bool  active()       const { return active_; }
     int   midi()         const { return midi_; }
     float currentLevel() const noexcept { return gain_; }
+    // True kdyz hlas je v rezimu fade-out (rule B nebo target_gain → 0). Pouziva
+    // ResonanceEngine, aby pri nove excitaci NEPRZAL fade probehajici v ramci
+    // pravidla B (note-on na rezonujici notu): novou rezonanci od dalsiho
+    // note-on M na N ignorujeme, dokud rule-B fade nedozni a slot se neuvolni.
+    bool  fadingOut()    const noexcept { return is_fading_out_; }
 
 private:
     const MicLayer*  mic_   = nullptr;
