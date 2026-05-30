@@ -114,18 +114,22 @@ Dusledky:
 - Default mic mix je konfiguracni polozka (navrh: oba pary 50/50). Zadna banka zatim neni.
 - Legacy banky jsou single stereo par; multi-mic plati pro novy format.
 
-### 2.4 ZADNY resampling / odvozovani (REVIZE 2026-05-29)
+### 2.4 ZADNE odvozovani chybejicich not (REVIZE 2026-05-29 + 2026-05-30)
 
-**Rozhodnuti:** resampling nebude NIKDE. Neexistujici sample se NIJAK neodvozuje od existujiciho
-(zadny pitch-shift sousedni noty, zadne casove protahovani). Plati pro legacy I nove banky.
+**Rozhodnuti:** chybejici sample se NIJAK neodvozuje od existujiciho (zadny pitch-shift sousedni
+noty, zadne casove protahovani, zadne dosamplovani RMS). Plati pro legacy I nove banky.
 
 - Kdyz pro pozadovanou (notu, velocity) neni sampl, player jednoduse VI, ze chybi: priznak ve
   strukture samplu / nulova delka → ticho. Zadna nahrada.
 - Velocity-slot VYBER (mapovani MIDI velocity 0-127 na nahrane dynamiky noty, viz 2.2) zustava —
   to neni odvozovani, jen vyber z toho, co je nahrane.
 - Puvodne navrzeny pitch-shift "ve dvou osach" je ZRUSEN. Jiz napsany resampling/pitch-shift kod
-  (transpozice sousedni noty) se PRESUNE do samostatneho souboru a NEPOUZIVA se —
-  *reserved for future use*. (SR handling samplu 44.1/48/96 kHz — viz 7.3 — je samostatna otazka.)
+  (transpozice sousedni noty) presunut do `engine/voice/_reserved_resampling.h` — mimo build,
+  *reserved for future use*.
+- **SR normalizace samplu (44.1 / 48 / 96 kHz) ZUSTAVA** (potvrzeno 2026-05-30). To NENI
+  "odvozovani" — engine jen prehrava sampl ve spravne vysce, kdyz se jeho SR lisi od engine SR
+  (`pos_inc = pitch_ratio × (sample_sr / engine_sr)` ve `Voice::start`). pitch_ratio je vzdy 1.0
+  (zadna note-transpozice).
 
 ---
 
