@@ -19,11 +19,13 @@ namespace {
 void wU32(std::FILE* f, uint32_t v){ std::fwrite(&v,4,1,f);}
 void wU16(std::FILE* f, uint16_t v){ std::fwrite(&v,2,1,f);}
 
-// Zapis stereo 16-bit WAV s konstantni amplitudou `amp` (0.3 s).
-void writeConstWav(const std::string& path, float amp, int sr=48000) {
+// Zapis stereo 16-bit WAV s konstantni amplitudou `amp` (default 0.3 s, ale
+// frames lze nastavit pro test streamingu dlouheho samplu).
+void writeConstWav(const std::string& path, float amp,
+                   int sr = 48000, int frames = -1) {
     std::FILE* f = std::fopen(path.c_str(), "wb");
     REQUIRE(f != nullptr);
-    int frames = sr * 3 / 10;                         // 0.3 s
+    if (frames < 0) frames = sr * 3 / 10;             // default 0.3 s
     uint32_t data_sz = (uint32_t)frames * 2u * 2u;    // stereo, 16-bit
     std::fwrite("RIFF",1,4,f); wU32(f,36u+data_sz);
     std::fwrite("WAVE",1,4,f); std::fwrite("fmt ",1,4,f); wU32(f,16u);
@@ -63,7 +65,12 @@ TEST_CASE("loadLegacyBank postavi NoteMap z fixture banky") {
     REQUIRE(bank.notes[60].slots[0].variants.size() == 1u);
     REQUIRE(bank.notes[60].slots[0].variants[0].mics.size() == 1u);
     CHECK(bank.notes[60].slots[0].variants[0].mics[0].mic_name == "stereo");
-    CHECK(bank.notes[60].slots[0].variants[0].mics[0].sample_rate == 48000);
+    CHECK(bank.notes[60].slots[0].variants[0].mics[0].file.sample_rate == 48000);
+    // 0.3 s sampl @ 48k = 14400 frames; pri default preload_ms=150 je threshold
+    // 2*150ms*48 = 14400 → vejde se PRESNE → FullyLoaded, head_frames = file.frames.
+    CHECK(bank.notes[60].slots[0].variants[0].mics[0].mode == MicLayerMode::FullyLoaded);
+    CHECK(bank.notes[60].slots[0].variants[0].mics[0].head_frames ==
+          bank.notes[60].slots[0].variants[0].mics[0].file.frames);
     // Nota 62 ma 1 slot.
     REQUIRE(bank.notes[62].recorded);
     CHECK(bank.notes[62].slots.size() == 1u);
@@ -86,6 +93,36 @@ TEST_CASE("loadLegacyBank respektuje MIDI rozsah") {
     CHECK(bank.loaded_samples == 1);
     CHECK(bank.notes[60].recorded);
     CHECK_FALSE(bank.notes[72].recorded);
+}
+
+TEST_CASE("loadLegacyBank: dlouhy sampl je Streamed, nacita jen preload head") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_streamed";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    // 60_000 frames @ 48k = 1.25 s — vetsi nez 2 * 150 ms = 14400 frames threshold
+    // → mode Streamed, head_frames = preload_ms*sr/1000 = 7200.
+    writeConstWav(dir + "/m060-vel4-f48.wav", 0.4f, /*sr=*/48000, /*frames=*/60000);
+
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    Bank bank = loadLegacyBank(dir, L, /*cache_budget_mb=*/0,
+                               /*midi_from=*/0, /*midi_to=*/127,
+                               /*preload_ms=*/150);
+    fs::remove_all(dir);
+
+    REQUIRE(bank.loaded_samples == 1);
+    REQUIRE(bank.notes[60].recorded);
+    const MicLayer& mic = bank.notes[60].slots[0].variants[0].mics[0];
+    CHECK(mic.mode == MicLayerMode::Streamed);
+    CHECK(mic.head_frames == 7200);       // 150 ms * 48000 / 1000
+    CHECK(mic.file.frames == 60000);
+    CHECK(mic.file.sample_rate == 48000);
+    // V RAM lezi jen preload_head; preload_resonance ve fazi 4 prazdny.
+    CHECK(mic.preload_head.size() == 7200u * 2u);
+    CHECK(mic.preload_resonance.empty());
+    // total_bytes pocita jen rezidentni preload (NE cely soubor).
+    CHECK(bank.total_bytes == 7200u * 2u * sizeof(float));
 }
 
 TEST_CASE("loadLegacyBank vrati prazdnou banku pro neexistujici adresar") {

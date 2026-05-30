@@ -13,12 +13,19 @@
 
 namespace ithaca {
 
+class StreamEngine;
+
 constexpr int kDefaultPoolSize = 128;
 constexpr int kMaxPoolSize     = 256;
 
 class VoicePool {
 public:
     explicit VoicePool(int pool_size = kDefaultPoolSize);
+
+    // Pripoji StreamEngine ke vsem hlasum (faze 4). Vola Engine::init.
+    // nullptr je OK = streaming nedostupny (vsechny Streamed samply utichnou
+    // po preload_head).
+    void setStreamEngine(StreamEngine* se);
 
     // Spusti (nebo retriggeruje) ton. keyboard_spread ovlivnuje pan dle noty.
     void noteOn(int midi, const VoiceSpec& spec, float engine_sr,

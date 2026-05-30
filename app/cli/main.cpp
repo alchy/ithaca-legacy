@@ -47,7 +47,7 @@ static void printUsage(const char* argv0) {
         "  %s --selftest [--log-level <lvl>]\n"
         "  %s --inspect <dir> [--log-level <lvl>]\n"
         "  %s --render <dir> --out <wav> [--log-level <lvl>]\n"
-        "  %s --play <dir> [--log-level <lvl>]\n"
+        "  %s --play <dir> [--block-size N] [--log-level <lvl>]\n"
         "\n"
         "Volby:\n"
         "  --version            vypise verzi a skonci\n"
@@ -57,6 +57,8 @@ static void printUsage(const char* argv0) {
         "  --render <dir>       nacti banku a renderuj test noty do --out WAV\n"
         "  --out <wav>          vystupni WAV pro --render\n"
         "  --play <dir>         nacti banku, otevri audio device a zahraj akord\n"
+        "  --block-size N       audio buffer (frames), default 256 (32..8192).\n"
+        "                       Vetsi N = vyssi latence, mensi N = vyssi CPU/risk underrunu.\n"
         "  --help, -h           tato napoveda\n",
         ITHACA_VERSION, argv0, argv0, argv0, argv0, argv0);
 }
@@ -67,6 +69,7 @@ int main(int argc, char* argv[]) {
     std::string render_dir, render_out;
     std::string play_dir;
     log::Severity level = log::Severity::Info;
+    int           block_size = 256;       // default audio buffer
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -88,6 +91,13 @@ int main(int argc, char* argv[]) {
             render_out = argv[++i];
         } else if (a == "--play" && i + 1 < argc) {
             play_dir = argv[++i];
+        } else if (a == "--block-size" && i + 1 < argc) {
+            block_size = std::atoi(argv[++i]);
+            if (block_size < 32 || block_size > 8192) {
+                std::fprintf(stderr, "--block-size mimo rozsah (32..8192): %d\n",
+                             block_size);
+                return 1;
+            }
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n\n", a.c_str());
             printUsage(argv[0]);
@@ -102,7 +112,8 @@ int main(int argc, char* argv[]) {
     if (!play_dir.empty()) {
         Engine eng;
         EngineConfig cfg;
-        cfg.midi_from = 21; cfg.midi_to = 108;   // cela klaviatura (POZOR: velka RAM!)
+        cfg.midi_from = 21; cfg.midi_to = 108;   // cela klaviatura (po fazi 4 RAM mala)
+        cfg.block_size = block_size;
         if (!eng.init(cfg) || !eng.loadBank(play_dir)) {
             LOG_ERROR("play", "Nelze nacist banku: %s", play_dir.c_str());
             return 1;
@@ -157,7 +168,7 @@ int main(int argc, char* argv[]) {
         LOG_INFO("inspect", "Format: %s", bankFormatName(bank.format));
         LOG_INFO("inspect", "Not se samply: %d", notes_with_samples);
         LOG_INFO("inspect", "Celkem samplu: %d, frames: %zu, RAM ~%zu MB",
-                 bank.loaded_samples, bank.total_frames,
+                 bank.loaded_samples, bank.resident_frames,
                  bank.total_bytes / (1024 * 1024));
 
         // Vypis detail pro prvni nalezenou notu se samply (vzorek).

@@ -6,6 +6,7 @@
 // predlohy z icr (cores/sampler/wav_loader.h), rozdeleny na .h/.cpp a
 // doplneny o peekWavInfo() pro budouci streaming (faze 4).
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,5 +35,13 @@ WavData readWav(const std::string& path);
 
 // Precte jen fmt+data hlavicku. Pri chybe valid=false.
 WavInfo peekWavInfo(const std::string& path);
+
+// Cte konkretni vyrez WAV souboru → interleaved stereo float. frame_off a
+// frame_count jsou ve stereo frames (ne v samplech) — 64-bit, aby streaming
+// worker mohl sahnout do multi-GB WAV souboru s velkymi offsety. Vrati WavData
+// s frames = min(frame_count, dostupne_do_konce_souboru). Pri offsetu za koncem
+// vrati valid=true s frames=0 a prazdnym samples (pro streaming je to OK
+// signal "konec"). Pri chybe otevreni/parsovani vrati valid=false.
+WavData readWavRange(const std::string& path, int64_t frame_off, int64_t frame_count);
 
 } // namespace ithaca

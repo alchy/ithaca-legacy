@@ -17,8 +17,14 @@ namespace {
 SampleAsset makeAsset(float amp, int frames) {
     SampleAsset a;
     a.peak_rms_db = 0.f;
-    MicLayer m; m.mic_name = "stereo"; m.frames = frames; m.sample_rate = 48000;
-    m.data.assign((size_t)frames * 2, amp);
+    MicLayer m;
+    m.mic_name         = "stereo";
+    m.file.frames      = frames;
+    m.file.sample_rate = 48000;
+    m.file.valid       = true;
+    m.mode             = MicLayerMode::FullyLoaded;
+    m.head_frames      = frames;
+    m.preload_head.assign((size_t)frames * 2, amp);
     a.mics.push_back(std::move(m));
     return a;
 }

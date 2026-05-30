@@ -1,0 +1,174 @@
+#pragma once
+// engine/stream/stream_engine.h
+// -----------------------------
+// Background streamovaci engine: pool ring bufferu + worker thread, ktery
+// plni ringy z WAV souboru. Audio thread cte vyhradne z RAM (ringu); disk
+// I/O se nikdy nedeje na audio threadu.
+//
+// SPSC kontrakt:
+//   - kazdy RingHandle je SPSC kanal: producent = worker thread, konzument =
+//     prave JEDEN Voice (audio thread). Allocator pool slotu (acquire/release)
+//     je lock-free pres atomic flag in_use_ na kazdem slotu.
+//   - StreamRequestQueue je SPSC: producent = audio thread (Voice posila
+//     refill pozadavky), konzument = worker thread. Plna fronta = drop-on-full
+//     (RT-safe; pri vytrvalem dropu Voice underrune a fadne do ticha).
+//
+// Vzor lock-free SPSC patternu je engine/midi/midi_queue.h — stejne pouziti
+// release/acquire memory orderingu a drop-on-full pri plnem bufferu.
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace ithaca {
+
+// SPSC ring na interleaved stereo float (jedna "rourka" pro jeden voice).
+struct RingHandle {
+    // Interleaved stereo float; velikost vektoru = capacity_frames * 2
+    // (alokovano jednou pri StreamEngine ctoru).
+    std::vector<float>  buf;
+    int                 capacity_frames = 0;
+
+    // SPSC kursory. POZN.: w_ - r_ vraci pocet platnych frames v ringu
+    // (modulo dela az %= capacity_frames pri pristupu do buf).
+    std::atomic<size_t> w_{0};
+    std::atomic<size_t> r_{0};
+
+    // Worker po dokonceni posledniho streamovaciho chunku (kdyz frame_off
+    // dosahl konce souboru) nastavi eof_=true → Voice po precteni vseho
+    // ukonci hlas cisto bez underrun fade.
+    std::atomic<bool>   eof_{false};
+
+    // Allocator flag (acquireRing / releaseRing).
+    std::atomic<bool>   in_use_{false};
+
+    // Producent (worker): zapise az n_frames stereo frames. Vrati pocet
+    // skutecne zapsanych (kdyz se ring zaplni). Bez alokaci.
+    int push(const float* src_interleaved, int n_frames);
+
+    // Konzument (Voice, audio thread): pop 1 stereo frame. Vrati false kdyz
+    // je ring prazdny.
+    bool popFrame(float& L, float& R) noexcept;
+
+    // Konzument: kolik frames je k dispozici k cteni (atomic snapshot).
+    int available() const noexcept;
+
+    // Reset cursors pro recyklaci po releaseRing → dalsi acquireRing.
+    // Vola se z workeru (po dokonceni) NEBO z release strany kdyz worker
+    // nema rozdelanou praci. Bezpecne pouze kdyz nejsou aktivni operace.
+    void resetForReuse() noexcept;
+};
+
+// Pozadavek na nacteni z disku do konkretniho ringu.
+struct StreamRequest {
+    RingHandle* ring          = nullptr;
+    // Cesta je drzena jako std::string — kopiruje se pri push. Audio thread
+    // alokaci nevidi (volajici string je drzeny Voice/SampleFile + Voice
+    // pri sestavovani requestu *kopiruje*, ale request je trivialne male
+    // POD struktura). POZN.: vime, ze std::string copy muze alokovat —
+    // SBO pomuze pro kratke cesty (~22 char), pro delsi alokace je. Casto
+    // se Voice request odesila jen kazdych ~100 ms, ne kazdy blok, takze
+    // jedna alokace za chvilku je akceptovatelna prvni iterace; FUTURE:
+    // path drzet jako const char* z dlouhozijici stringu v Bank (nikdy
+    // se nemeni → bezpecne).
+    std::string path;
+    int64_t     frame_off     = 0;
+    int64_t     n_frames      = 0;
+    bool        eof_when_done = false;   // worker po dokonceni nastavi ring->eof_
+};
+
+// SPSC lock-free fronta StreamRequestu. Vzor: engine/midi/midi_queue.h.
+class StreamRequestQueue {
+public:
+    static constexpr int kCap = 256;
+
+    // Producent (audio thread): push kopirovanim. Vrati false kdyz plne (drop).
+    bool push(const StreamRequest& r) noexcept {
+        const size_t w = w_.load(std::memory_order_relaxed);
+        const size_t rd = r_.load(std::memory_order_acquire);
+        if (w - rd >= (size_t)kCap) return false;
+        buf_[w % kCap] = r;
+        w_.store(w + 1, std::memory_order_release);
+        return true;
+    }
+
+    // Konzument (worker thread): vyzvedne dalsi request.
+    bool pop(StreamRequest& out) noexcept {
+        const size_t rd = r_.load(std::memory_order_relaxed);
+        const size_t w  = w_.load(std::memory_order_acquire);
+        if (rd >= w) return false;
+        out = buf_[rd % kCap];
+        r_.store(rd + 1, std::memory_order_release);
+        return true;
+    }
+
+private:
+    StreamRequest       buf_[kCap];
+    std::atomic<size_t> w_{0};
+    std::atomic<size_t> r_{0};
+};
+
+class StreamEngine {
+public:
+    explicit StreamEngine(int n_rings = 32, int ring_capacity_frames = 8192);
+    ~StreamEngine();
+
+    StreamEngine(const StreamEngine&) = delete;
+    StreamEngine& operator=(const StreamEngine&) = delete;
+
+    // Spusti worker thread. Idempotent.
+    void start();
+    // Zastavi worker (join). Idempotent.
+    void stop();
+
+    // Allocator: najdi volny slot. Vrati nullptr kdyz vsechny obsazeny
+    // (Voice si pri tom musi cestou damp/skip). Atomic CAS na in_use_.
+    RingHandle* acquireRing();
+    // Vrati slot do poolu. Volat NA POSLEDNIM mestu po dokonceni
+    // (Voice po EOF / underrun fade / release / steal).
+    void releaseRing(RingHandle* r);
+
+    // Naplnovac (volat z Voice po vypoctu, ze je v ringu malo dat). Drop-on-full
+    // pri zaplneni fronty; tim padem RT-safe.
+    void requestRead(RingHandle* ring, const std::string& path,
+                     int64_t frame_off, int64_t n_frames,
+                     bool eof_when_done = false) noexcept;
+
+    // Diagnostika/test.
+    int  capacityFrames() const noexcept { return ring_capacity_frames_; }
+    int  numRings()       const noexcept { return (int)rings_.size(); }
+
+    // Refill threshold v stereo frames. Voice si pravidlo "kdyz je v ringu
+    // mene nez refill_threshold a soubor nedohran → posli refill" cte odsud.
+    // Skalovani s block_size (vetsi block → vetsi spotreba na audio tick →
+    // ring potrebuje vyssi prah; alespon 4 bloky napred).
+    int  refillThresholdFrames() const noexcept {
+        return refill_threshold_.load(std::memory_order_relaxed);
+    }
+    // Engine to vola po setBlockSize: max(capacity/2, block_size*4).
+    void setRefillThresholdFrames(int v) noexcept {
+        refill_threshold_.store(v, std::memory_order_relaxed);
+    }
+
+private:
+    void workerLoop();
+
+    // Pool je drzeny v unique_ptr aby se neinvalidovaly pointery (RingHandle*
+    // se drzi Voice — nesmi se realokovat). std::vector<RingHandle> by se
+    // realokoval pri reserve/push_back. Zde alokujeme 1x v ctoru a hotovo,
+    // ale pro jistotu pouzivame raw alokaci pres unique_ptr<RingHandle[]>.
+    // POZN.: RingHandle ma atomic membery → ani move/copy nedavaji smysl.
+    std::vector<std::unique_ptr<RingHandle>> rings_;
+    int                 ring_capacity_frames_ = 0;
+
+    StreamRequestQueue  req_q_;
+
+    std::atomic<bool>   run_{false};
+    std::atomic<int>    refill_threshold_{4096};
+    std::thread         worker_;
+};
+
+} // namespace ithaca

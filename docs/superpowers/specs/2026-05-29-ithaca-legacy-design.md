@@ -54,9 +54,107 @@ ne jako finalni obsah.
 
 ## 2. Klicove koncepty
 
-### 2.1 Dvojity format banky (engine auto-detekuje)
+### 2.1 Dvojity format banky (engine auto-detekuje) — KLICOVY INVARIANT
 
-Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova.
+Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova. **Rezim banky
+(`BankFormat::Legacy` / `Extended` / `Unknown`) je first-class koncept** — detekuje se pri
+`loadBank()`, je ulozeny v `Bank.format`, a engine ho VYSTAVUJE jako citelny atribut.
+**Veskere chovani engine i GUI, ktere se mezi rezimy lisi, se ptá tohoto atributu** (zadne
+duplicitni stavy / branchovani podle nazvu cesty).
+
+### 2.1.1 Kompletni prehled rozdilu mezi rezimy
+
+Kompletni porovnani (zdroj pravdy pri planovani libovolne fáze). Polozky oznacene `(open)` jsou
+jeste nedoresene/k dotvoreni.
+
+**Diskovy layout a pojmenovani:**
+
+| | Legacy | Extended |
+|---|---|---|
+| Layout | plochy adresar: `BankDir/*.wav` | per-nota adresar: `BankDir/mNNN/*.wav` |
+| Naming | `mNNN-velV-fSS.wav` (napr. `m060-vel3-f48.wav`) | `<hash>.wav` (main, bez suffixu) + `<hash>-micpos-A..Z.wav` |
+| Detekce formatu | majorita souboru splnuje legacy regex | majorita souboru splnuje extended pattern, nebo existuje aspon jeden `mNNN/` podadresar |
+| SR tag v nazvu | povinny (`fSS`, 44/48/96) | NE — SR se cte z WAV hlavicky |
+| Velocity v nazvu | povinne (`velV`, 0-7) | NE — detekuje se z RMS main pozice |
+| Mic pozice | 1 (stereo) — zadny suffix | main (vzdy stereo, bez suffixu) + micpos-A..Z (mono nebo stereo) |
+| Parovani uhozu | NEexistuje (kazdy soubor = 1 uhoz) | sdileny `<hash>` napric main+micpos teze noty |
+
+**Loader (sample_store):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Entry point | `loadLegacyBank(dir, ...)` (existuje, faze 2) | `loadExtendedBank(dir, ...)` (faze 7) |
+| Velocity → slot | `vel` token (0..7) → index slotu | RMS main pozice → seskupeni (tolerance `rms_tolerance_db`, default ±1.5) → serazeni vzestupne |
+| Pocet slotu per nota | fixni 8 | dynamicky (1..N podle dat) |
+| Round-robin varianty | obvykle 1 (legacy banky tak nahravane nejsou) | libovolny pocet (vsechny hashe se stejnym RMS v jednom slotu) |
+| Mereni RMS | z preload_head (cely sampl je obvykle = head u kratkych) | z preload_head **MAIN** pozice (soundboard/micpos se RMS nemeri) |
+| Chybejici (nota, vel) | flag/zero-length → ticho (zadny resampling) | totez |
+| Chybejici micpos | N/A (jen 1 pozice) | log + pokracovani (jen main je povinny) |
+| Soundboard/micpos jako orphan (bez main) | N/A | preskocit + log |
+
+**Sample / Voice model:**
+
+| | Legacy | Extended |
+|---|---|---|
+| MicLayer.mode | `FullyLoaded` (krote samply) nebo `Streamed` (basy) | totez (mode je per-mic, ne per-rezim) |
+| `MicLayer.mic_name` | `"stereo"` | `"main"` / `"micpos-A"` / ... |
+| `SampleAsset.mics.size()` | vzdy 1 | 1..(N+1) (main + 0-N micpos) |
+| MicLayer mono priznak | vzdy stereo | `is_mono` per mic — main vzdy stereo, micpos volitelne mono (expanze v RT) |
+| SR samplu | 44.1/48/96 kHz dle `fSS` tagu | 44.1/48/96 kHz dle WAV hlavicky |
+| pos_inc (SR normalizace) | aktivni: `sample_sr/engine_sr` | aktivni: stejne |
+| pitch_ratio | vzdy 1.0 (zadna note-transpozice) | totez |
+
+**Audio path (engine):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Voice cte | `mics[0].preload_head` + (faze 4) ring | vsechny micpos zaroven, paralelne |
+| Mic mixer | NO-OP (1 mic → primy passthrough) | aktivni: per-mic level + mute + invert-phase, mono→stereo expanze |
+| Master gain / pan / metering | identicke | identicke |
+| Sympaticka rezonance | aktivni (zdroj = main mic, jediny dostupny) | aktivni (zdroj = main mic, jediny pouzitelny pro rezonancni zdroj) |
+| Half-pedal samply | NEexistuji (legacy nikdy nemel); fallback = continuous release-time skalovani | dedikovane samply (kdyz nahrane); jinak stejny fallback |
+| DSP chain (faze 6) | identicky | identicky |
+
+**GUI (faze 8):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Bank rolldown | vsechny banky v `bank_root_dir` (oba formaty mixed; ikona/badge ukazuje typ) | totez |
+| Mic mixer panel | SKRYT | **Fixne 4 sloty**: main + micpos-A/B/C; prazdne sloty sive |
+| Velocity info | "8 layers (legacy)" | "N layers (RMS, dynamic)" — show actual count per note |
+| Load progress | rychly (legacy malo metadat) | mozna pomalejsi (vic souboru per nota, vic hashu) |
+| Per-mic invert phase | N/A | per slot ano |
+| Mono indikator per micpos | N/A | ikona M/S vedle slidru |
+| Resonance amount, master gain, DSP, MIDI, block size | identicke | identicke |
+
+**Konfigurace (config.json):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Citelnost klicu | `preload_ms`, `cache_budget_mb`, `max_voices`, ... vsechny stejne | totez + per-bank micpos mix override (`micpos_main: 1.0, micpos_A: 0.2, ...`) — (open: zda v configu nebo `.bank.json` per banka) |
+| GUI persist pri exitu | ukladaji se GUI hodnoty (master gain, vybrana banka, block size, ...) | totez + mic mixer hodnoty |
+
+**Co je rezim-agnosticke (logika voice/engine je formát-jedno):**
+
+- VoicePool, alokace/kradez, retrigger damping crossfade
+- `processBlock` kontrakt (libovolny `n_samples`)
+- StreamEngine (ring buffer pool, worker thread, underrun fade)
+- Pedal modul a "neztlumene struny" set (pedal-down vs held-keys)
+- Sympaticka rezonance algoritmus (jen zdroj = main mic je rezim-specificky)
+- DSP chain stages (normalize / compressor / biquad / BBE / convolution)
+- SR normalizace samplu (`pos_inc = sample_sr / engine_sr`)
+- MIDI fronta (lock-free SPSC), MIDI kanalovy filtr, MIDI port select/refresh
+- Master gain / pan / metering
+- Runtime block size selector
+
+**Otevrene body k doreseni (poznamky pri planovani):**
+
+- (open) Per-banka mic mixer defaults: v `config.json` globalne nebo per-banka v
+  `BankDir/.bank.json`? Vyresit v fazi 7 nebo driv pokud bude potreba.
+- (open) Velocity-slot mapovani v extended: linearni mapovani MIDI 0-127 na N slotu, nebo s
+  per-banka tweakem? Vychozi navrh: linearni (nearest na krivce RMS).
+- (open) Default `rms_tolerance_db` pro round-robin grouping (navrh ±1.5 dB) — k overeni az
+  budou nove samply.
 
 **Legacy format** (soucasne banky, single stereo par):
 - `mNNN-velV-fSS.wav` — 8 velocity vrstev (napr. `m060-vel3-f48.wav`). Jen tato varianta;
@@ -400,6 +498,32 @@ parametry rezonance, mic mix, atd.
 
 ---
 
+## 7a. Dalsi architektonicke pozadavky (zaznamenano 2026-05-30)
+
+Tyto pozadavky pribyly behem implementace; nepatri do jedne konkretni faze, ale ovlivnuji vic z nich.
+
+- **Audio buffer size — runtime selector.** Velikost audio bufferu (block size) ma jit menit
+  za behu, ne jen pri startu. icr i icr2 maji v GUI rolldown. Engine vystavi `setBlockSize(int)`
+  (re-init audio_device, prepocet streamingu — viz nize). Default 256 frames. Faze 4 = backend
+  podpora (CLI `--block-size`); faze 8 = GUI selector.
+- **Reload rate streamingu skaluje s block size** (faze 4). `refill_threshold = max(ring/2,
+  block_size * 4)` — vetsi audio blok = vic frames spotrebovanych per tick = ring potrebuje plnit
+  drive. Pri zmene block size se prepocita.
+- **Render API: castecny buffer.** Engine `processBlock(L, R, n_samples)` uz prijima libovolny
+  `n_samples`. Pozadavek: zajistit, ze lze volat opakovane s ruznymi n (ne nutne plnym blokem).
+  Pouziva offline batch render, JUCE/VST hosti s ruznou block velikosti. Dnes uz tak je;
+  zafixovat jako KONTRAKT (test + komentar v engine.h).
+- **Modularita pro JUCE / VST wrappery (klicovy invariant).** libithaca_core musi zustat
+  cista hosti-agnosticka knihovna (zadny direkt audio_device dep v `Engine`; audio_device je
+  konzument fasady, ne soucast jadra). Pravidla:
+  - Engine fasada NEZAKLADA audio device; konstruktor a init nemaji audio side effects.
+  - Audio I/O (miniaudio) zije v `engine/io/audio_device.*`; JUCE/VST wrapper ho proste
+    nelinkuje a misto toho dela `engine.processBlock(L, R, n)` ze sve audio callbacky.
+  - Engine vystavi vsechny parametry (block size, SR, master gain, atd.) pres explicitni
+    metody — host muze cokoliv menit za behu.
+  - Pripadny JUCE/VST wrapper bude samostatny `app/juce/` modul, neovlivni libithaca_core.
+  Tento invariant resime az kdyz se k JUCE/VST dostaneme; faze 4-7 se ho drzi pasivne.
+
 ## 8. Fazovy plan implementace
 
 1. **Skeleton + build** — struktura, CMake/Makefile, logger, vendored deps, `make smoke` stub.
@@ -412,6 +536,32 @@ parametry rezonance, mic mix, atd.
 6. **DSP chain + mic_mixer** (mic_mixer naplno az s extended bankami).
 7. **Extended format** (multi-mic, round-robin) — az bude mit uzivatel vlastni samply.
 8. **GUI** — Keyscape-style frontend.
+
+### 8.x GUI pozadavky (zaznamenano 2026-05-30, ke specifikaci ve fazi 8)
+
+Minimalni vec, kterou GUI MUSI mit (vychazi z icr/icr2):
+
+- **MIDI input selector + Refresh** — list portu (RtMidi `listMidiPorts`), tlacitko Refresh
+  pro znovunaskenovani po pripojeni noveho zarizeni, current port indikator. (Backend uz mame —
+  spec sekce 5.7/5.8.)
+- **Bank selector (rolldown)** — list bank v `bank_root_dir`, vyber → engine.loadBank(...). Po
+  vyberu noveho ukladani do configu.
+- **Audio buffer size selector (rolldown)** — typicke hodnoty 64/128/256/512/1024/2048; vyber
+  zavola engine.setBlockSize(n). Default z configu.
+- **Master gain + meter, polyphony display, CPU usage** — read-only metry.
+- **DSP chain bypass per stage** + parametry (jakmile bude DSP chain ve fazi 6).
+- **Mic mixer** — per-mic level + mute + invert-phase (jakmile bude extended format ve fazi 7).
+  - GUI je **DYNAMICKE podle rezimu banky** (zjisteno po loadBank). LEGACY banka: mic mixer
+    se NEZOBRAZUJE (jen jedna stereo pozice). EXTENDED banka: ma **fixne alokovany layout**
+    pro `1 main + 3 mixdown pozice` (micpos-A, micpos-B, micpos-C). I kdyz banka ma jen main
+    a jeden micpos-A, sloty B a C zustanou "prazdne" (sive). Duvod: konzistentni vizual mezi
+    bankami; ctyri sloty pokryvaji vsechny ocekavane scenare (front + 3 mic perspektivy,
+    nebo main + 3 different ambience mics).
+  - Per slot: level slider, mute, invert-phase (per mic).
+- **Sympathetic resonance amount** — parametrizovatelne (faze 5).
+- **GUI persistuje stav do configu** — pri ukonceni programu serializuje vsechny GUI-nastavene
+  hodnoty (block size, master gain, vybrana banka, MIDI port, DSP/mic/rezonancni parametry, ...)
+  zpet do JSON configu. Pri pristim startu GUI nacte z configu. icr/icr2 to tak delaji.
 
 Ladi se na legacy bankach z `/Users/j/SoundBanks/Ithaca/` (faze 1–6), extended format a
 vlastni samply prichazeji ve fazi 7.

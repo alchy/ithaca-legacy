@@ -17,8 +17,12 @@ namespace ithaca {
 // nacita vse). 0 = bez kontroly rozpoctu.
 // midi_from / midi_to: nacti jen noty v tomto inkluzivnim rozsahu (default 0..127 = vse).
 // Slouzi k rychlemu testovani/renderu bez nacteni cele (vicegb) banky.
+// preload_ms: kolik ms zacatku kazdeho samplu drzet v RAM (head preload).
+// Kratky sampl (vejde se do 2 * preload_ms) zustava cely v RAM (FullyLoaded);
+// dlouhy je oznacen Streamed a zbytek se ve fazi 4 streamuje.
 Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
                     int cache_budget_mb = 0,
-                    int midi_from = 0, int midi_to = 127);
+                    int midi_from = 0, int midi_to = 127,
+                    int preload_ms = 150);
 
 } // namespace ithaca

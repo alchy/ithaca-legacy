@@ -21,6 +21,10 @@ VoicePool::VoicePool(int pool_size) {
     voices_.resize((size_t)n);
 }
 
+void VoicePool::setStreamEngine(StreamEngine* se) {
+    for (auto& v : voices_) v.setStreamEngine(se);
+}
+
 int VoicePool::findSlot() {
     // 1. Volny slot.
     for (int i = 0; i < (int)voices_.size(); ++i)

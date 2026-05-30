@@ -7,6 +7,10 @@ add_executable(test_wav_reader test_wav_reader.cpp)
 target_link_libraries(test_wav_reader PRIVATE ithaca_core doctest)
 add_test(NAME test_wav_reader COMMAND test_wav_reader)
 
+add_executable(test_wav_range test_wav_range.cpp)
+target_link_libraries(test_wav_range PRIVATE ithaca_core doctest)
+add_test(NAME test_wav_range COMMAND test_wav_range)
+
 add_executable(test_bank_index test_bank_index.cpp)
 target_link_libraries(test_bank_index PRIVATE ithaca_core doctest)
 add_test(NAME test_bank_index COMMAND test_bank_index)
@@ -42,3 +46,11 @@ add_test(NAME test_engine COMMAND test_engine)
 add_executable(test_batch_renderer test_batch_renderer.cpp)
 target_link_libraries(test_batch_renderer PRIVATE ithaca_core doctest)
 add_test(NAME test_batch_renderer COMMAND test_batch_renderer)
+
+add_executable(test_stream_engine test_stream_engine.cpp)
+target_link_libraries(test_stream_engine PRIVATE ithaca_core doctest)
+add_test(NAME test_stream_engine COMMAND test_stream_engine)
+
+add_executable(test_long_sample_stream test_long_sample_stream.cpp)
+target_link_libraries(test_long_sample_stream PRIVATE ithaca_core doctest)
+add_test(NAME test_long_sample_stream COMMAND test_long_sample_stream)

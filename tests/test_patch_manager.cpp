@@ -20,8 +20,14 @@ void addNote(Bank& b, int midi, int nslots, int rr_in_slot0 = 1) {
         for (int v = 0; v < variants; ++v) {
             SampleAsset a;
             a.peak_rms_db = slot.rms_db;
-            MicLayer m; m.mic_name = "stereo"; m.frames = 100; m.sample_rate = 48000;
-            m.data.assign(100 * 2, 0.1f);
+            MicLayer m;
+            m.mic_name         = "stereo";
+            m.file.frames      = 100;
+            m.file.sample_rate = 48000;
+            m.file.valid       = true;
+            m.mode             = MicLayerMode::FullyLoaded;
+            m.head_frames      = 100;
+            m.preload_head.assign(100 * 2, 0.1f);
             a.mics.push_back(std::move(m));
             slot.variants.push_back(std::move(a));
         }
