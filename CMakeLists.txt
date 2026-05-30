@@ -29,6 +29,7 @@ add_library(ithaca_core STATIC
     engine/sample/bank_index.cpp
     engine/sample/sample_loader.cpp
     engine/sample/sample_store.cpp
+    engine/stream/stream_engine.cpp
     engine/voice/patch_manager.cpp
     engine/voice/voice.cpp
     engine/voice/voice_pool.cpp

@@ -7,6 +7,7 @@
 // gain post-mix. Streaming/DSP/rezonance jsou dalsi faze.
 
 #include "sample/sample_types.h"
+#include "stream/stream_engine.h"
 #include "voice/voice_pool.h"
 #include "voice/patch_manager.h"
 #include "midi/midi_queue.h"
@@ -27,6 +28,10 @@ struct EngineConfig {
     int   midi_from      = 0;        // rozsah nacitane banky (rychle testy)
     int   midi_to        = 127;
     int   preload_ms     = 150;      // preload velikost hlavy samplu v ms; ovlivnuje RAM i streaming bezpecnost
+    // -- Faze 4 streaming --
+    int   stream_threads        = 1;      // pocet worker threads (zatim 1)
+    int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
+    int   num_rings             = 32;     // velikost ring poolu
 };
 
 class Engine {
@@ -52,14 +57,27 @@ public:
     int  activeVoices() const { return pool_ ? pool_->activeCount() : 0; }
     void setMasterGain(float g) { master_gain_.store(g, std::memory_order_relaxed); }
 
+    // Faze 4 (uzivatelska volba): za behu zmen block size (jako icr/icr2 select).
+    // Volajici, ktery drzi AudioDevice mimo Engine, musi nasledne audio device
+    // restartovat — Engine sam audio device nedrzi, jen aktualizuje cfg + refill
+    // threshold. Vraci nove platny block size (clamped do rozumnych mezi).
+    int  setBlockSize(int new_block_size) noexcept;
+
+    // Pristup ke streaming enginu (potreba pro inspect / diag / GUI).
+    StreamEngine* streamEngine() { return stream_.get(); }
+
 private:
-    EngineConfig                cfg_;
-    Bank                        bank_;
-    std::unique_ptr<VoicePool>  pool_;
-    RoundRobinState             rr_;
-    MidiQueue                   midi_q_;
-    std::atomic<float>          master_gain_{1.0f};
-    bool                        initialized_ = false;
+    // Prepocita StreamEngine refill threshold dle aktualniho block_size.
+    void recomputeRefillThreshold() noexcept;
+
+    EngineConfig                  cfg_;
+    Bank                          bank_;
+    std::unique_ptr<VoicePool>    pool_;
+    RoundRobinState               rr_;
+    MidiQueue                     midi_q_;
+    std::unique_ptr<StreamEngine> stream_;
+    std::atomic<float>            master_gain_{1.0f};
+    bool                          initialized_ = false;
 };
 
 } // namespace ithaca

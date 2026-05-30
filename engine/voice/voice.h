@@ -13,13 +13,22 @@
 
 namespace ithaca {
 
+class StreamEngine;
+struct RingHandle;
+
 // Konstanty hlasu.
-constexpr float  kOnsetMs      = 3.f;     // nabeh proti lupnuti pri note-on
-constexpr float  kDampingMs    = 21.f;    // crossfade pri retriggeru/kradezi
-constexpr int    kDampMaxFrames = 2048;   // strop damping bufferu (frames)
+constexpr float  kOnsetMs        = 3.f;   // nabeh proti lupnuti pri note-on
+constexpr float  kDampingMs      = 21.f;  // crossfade pri retriggeru/kradezi
+constexpr int    kDampMaxFrames  = 2048;  // strop damping bufferu (frames)
+constexpr float  kUnderrunFadeMs = 5.f;   // rychly fade pri underrunu
 
 class Voice {
 public:
+    // Pripoji StreamEngine, ze ktereho si pri startu Streamed samplu Voice
+    // vezme ring slot. nullptr = streaming nedostupny (Voice se pak chova
+    // jako pred fazi 4: po prekroceni preload_head jen utichne).
+    void setStreamEngine(StreamEngine* se) { stream_ = se; }
+
     // Spusti hlas. asset musi mit aspon 1 mic. pan_l/pan_r jiz spocteny.
     void start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
                float pan_l, float pan_r, float engine_sr);
@@ -62,6 +71,24 @@ private:
     float  damp_buf_[2 * kDampMaxFrames] = {};
     int    damp_len_ = 0, damp_pos_ = 0;
     bool   damping_  = false;
+
+    // -- Faze 4: streaming z disku --
+    StreamEngine* stream_  = nullptr;   // nullptr = streaming nedostupny
+    RingHandle*   ring_    = nullptr;   // alokovano pri start() jen pro Streamed
+    // Aktualni file offset (v stereo frames), ze ktereho jsme posledne POZADALI
+    // worker, aby cetl. Init = head_frames pri prvnim requestu; navysuje se
+    // o size kazdeho dalsiho requestu, aby na sebe casti navazaly.
+    int64_t  file_request_off_ = 0;
+    // Pendujici flag: zabrani spamovani requestu kazdy audio blok.
+    // Voice si ho castuje sam (po push request → true; ringuv naskok ho zase
+    // shodi). FUTURE: idealnejsi je dedicated atomic na ring, kterou worker
+    // shodi po dokonceni. Pro prvni iteraci stacne flag voice-local + heuristika
+    // "kdyz ring uz neni pod prahem, mam volno na novy request".
+    bool     stream_pending_   = false;
+    // Fast underrun fade: pri prazdnem ringu pred EOF → ramp do 0 a deaktivace.
+    bool     underrun_fading_  = false;
+    float    underrun_gain_    = 1.f;
+    float    underrun_step_    = 0.f;
 };
 
 } // namespace ithaca

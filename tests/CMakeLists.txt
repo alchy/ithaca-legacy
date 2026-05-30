@@ -46,3 +46,11 @@ add_test(NAME test_engine COMMAND test_engine)
 add_executable(test_batch_renderer test_batch_renderer.cpp)
 target_link_libraries(test_batch_renderer PRIVATE ithaca_core doctest)
 add_test(NAME test_batch_renderer COMMAND test_batch_renderer)
+
+add_executable(test_stream_engine test_stream_engine.cpp)
+target_link_libraries(test_stream_engine PRIVATE ithaca_core doctest)
+add_test(NAME test_stream_engine COMMAND test_stream_engine)
+
+add_executable(test_long_sample_stream test_long_sample_stream.cpp)
+target_link_libraries(test_long_sample_stream PRIVATE ithaca_core doctest)
+add_test(NAME test_long_sample_stream COMMAND test_long_sample_stream)

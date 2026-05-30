@@ -1,6 +1,9 @@
 // engine/voice/voice.cpp — viz voice.h. Adaptovano z icr sampler_core voice loop.
 #include "voice/voice.h"
 
+#include "stream/stream_engine.h"
+#include "util/log.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -12,9 +15,8 @@ void Voice::prepareDamp(float engine_sr) {
     // SR mismatchu (44.1 kHz sampl v 96 kHz enginu) dochazi pri retriggeru
     // k drobnemu pitch posunu v damping ocasu. Latentni; opravit az s mic mixerem.
     // Vytvor kratky fade-out ze soucasne pozice → damp_buf_, aby novy ton
-    // (retrigger) nelupnul. Funguje jen kdyz hlas hraje a ma data.
-    // Faze 4: cteme z preload_head; max_frames = head_frames. Voice pri prekro-
-    // ceni hlavy ZATIM utichne (Task 4 prida ring buffer / streaming).
+    // (retrigger) nelupnul. Funguje jen kdyz hlas hraje a ma data v preload_head
+    // (faze 4: streaming pozici v ringu damping zatim neresi — TODO faze 5/6).
     if (!active_ || !mic_) { damping_ = false; return; }
     int pos = (int)position_;
     if (pos >= mic_->head_frames) { damping_ = false; return; }
@@ -37,6 +39,19 @@ void Voice::prepareDamp(float engine_sr) {
 
 void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
                   float pan_l, float pan_r, float engine_sr) {
+    // Pred prepsanim stavu: kdyby jsme drzeli ring z minule, vrat ho do poolu.
+    // (V realnem provozu prepareDamp + start jsou volane na rovne tom samem
+    // slotu pri kradezi; volajici nas ring ke staremu samplu uz nepouzije.)
+    if (ring_ && stream_) {
+        stream_->releaseRing(ring_);
+        ring_ = nullptr;
+    }
+    stream_pending_   = false;
+    underrun_fading_  = false;
+    underrun_gain_    = 1.f;
+    underrun_step_    = 0.f;
+    file_request_off_ = 0;
+
     asset_ = asset;
     mic_   = (asset && !asset->mics.empty()) ? &asset->mics[0] : nullptr;
     active_    = (mic_ != nullptr && mic_->head_frames > 0);
@@ -52,6 +67,31 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
     rel_step_   = 0.f;
     pan_l_ = pan_l;
     pan_r_ = pan_r;
+
+    underrun_step_ = -1.f / (kUnderrunFadeMs * 0.001f * engine_sr);
+
+    // Streamed → alokuj ring a posli prvni read request pro vse za head.
+    if (active_ && mic_->mode == MicLayerMode::Streamed && stream_) {
+        ring_ = stream_->acquireRing();
+        if (ring_) {
+            const int cap = ring_->capacity_frames;
+            const int64_t want = (int64_t)cap;
+            // Konec streamovaneho regionu = file.frames - head_frames. Kdyz se
+            // celkove cely zbytek vleze do ringu, oznacime to jako eof_when_done
+            // a worker po dohranou ring nastavi eof_.
+            const int64_t total_stream = (int64_t)mic_->file.frames
+                                       - (int64_t)mic_->head_frames;
+            const bool eof_done = (want >= total_stream);
+            const int64_t actual = (want < total_stream) ? want : total_stream;
+            file_request_off_ = (int64_t)mic_->head_frames + actual;
+            stream_->requestRead(ring_, mic_->file.path,
+                                 (int64_t)mic_->head_frames, actual, eof_done);
+            stream_pending_ = true;
+        }
+        // Kdyz acquireRing selhal (pool plny), Voice prozatim hraje jen do
+        // konce head a pak utichne (zadny crash). FUTURE: voice steal podle
+        // ring obsazenosti.
+    }
 }
 
 void Voice::release(float release_ms, float engine_sr) {
@@ -70,18 +110,16 @@ float Voice::currentLevel() const noexcept {
 }
 
 bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
-    if (!mic_ || mic_->head_frames <= 0) { active_ = false; return false; }
-    const float* data = mic_->preload_head.data();
-    // Faze 4 (Task 3): voice cte JEN z preload_head. Pri prekroceni hlavy hlas
-    // utichne — streaming z ringu prijde v Tasku 4. U dlouhych Streamed samplu
-    // tim padne not docasne po ~preload_ms; je to vedome stagovani.
-    const int max_frames = mic_->head_frames;
+    if (!mic_ || mic_->head_frames <= 0) {
+        // Nic k hrani; pripadny drzeny ring vrat.
+        if (ring_ && stream_) { stream_->releaseRing(ring_); ring_ = nullptr; }
+        active_ = false;
+        return false;
+    }
+    const float* head_data = mic_->preload_head.data();
+    const int    head_frames  = mic_->head_frames;
+    const int    total_frames = mic_->file.frames;
 
-    // Sleduje, zda tento volani neco zapsalo do vystupu. Hlas, kteremu sample
-    // dohraje uprostred bloku, JESTE v tomto bloku vyrobil zvuk — proto musi
-    // vratit true, i kdyz uz neni active_ (jinak by volajici prisel o posledni
-    // znejici blok). Bez tohoto priznaku by se prvni blok kratkeho samplu
-    // tvaril jako ticho.
     bool produced = false;
 
     for (int i = 0; i < n_samples; ++i) {
@@ -93,14 +131,60 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             if (damp_pos_ >= damp_len_) damping_ = false;
         }
 
-        int p0 = (int)position_;
-        if (p0 >= max_frames - 1) { active_ = false; break; }
-        float frac = (float)(position_ - (double)p0);
-        int p1 = p0 + 1;
+        if (!active_) continue;   // damping muze dohravat i po active_=false
 
-        float sL = data[p0 * 2]     * (1.f - frac) + data[p1 * 2]     * frac;
-        float sR = data[p0 * 2 + 1] * (1.f - frac) + data[p1 * 2 + 1] * frac;
-        position_ += pos_inc_;
+        int p0 = (int)position_;
+        float sL = 0.f, sR = 0.f;
+
+        if (p0 < head_frames - 1) {
+            // V hlave: linearni interpolace mezi p0 a p0+1 (jako pred fazi 4).
+            float frac = (float)(position_ - (double)p0);
+            int   p1 = p0 + 1;
+            sL = head_data[p0 * 2]     * (1.f - frac) + head_data[p1 * 2]     * frac;
+            sR = head_data[p0 * 2 + 1] * (1.f - frac) + head_data[p1 * 2 + 1] * frac;
+            position_ += pos_inc_;
+        } else if (p0 < head_frames) {
+            // Posledni vzorek hlavy — bez interpolace pres hranici (TODO faze
+            // 6/7: 1-frame lookbehind v ringu pro plynuly join).
+            sL = head_data[p0 * 2];
+            sR = head_data[p0 * 2 + 1];
+            position_ += pos_inc_;
+        } else if (ring_) {
+            // Streamed: cti z ringu (nearest-neighbor; pos_inc_ se respektuje
+            // jen pro pripocet position_, frame se konzumuje 1 per output frame).
+            // TODO faze 6/7: proper interpolace pres ring + podpora pos_inc != 1.
+            float L, R;
+            if (!ring_->popFrame(L, R)) {
+                // Ring prazdny. Pokud worker oznacil EOF, hlas cisto skoncil.
+                if (ring_->eof_.load(std::memory_order_acquire)) {
+                    active_ = false;
+                    break;
+                }
+                // Underrun: spust rychly fade do 0, po dohrani fade deaktivuj.
+                if (!underrun_fading_) {
+                    underrun_fading_ = true;
+                    underrun_gain_   = 1.f;
+                    LOG_RT_WARN("voice", "underrun midi=%d", midi_);
+                }
+                // Bez dat → fade pres tichy vzorek (0,0).
+                sL = 0.f; sR = 0.f;
+            } else {
+                sL = L; sR = R;
+            }
+            position_ += pos_inc_;
+        } else {
+            // FullyLoaded sampl prekrocil head (= file frames) → konec.
+            active_ = false;
+            break;
+        }
+
+        // Hard guard na konec souboru (kdyby pos jsel mimo file.frames i v ringu).
+        if ((int)position_ >= total_frames && ring_ &&
+            ring_->eof_.load(std::memory_order_acquire) &&
+            ring_->available() == 0) {
+            // Spotrebovan posledni vzorek; cisto vypneme po tomto frame.
+            active_ = false;
+        }
 
         // Onset ramp.
         float env = 1.f;
@@ -115,6 +199,15 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             rel_gain_ += rel_step_;
             if (rel_gain_ <= 0.f) { rel_gain_ = 0.f; active_ = false; }
         }
+        // Underrun fast fade (multiplikuje pres ostatni envelopy).
+        if (underrun_fading_) {
+            env *= underrun_gain_;
+            underrun_gain_ += underrun_step_;
+            if (underrun_gain_ <= 0.f) {
+                underrun_gain_ = 0.f;
+                active_ = false;
+            }
+        }
 
         float g = vel_gain_ * env;
         out_l[i] += sL * g * pan_l_;
@@ -123,9 +216,49 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
 
         if (!active_) break;
     }
-    // Damping muze dobehnout i kdyz uz tlo neni aktivni — hlas je "aktivni"
-    // dokud bud hraje tlo, dobiha damping, NEBO prave v tomto bloku jeste neco
-    // zaznelo (sample dohral uprostred bloku).
+
+    // Refill heuristika: kdyz ring klesl pod prah a soubor jeste nedohranl,
+    // posli novy request. stream_pending_ ridime per-ring frame budgetem:
+    // pamatujeme size posledniho requestu a "ocekavany" minimalni avail po
+    // nem; jakmile worker dosahl/prekrocil ocekavanou napln (= request byl
+    // splnen) NEBO klesli jsme zase pod prah (= avail je nizky → bezpecne
+    // poslat dalsi i kdyby predchozi jeste neskoncil — fronta ma kapacitu
+    // a worker stejne dotahne v sekvenci), pending shodime.
+    //
+    // Jednodussi a robustnejsi: shodit pending pokud avail je nad polovinou
+    // kapacity — tj. predchozi refill jiz dorazil. Pokud byl drop-on-full,
+    // dalsi request stejne projde a worker se chova idempotenne.
+    if (ring_ && stream_ && active_) {
+        const int avail = ring_->available();
+        const int thr   = stream_->refillThresholdFrames();
+        const int half_cap = ring_->capacity_frames / 2;
+        if (stream_pending_ && avail >= half_cap) {
+            stream_pending_ = false;   // worker dohnal predchozi request
+        }
+        if (!stream_pending_ && avail < thr) {
+            const int64_t remain = (int64_t)total_frames - file_request_off_;
+            if (remain > 0) {
+                // Pozadej tolik, kolik se ted vejde do volneho mista v ringu.
+                int64_t want = (int64_t)(ring_->capacity_frames - avail);
+                if (want > remain) want = remain;
+                const bool eof_done = (file_request_off_ + want >= (int64_t)total_frames);
+                stream_->requestRead(ring_, mic_->file.path,
+                                     file_request_off_, want, eof_done);
+                file_request_off_ += want;
+                stream_pending_    = true;
+            } else {
+                // Cely zbytek souboru uz byl pozadan; jakmile worker dohraje,
+                // nastavi eof_ a Voice doplyne hlas cisto. Zadny dalsi request.
+            }
+        }
+    }
+
+    // Pri deaktivaci uvolni ring (jednou).
+    if (!active_ && ring_ && stream_) {
+        stream_->releaseRing(ring_);
+        ring_ = nullptr;
+    }
+
     return active_ || damping_ || produced;
 }
 
