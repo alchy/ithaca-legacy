@@ -453,6 +453,13 @@ Minimalni vec, kterou GUI MUSI mit (vychazi z icr/icr2):
 - **Master gain + meter, polyphony display, CPU usage** — read-only metry.
 - **DSP chain bypass per stage** + parametry (jakmile bude DSP chain ve fazi 6).
 - **Mic mixer** — per-mic level + mute + invert-phase (jakmile bude extended format ve fazi 7).
+  - GUI je **DYNAMICKE podle rezimu banky** (zjisteno po loadBank). LEGACY banka: mic mixer
+    se NEZOBRAZUJE (jen jedna stereo pozice). EXTENDED banka: ma **fixne alokovany layout**
+    pro `1 main + 3 mixdown pozice` (micpos-A, micpos-B, micpos-C). I kdyz banka ma jen main
+    a jeden micpos-A, sloty B a C zustanou "prazdne" (sive). Duvod: konzistentni vizual mezi
+    bankami; ctyri sloty pokryvaji vsechny ocekavane scenare (front + 3 mic perspektivy,
+    nebo main + 3 different ambience mics).
+  - Per slot: level slider, mute, invert-phase (per mic).
 - **Sympathetic resonance amount** — parametrizovatelne (faze 5).
 - **GUI persistuje stav do configu** — pri ukonceni programu serializuje vsechny GUI-nastavene
   hodnoty (block size, master gain, vybrana banka, MIDI port, DSP/mic/rezonancni parametry, ...)
