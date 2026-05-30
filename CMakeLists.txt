@@ -33,6 +33,10 @@ add_library(ithaca_core STATIC
     engine/voice/patch_manager.cpp
     engine/voice/voice.cpp
     engine/voice/voice_pool.cpp
+    engine/voice/resonance_voice.cpp
+    engine/pedal/pedal_state.cpp
+    engine/resonance/harmonic_proximity.cpp
+    engine/resonance/resonance_engine.cpp
     engine/engine.cpp
     engine/render/batch_renderer.cpp
     engine/miniaudio_impl.cpp

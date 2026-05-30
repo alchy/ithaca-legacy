@@ -88,4 +88,14 @@ int VoicePool::activeCount() const noexcept {
     return n;
 }
 
+bool VoicePool::hasActiveMainVoice(int midi) const noexcept {
+    // Eligibility filter 5.5.1 (1): rezonance N je ineligible, dokud existuje
+    // hlavni hlas N v jakemkoli stavu (HELD / RELEASING / pedal-sustained dozvuk).
+    // `Voice::active()` je true ve vsech tech stavech, takze stacik kontrolovat ji
+    // (releasing se nehlasi separe — je to subset active).
+    for (const auto& v : voices_)
+        if (v.active() && v.midi() == midi) return true;
+    return false;
+}
+
 } // namespace ithaca

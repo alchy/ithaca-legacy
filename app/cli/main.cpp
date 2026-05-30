@@ -59,6 +59,7 @@ static void printUsage(const char* argv0) {
         "  --play <dir>         nacti banku, otevri audio device a zahraj akord\n"
         "  --block-size N       audio buffer (frames), default 256 (32..8192).\n"
         "                       Vetsi N = vyssi latence, mensi N = vyssi CPU/risk underrunu.\n"
+        "  --resonance-strength <f>  Sila sympaticke rezonance (0..1, default 0.5)\n"
         "  --help, -h           tato napoveda\n",
         ITHACA_VERSION, argv0, argv0, argv0, argv0, argv0);
 }
@@ -70,6 +71,7 @@ int main(int argc, char* argv[]) {
     std::string play_dir;
     log::Severity level = log::Severity::Info;
     int           block_size = 256;       // default audio buffer
+    float         resonance_strength = 0.5f;  // faze 5: sila sympaticke rezonance
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -98,6 +100,10 @@ int main(int argc, char* argv[]) {
                              block_size);
                 return 1;
             }
+        } else if (a == "--resonance-strength" && i + 1 < argc) {
+            resonance_strength = (float)std::atof(argv[++i]);
+            if (resonance_strength < 0.f) resonance_strength = 0.f;
+            if (resonance_strength > 1.f) resonance_strength = 1.f;
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n\n", a.c_str());
             printUsage(argv[0]);
@@ -114,6 +120,7 @@ int main(int argc, char* argv[]) {
         EngineConfig cfg;
         cfg.midi_from = 21; cfg.midi_to = 108;   // cela klaviatura (po fazi 4 RAM mala)
         cfg.block_size = block_size;
+        cfg.resonance_strength = resonance_strength;
         if (!eng.init(cfg) || !eng.loadBank(play_dir)) {
             LOG_ERROR("play", "Nelze nacist banku: %s", play_dir.c_str());
             return 1;
@@ -140,6 +147,7 @@ int main(int argc, char* argv[]) {
         EngineConfig cfg;
         // Pro rychly render nacti jen par not kolem stredu klaviatury.
         cfg.midi_from = 57; cfg.midi_to = 72;
+        cfg.resonance_strength = resonance_strength;
         if (!eng.init(cfg) || !eng.loadBank(render_dir)) {
             LOG_ERROR("render", "Nelze nacist banku: %s", render_dir.c_str());
             return 1;

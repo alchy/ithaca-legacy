@@ -383,13 +383,32 @@ jako "damping voice" v poolu.
 
 ### 5.5 Sympaticka rezonance — rizena zivym stavem
 
-`pedal` modul udrzuje jeden vstup: **aktualni mnozinu neztlumenych strun**:
-- Pedal dole → neztlumene jsou VSECHNY struny.
-- Pedal nahore → neztlumene jen prave drzene klavesy.
+`pedal` modul drzi **CC64 jako spojitou hodnotu 0–127** (NE prah on/off). Z ni odvodi
+**`damping_[128]` — per-string damping koeficient [0, 1]**:
 
-Rezonancni engine budi harmonicky pribuzne struny z teto mnoziny — bez ohledu na to, jak
-vznikla. Tim pada **held-key rezonance i pedalova rezonance do jednoho kodu** (held-key
-delame hned od zacatku, ne pozdeji).
+- `damping_[N] = 1.0` → tlumitko zcela odlepeno, struna zni volne
+- `damping_[N] = 0.0` → tlumitko cele dole, struna ztlumena
+- mezi tim → half-pedal: tlumitko "lize" strunu, rezonance/doznivani je SLABSI nez plne, ale ne nulove
+
+```
+damper_lift = cc64 / 127.0          // spojite 0..1
+for N in 0..127:
+    if held[N]: damping_[N] = 1.0   // drzena klavesa vzdy plne undamped
+    else:       damping_[N] = damper_lift   // mimo drzene: lineárne dle pedalu
+```
+
+Rezonancni engine cita `damping_[N]` jako MULTIPLIKATOR rezonancniho gainu:
+```
+excite = (V/127) × harm_proximity(N, M) × resonance_strength × damping_[N]
+```
+
+Tim se pozice pedalu spojite promita do hlasitosti rezonance: pri pomalem zveda pedalu rezonance
+plynule narusta, pri pomalem stisku plynule mizi. Held-key + pedal rezonance v jednom kodu —
+neexistuje "rezim", jen spojita matice koeficientu.
+
+Eligibility filter (5.5.1) zustava: rezonance N se spousti jen kdyz `damping_[N] > epsilon`
+(napr. 0.001) AND N neni v `notes_with_active_main_voice`. Velmi mala damping → nominalne
+eligibilni, ale gain je tak nizky, ze prakticky neslysitelne (a hlas se v poolu rychle zafade).
 
 ```
 Kdyz se zahraje nota N s velocity V a existuje mnozina neztlumenych strun:
@@ -420,13 +439,14 @@ artefakty).
 
 Tri vynucujici pravidla v engine (musi byt v kodu — nelze spolehat na "obecne to nenastane"):
 
-**(1) Eligibility filter.** `pedal` modul udrzuje set:
+**(1) Eligibility filter.** `pedal` modul udrzuje `damping_[128] ∈ [0, 1]` (viz 5.5).
 ```
-undamped_strings        = pedal_down ? all_strings : held_keys
-resonance_eligible(N)   = N ∈ undamped_strings  ∧  N ∉ notes_with_active_main_voice
+damping_[N] = held[N] ? 1.0 : (cc64 / 127.0)         // spojite
+resonance_eligible(N)   = damping_[N] > 0.001  ∧  N ∉ notes_with_active_main_voice
 ```
 Pred kazdou alokaci rezonancniho hlasu se overi `resonance_eligible(N)`. Aktivni main voice
-zahrnuje vsechny voice stavy: HELD, RELEASING, pedal-sustained dozvuk.
+zahrnuje vsechny voice stavy: HELD, RELEASING, pedal-sustained dozvuk. Excitation gain
+rezonancniho hlasu je dale NASOBEN `damping_[N]` — pri half-pedal je rezonance prirozene slabsi.
 
 **(2) Per-nota uniqueness.** Engine drzi `resonance_voices[128]` (jeden slot per nota N). Note-on
 jine noty M, ktery budi rezonanci N, najde existujici slot a JEN AKTUALIZUJE amplitudu (pricte
@@ -437,20 +457,24 @@ fazoveho cvakani od dvou identickych samplu na stejne strune.
 prehodnotit:
 - `note_on(N)`: pokud `resonance_voices[N]` aktivni → spust FAST FADE (~5 ms) a uvolni slot.
   Hlavni hlas N pak prebira (pravidlo B v matrici nize).
-- `note_off(N)`: hlavni hlas prechazi do release; eligibility se prepocita az kdyz hlavni hlas
-  dohraje + pokud N neni v `undamped_strings`, opousti taky rezonancni eligibility. Rezonance
-  je VZDY event-driven (novym note-on jine noty); nezapina se "samovolne" po note-off.
-- `pedal_up` (z down): pro kazdy aktivni `resonance_voices[N]` kde N neni HELD → fast fade
-  & uvolni (struna ztlumena).
-- `pedal_down` (z up): nove undamped struny se pridaji do `undamped_strings`, ale rezonance se
-  NEALOKUJE retroaktivne — pedal jen otevira BUDOUCI eligibility pro nasledujici note-on.
+- `note_off(N)`: hlavni hlas prechazi do release; rezonance NENI nikdy spoustena "samovolne"
+  po note-off, takze tady neni co delat (eligibility se kontroluje az pri pristim note-on).
+- `pedal_change` (CC64 se zmenilo): VSECHNY aktivni rezonancni hlasy si pretahnou novy
+  `target_gain` (cas posledni excitation × aktualni `damping_[N]`). Pri prechodu pedalu dolu →
+  nahoru tlumitka dopadaji na struny, ne-held struny postupne plynule snizuji target_gain →
+  rezonance plynule mizi. Pri opacnem prechodu pedal nahoru → eligibility se otevre i pro
+  ne-held struny, ale rezonance se NEALOKUJE retroaktivne (pedal jen otevira budouci
+  eligibility pro nasledujici note-on). Half-pedal: target_gain je proporcni, prirozene tlumeni.
+- (rezonance se take fadne, kdyz hlas dohraje sustain region nebo dojde k underrun — to resi
+  ResonanceVoice sama.)
 
 **Matrice scenaru** (jedna nota N, vstup z jine noty M harmonicky pribuzne):
 
 | Note(N) | Pedal | Vstup z M | Co hraje na N | Duvod |
 |---|---|---|---|---|
 | IDLE | UP | M note-on | nic | N ztlumena (tlumitka dole) |
-| IDLE | DOWN | M note-on | **rezonance N** | N undamped pedalem, eligible |
+| IDLE | DOWN (CC=127) | M note-on | **rezonance N** plnym gainem | damping_[N]=1.0, eligible |
+| IDLE | HALF (CC=64) | M note-on | **rezonance N** polovicnim gainem | damping_[N]≈0.5, eligible |
 | HELD | UP | M note-on | nic NAVIC k hlavnimu hlasu N | pravidlo (1): N ma aktivni main voice → ineligible |
 | HELD | DOWN | M note-on | totez | totez |
 | RELEASED + sustain | DOWN | M note-on | totez | hlavni hlas N stale aktivni v dozvuku |

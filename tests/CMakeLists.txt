@@ -54,3 +54,15 @@ add_test(NAME test_stream_engine COMMAND test_stream_engine)
 add_executable(test_long_sample_stream test_long_sample_stream.cpp)
 target_link_libraries(test_long_sample_stream PRIVATE ithaca_core doctest)
 add_test(NAME test_long_sample_stream COMMAND test_long_sample_stream)
+
+add_executable(test_pedal_state test_pedal_state.cpp)
+target_link_libraries(test_pedal_state PRIVATE ithaca_core doctest)
+add_test(NAME test_pedal_state COMMAND test_pedal_state)
+
+add_executable(test_harmonic_proximity test_harmonic_proximity.cpp)
+target_link_libraries(test_harmonic_proximity PRIVATE ithaca_core doctest)
+add_test(NAME test_harmonic_proximity COMMAND test_harmonic_proximity)
+
+add_executable(test_resonance_engine test_resonance_engine.cpp)
+target_link_libraries(test_resonance_engine PRIVATE ithaca_core doctest)
+add_test(NAME test_resonance_engine COMMAND test_resonance_engine)

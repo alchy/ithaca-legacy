@@ -42,6 +42,11 @@ public:
     int activeCount() const noexcept;
     int poolSize() const { return (int)voices_.size(); }
 
+    // True kdyz nektery hlas v poolu zni notu `midi` (vc. releasing/sustained
+    // dozvuku). Pouziva ResonanceEngine pro eligibility filter 5.5.1 (1):
+    // rezonance N se nealokuje, dokud existuje hlavni hlas N v jakemkoli stavu.
+    bool hasActiveMainVoice(int midi) const noexcept;
+
 private:
     int findSlot();                          // volny, nebo nejtissi (kradez)
 

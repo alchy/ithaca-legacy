@@ -14,7 +14,8 @@ namespace ithaca {
 Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
                     int cache_budget_mb,
                     int midi_from, int midi_to,
-                    int preload_ms) {
+                    int preload_ms,
+                    int resonance_window_ms) {
     Bank bank;
     bank.path = dir;
     bank.name = std::filesystem::path(dir).filename().string();
@@ -94,8 +95,6 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
         }
         mic.preload_head = std::move(head.samples);
 
-        // preload_resonance ve fazi 4 zatim prazdny (rezonance je faze 5).
-
         // INVARIANT: u piano-class samplu je peak RMS vzdy v attack fazi, ktera
         // se vzdy vejde do preload_head. Pri rozsireni na non-piano zvuky (looped
         // pads atd.) bude treba merit az z preload_resonance regionu (faze 5+).
@@ -103,6 +102,30 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
                                      mic.head_frames, info.sample_rate);
         int   ae  = findAttackEnd  (mic.preload_head.data(),
                                      mic.head_frames, info.sample_rate);
+
+        // Nacti preload_resonance pro Streamed mic (faze 5: zdroj rezonancnich
+        // hlasu — preskoceny attack, drzeny sustain). Pro FullyLoaded je cely
+        // sampl v preload_head, takze separatni resonance buffer netreba.
+        if (mic.mode == MicLayerMode::Streamed && resonance_window_ms > 0) {
+            mic.resonance_start_frame = ae;          // = attack_end_frame
+            int rwin = (int)((int64_t)resonance_window_ms * info.sample_rate / 1000);
+            // Orizni window na to, co soubor jeste obsahuje.
+            int avail = info.frames - mic.resonance_start_frame;
+            if (avail < 0) avail = 0;
+            if (rwin > avail) rwin = avail;
+            if (rwin > 0) {
+                WavData rd = readWavRange(entry.full_path,
+                                          mic.resonance_start_frame, rwin);
+                if (rd.valid && rd.frames > 0) {
+                    mic.resonance_frames  = rd.frames;
+                    mic.preload_resonance = std::move(rd.samples);
+                } else {
+                    logger.log("bank", log::Severity::Warning,
+                               "Nelze nacist preload_resonance: %s",
+                               p.filename.c_str());
+                }
+            }
+        }
 
         SampleAsset asset;
         asset.peak_rms_db      = rms;
