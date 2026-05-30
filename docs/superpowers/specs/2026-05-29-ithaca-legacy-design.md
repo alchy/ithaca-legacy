@@ -54,9 +54,27 @@ ne jako finalni obsah.
 
 ## 2. Klicove koncepty
 
-### 2.1 Dvojity format banky (engine auto-detekuje)
+### 2.1 Dvojity format banky (engine auto-detekuje) — KLICOVY INVARIANT
 
-Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova.
+Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova. **Rezim banky
+(`BankFormat::Legacy` / `Extended` / `Unknown`) je first-class koncept** — detekuje se pri
+`loadBank()`, je ulozeny v `Bank.format`, a engine ho VYSTAVUJE jako citelny atribut.
+**Veskere chovani engine i GUI, ktere se mezi rezimy lisi, se ptá tohoto atributu** (zadne
+duplicitni stavy / branchovani podle nazvu cesty).
+
+Co se podle rezimu lisi:
+
+| Vrstva | Legacy | Extended |
+|---|---|---|
+| Loader | `loadLegacyBank` (cely soubor / streaming z faze 4) | `loadExtendedBank` (faze 7) |
+| Velocity sloty | `vel` token (8 slotu, 2026-05-30: 8 jen, varianta 16 droplnuta) | RMS detekce z main pozice (dynamicky pocet) |
+| Mic mixer | jen 1 stereo pozice (mixer skryt / no-op) | 1 main + N micpos (mix per pozice, mono→stereo expanze v RT) |
+| GUI mic-mixer panel | SKRYT | Fixne **4-slot** layout (main + micpos-A/B/C), prazdne sloty zustanou sive |
+| Round-robin | obvykle 1 variant per slot | libovolny pocet variant podle hashe |
+
+Co se NElisi (formát-agnosticka logika): voice pool + kradez, retrigger damping, pedal,
+sympaticka rezonance, DSP chain, SR normalizace samplu, processBlock kontrakt. Jen ZDROJ samplu
+je jiny; sample.cesta pak vsechna ostatni vrstva nezajima.
 
 **Legacy format** (soucasne banky, single stereo par):
 - `mNNN-velV-fSS.wav` — 8 velocity vrstev (napr. `m060-vel3-f48.wav`). Jen tato varianta;
