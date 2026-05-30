@@ -62,19 +62,99 @@ Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova. **Re
 **Veskere chovani engine i GUI, ktere se mezi rezimy lisi, se ptá tohoto atributu** (zadne
 duplicitni stavy / branchovani podle nazvu cesty).
 
-Co se podle rezimu lisi:
+### 2.1.1 Kompletni prehled rozdilu mezi rezimy
 
-| Vrstva | Legacy | Extended |
+Kompletni porovnani (zdroj pravdy pri planovani libovolne fáze). Polozky oznacene `(open)` jsou
+jeste nedoresene/k dotvoreni.
+
+**Diskovy layout a pojmenovani:**
+
+| | Legacy | Extended |
 |---|---|---|
-| Loader | `loadLegacyBank` (cely soubor / streaming z faze 4) | `loadExtendedBank` (faze 7) |
-| Velocity sloty | `vel` token (8 slotu, 2026-05-30: 8 jen, varianta 16 droplnuta) | RMS detekce z main pozice (dynamicky pocet) |
-| Mic mixer | jen 1 stereo pozice (mixer skryt / no-op) | 1 main + N micpos (mix per pozice, mono→stereo expanze v RT) |
-| GUI mic-mixer panel | SKRYT | Fixne **4-slot** layout (main + micpos-A/B/C), prazdne sloty zustanou sive |
-| Round-robin | obvykle 1 variant per slot | libovolny pocet variant podle hashe |
+| Layout | plochy adresar: `BankDir/*.wav` | per-nota adresar: `BankDir/mNNN/*.wav` |
+| Naming | `mNNN-velV-fSS.wav` (napr. `m060-vel3-f48.wav`) | `<hash>.wav` (main, bez suffixu) + `<hash>-micpos-A..Z.wav` |
+| Detekce formatu | majorita souboru splnuje legacy regex | majorita souboru splnuje extended pattern, nebo existuje aspon jeden `mNNN/` podadresar |
+| SR tag v nazvu | povinny (`fSS`, 44/48/96) | NE — SR se cte z WAV hlavicky |
+| Velocity v nazvu | povinne (`velV`, 0-7) | NE — detekuje se z RMS main pozice |
+| Mic pozice | 1 (stereo) — zadny suffix | main (vzdy stereo, bez suffixu) + micpos-A..Z (mono nebo stereo) |
+| Parovani uhozu | NEexistuje (kazdy soubor = 1 uhoz) | sdileny `<hash>` napric main+micpos teze noty |
 
-Co se NElisi (formát-agnosticka logika): voice pool + kradez, retrigger damping, pedal,
-sympaticka rezonance, DSP chain, SR normalizace samplu, processBlock kontrakt. Jen ZDROJ samplu
-je jiny; sample.cesta pak vsechna ostatni vrstva nezajima.
+**Loader (sample_store):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Entry point | `loadLegacyBank(dir, ...)` (existuje, faze 2) | `loadExtendedBank(dir, ...)` (faze 7) |
+| Velocity → slot | `vel` token (0..7) → index slotu | RMS main pozice → seskupeni (tolerance `rms_tolerance_db`, default ±1.5) → serazeni vzestupne |
+| Pocet slotu per nota | fixni 8 | dynamicky (1..N podle dat) |
+| Round-robin varianty | obvykle 1 (legacy banky tak nahravane nejsou) | libovolny pocet (vsechny hashe se stejnym RMS v jednom slotu) |
+| Mereni RMS | z preload_head (cely sampl je obvykle = head u kratkych) | z preload_head **MAIN** pozice (soundboard/micpos se RMS nemeri) |
+| Chybejici (nota, vel) | flag/zero-length → ticho (zadny resampling) | totez |
+| Chybejici micpos | N/A (jen 1 pozice) | log + pokracovani (jen main je povinny) |
+| Soundboard/micpos jako orphan (bez main) | N/A | preskocit + log |
+
+**Sample / Voice model:**
+
+| | Legacy | Extended |
+|---|---|---|
+| MicLayer.mode | `FullyLoaded` (krote samply) nebo `Streamed` (basy) | totez (mode je per-mic, ne per-rezim) |
+| `MicLayer.mic_name` | `"stereo"` | `"main"` / `"micpos-A"` / ... |
+| `SampleAsset.mics.size()` | vzdy 1 | 1..(N+1) (main + 0-N micpos) |
+| MicLayer mono priznak | vzdy stereo | `is_mono` per mic — main vzdy stereo, micpos volitelne mono (expanze v RT) |
+| SR samplu | 44.1/48/96 kHz dle `fSS` tagu | 44.1/48/96 kHz dle WAV hlavicky |
+| pos_inc (SR normalizace) | aktivni: `sample_sr/engine_sr` | aktivni: stejne |
+| pitch_ratio | vzdy 1.0 (zadna note-transpozice) | totez |
+
+**Audio path (engine):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Voice cte | `mics[0].preload_head` + (faze 4) ring | vsechny micpos zaroven, paralelne |
+| Mic mixer | NO-OP (1 mic → primy passthrough) | aktivni: per-mic level + mute + invert-phase, mono→stereo expanze |
+| Master gain / pan / metering | identicke | identicke |
+| Sympaticka rezonance | aktivni (zdroj = main mic, jediny dostupny) | aktivni (zdroj = main mic, jediny pouzitelny pro rezonancni zdroj) |
+| Half-pedal samply | NEexistuji (legacy nikdy nemel); fallback = continuous release-time skalovani | dedikovane samply (kdyz nahrane); jinak stejny fallback |
+| DSP chain (faze 6) | identicky | identicky |
+
+**GUI (faze 8):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Bank rolldown | vsechny banky v `bank_root_dir` (oba formaty mixed; ikona/badge ukazuje typ) | totez |
+| Mic mixer panel | SKRYT | **Fixne 4 sloty**: main + micpos-A/B/C; prazdne sloty sive |
+| Velocity info | "8 layers (legacy)" | "N layers (RMS, dynamic)" — show actual count per note |
+| Load progress | rychly (legacy malo metadat) | mozna pomalejsi (vic souboru per nota, vic hashu) |
+| Per-mic invert phase | N/A | per slot ano |
+| Mono indikator per micpos | N/A | ikona M/S vedle slidru |
+| Resonance amount, master gain, DSP, MIDI, block size | identicke | identicke |
+
+**Konfigurace (config.json):**
+
+| | Legacy | Extended |
+|---|---|---|
+| Citelnost klicu | `preload_ms`, `cache_budget_mb`, `max_voices`, ... vsechny stejne | totez + per-bank micpos mix override (`micpos_main: 1.0, micpos_A: 0.2, ...`) — (open: zda v configu nebo `.bank.json` per banka) |
+| GUI persist pri exitu | ukladaji se GUI hodnoty (master gain, vybrana banka, block size, ...) | totez + mic mixer hodnoty |
+
+**Co je rezim-agnosticke (logika voice/engine je formát-jedno):**
+
+- VoicePool, alokace/kradez, retrigger damping crossfade
+- `processBlock` kontrakt (libovolny `n_samples`)
+- StreamEngine (ring buffer pool, worker thread, underrun fade)
+- Pedal modul a "neztlumene struny" set (pedal-down vs held-keys)
+- Sympaticka rezonance algoritmus (jen zdroj = main mic je rezim-specificky)
+- DSP chain stages (normalize / compressor / biquad / BBE / convolution)
+- SR normalizace samplu (`pos_inc = sample_sr / engine_sr`)
+- MIDI fronta (lock-free SPSC), MIDI kanalovy filtr, MIDI port select/refresh
+- Master gain / pan / metering
+- Runtime block size selector
+
+**Otevrene body k doreseni (poznamky pri planovani):**
+
+- (open) Per-banka mic mixer defaults: v `config.json` globalne nebo per-banka v
+  `BankDir/.bank.json`? Vyresit v fazi 7 nebo driv pokud bude potreba.
+- (open) Velocity-slot mapovani v extended: linearni mapovani MIDI 0-127 na N slotu, nebo s
+  per-banka tweakem? Vychozi navrh: linearni (nearest na krivce RMS).
+- (open) Default `rms_tolerance_db` pro round-robin grouping (navrh ±1.5 dB) — k overeni az
+  budou nove samply.
 
 **Legacy format** (soucasne banky, single stereo par):
 - `mNNN-velV-fSS.wav` — 8 velocity vrstev (napr. `m060-vel3-f48.wav`). Jen tato varianta;
