@@ -410,6 +410,55 @@ Provazani (dulezite — promyslet pri implementaci):
   latence) ustupuje → **NIKDY neukradne hrany hlas**.
 - Sila rezonance je parametrizovatelna za behu.
 
+### 5.5.1 Invariant: NIKDY dvoji hrani teze noty (rezonance × hlavni hlas)
+
+**Tvrde pravidlo: pro kazdou MIDI notu N v kazdy okamzik existuje maximalne JEDEN znejici zdroj
+na strunu N** — bud hlavni hlas (HELD / RELEASING / pedal-sustained dozvuk), NEBO rezonancni
+hlas, NIKDY oba. Bez tohoto pravidla by hrane noty s pridanym rezonancim hlasem ve specifickych
+kombinacich note/pedal stavu znely jako "dvakrat" (suma identickych samplu = +6 dB + fazove
+artefakty).
+
+Tri vynucujici pravidla v engine (musi byt v kodu — nelze spolehat na "obecne to nenastane"):
+
+**(1) Eligibility filter.** `pedal` modul udrzuje set:
+```
+undamped_strings        = pedal_down ? all_strings : held_keys
+resonance_eligible(N)   = N ∈ undamped_strings  ∧  N ∉ notes_with_active_main_voice
+```
+Pred kazdou alokaci rezonancniho hlasu se overi `resonance_eligible(N)`. Aktivni main voice
+zahrnuje vsechny voice stavy: HELD, RELEASING, pedal-sustained dozvuk.
+
+**(2) Per-nota uniqueness.** Engine drzi `resonance_voices[128]` (jeden slot per nota N). Note-on
+jine noty M, ktery budi rezonanci N, najde existujici slot a JEN AKTUALIZUJE amplitudu (pricte
+buzeni s aktualnim vel_M × harmonicka_blizkost) — nealokuje druhy hlas. Tim odpada riziko
+fazoveho cvakani od dvou identickych samplu na stejne strune.
+
+**(3) State transitions** — ctyri body, kde se musi rezonance vsech relevantnich strun
+prehodnotit:
+- `note_on(N)`: pokud `resonance_voices[N]` aktivni → spust FAST FADE (~5 ms) a uvolni slot.
+  Hlavni hlas N pak prebira (pravidlo B v matrici nize).
+- `note_off(N)`: hlavni hlas prechazi do release; eligibility se prepocita az kdyz hlavni hlas
+  dohraje + pokud N neni v `undamped_strings`, opousti taky rezonancni eligibility. Rezonance
+  je VZDY event-driven (novym note-on jine noty); nezapina se "samovolne" po note-off.
+- `pedal_up` (z down): pro kazdy aktivni `resonance_voices[N]` kde N neni HELD → fast fade
+  & uvolni (struna ztlumena).
+- `pedal_down` (z up): nove undamped struny se pridaji do `undamped_strings`, ale rezonance se
+  NEALOKUJE retroaktivne — pedal jen otevira BUDOUCI eligibility pro nasledujici note-on.
+
+**Matrice scenaru** (jedna nota N, vstup z jine noty M harmonicky pribuzne):
+
+| Note(N) | Pedal | Vstup z M | Co hraje na N | Duvod |
+|---|---|---|---|---|
+| IDLE | UP | M note-on | nic | N ztlumena (tlumitka dole) |
+| IDLE | DOWN | M note-on | **rezonance N** | N undamped pedalem, eligible |
+| HELD | UP | M note-on | nic NAVIC k hlavnimu hlasu N | pravidlo (1): N ma aktivni main voice → ineligible |
+| HELD | DOWN | M note-on | totez | totez |
+| RELEASED + sustain | DOWN | M note-on | totez | hlavni hlas N stale aktivni v dozvuku |
+
+**Multi-source rezonance** (M1 i M2 budi N, oba aktivni): pravidlo (2) zaruci, ze existuje jen
+JEDEN rezonancni hlas N, jeho amplituda je suma buzeni od M1+M2 × pokles. Zadne dva identicke
+samply na N.
+
 ### 5.6 Kradez hlasu
 
 Pri zaplneni poolu kradni **nejtissi sampl z celeho poolu** (maskuje se lip nez preruseni
