@@ -1,28 +1,24 @@
 // engine/voice/patch_manager.cpp — viz patch_manager.h.
+//
+// Pozn. (2026-05-30): puvodni "fallback ve dvou osach" (pitch-shift z nejblizsi
+// nahrane noty) je ZRUSEN. Chybejici nota → prazdny VoiceSpec → player to
+// chape jako ticho. Pitch-shift kod je presunut do _reserved_resampling.h pro
+// pripadne budouci pouziti. Velocity-slot vyber (mapovani MIDI vel na nahrane
+// dynamiky noty) ZUSTAVA — to neni odvozovani, jen vyber z toho co je nahrane.
+
 #include "voice/patch_manager.h"
 
-#include <cmath>
+#include <cstdint>
 
 namespace ithaca {
 
 namespace {
 
-// Najde nejblizsi nahranou notu k `midi`. Vrati -1 kdyz banka nema zadnou.
-int nearestRecordedNote(const Bank& bank, int midi) {
-    if (bank.notes[midi].recorded) return midi;
-    for (int d = 1; d < 128; ++d) {
-        int lo = midi - d, hi = midi + d;
-        if (lo >= 0 && bank.notes[lo].recorded)  return lo;
-        if (hi < 128 && bank.notes[hi].recorded) return hi;
-    }
-    return -1;
-}
-
 // Namapuj velocity 0-127 na index slotu (sloty serazene vzestupne dle RMS).
 int slotIndexForVelocity(int velocity, int nslots) {
     if (nslots <= 1) return 0;
     float t = (float)velocity / 127.f;                 // 0..1
-    int idx = (int)std::lround(t * (float)(nslots - 1));
+    int idx = (int)((t * (float)(nslots - 1)) + 0.5f); // round
     if (idx < 0) idx = 0;
     if (idx >= nslots) idx = nslots - 1;
     return idx;
@@ -40,10 +36,11 @@ VoiceSpec selectVoice(const Bank& bank, int midi, int velocity, RoundRobinState&
     VoiceSpec out;
     if (midi < 0 || midi > 127) return out;
 
-    int src = nearestRecordedNote(bank, midi);
-    if (src < 0) return out;                            // prazdna banka
+    // Bez resamplingu: pouziva se VYHRADNE nahrany sampl pro tuto notu.
+    // Kdyz nota neni nahrana → ticho (prazdny VoiceSpec).
+    if (!bank.notes[midi].recorded) return out;
 
-    const NoteSlots& note = bank.notes[src];
+    const NoteSlots& note = bank.notes[midi];
     if (note.slots.empty()) return out;
 
     int nslots = (int)note.slots.size();
@@ -57,16 +54,16 @@ VoiceSpec selectVoice(const Bank& bank, int midi, int velocity, RoundRobinState&
     if (nvar == 1) {
         chosen = 0;
     } else {
-        int last = (sidx < 16) ? rr.last[src][sidx] : -1;
+        int last = (sidx < 16) ? rr.last[midi][sidx] : -1;
         // Nahodny vyber, opakuj dokud != last (pri nvar>=2 vzdy skonci rychle).
         do {
             chosen = (int)(lcgNext(rr.rng) % (uint32_t)nvar);
         } while (chosen == last);
-        if (sidx < 16) rr.last[src][sidx] = chosen;
+        if (sidx < 16) rr.last[midi][sidx] = chosen;
     }
 
     out.asset       = &slot.variants[chosen];
-    out.pitch_ratio = std::pow(2.0, (double)(midi - src) / 12.0);
+    out.pitch_ratio = 1.0;                              // bez transpozice
     float vn = (float)velocity / 127.f;
     out.vel_gain    = vn * vn;                          // percepcni (kvadraticky)
     return out;

@@ -1,13 +1,11 @@
 // tests/test_patch_manager.cpp
-// Testuje vyber hlasu: velocity→slot, pitch-shift chybejicich not (2 osy),
-// round-robin bez opakovani. Banka se staví v pameti (zadny disk).
+// Testuje vyber hlasu: velocity→slot, chybejici nota → ticho (zadny resampling),
+// round-robin bez opakovani. Banka se stavi v pameti (zadny disk).
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
 #include "voice/patch_manager.h"
 #include "sample/sample_types.h"
-
-#include <cmath>
 
 using namespace ithaca;
 
@@ -42,15 +40,17 @@ TEST_CASE("selectVoice: presna nota → pitch_ratio 1.0") {
     CHECK(vs.vel_gain > 0.f);
 }
 
-TEST_CASE("selectVoice: chybejici nota → transpozice z nejblizsi") {
+TEST_CASE("selectVoice: chybejici nota → asset nullptr (ticho, bez resamplingu)") {
+    // Rozhodnuti 2026-05-30: zadny pitch-shift z nejblizsi noty.
+    // Chybejici nota se NEodvozuje — vrati se prazdny VoiceSpec (player = ticho).
     Bank b; addNote(b, 60, 4);                          // jen nota 60
     RoundRobinState rr;
-    VoiceSpec up = selectVoice(b, 62, 100, rr);         // o 2 pultony vys
-    REQUIRE(up.asset != nullptr);
-    CHECK(up.pitch_ratio == doctest::Approx(std::pow(2.0, 2.0/12.0)).epsilon(0.001));
-    VoiceSpec dn = selectVoice(b, 57, 100, rr);         // o 3 pultony niz
-    REQUIRE(dn.asset != nullptr);
-    CHECK(dn.pitch_ratio == doctest::Approx(std::pow(2.0, -3.0/12.0)).epsilon(0.001));
+    CHECK(selectVoice(b, 62, 100, rr).asset == nullptr);   // soused 60 nepouziti
+    CHECK(selectVoice(b, 57, 100, rr).asset == nullptr);
+    // Presne nota 60 ale stale hraje.
+    VoiceSpec exact = selectVoice(b, 60, 100, rr);
+    REQUIRE(exact.asset != nullptr);
+    CHECK(exact.pitch_ratio == doctest::Approx(1.0).epsilon(0.0001));
 }
 
 TEST_CASE("selectVoice: vyssi velocity → vyssi slot (hlasitejsi)") {
