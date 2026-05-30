@@ -459,6 +459,31 @@ prehodnotit:
 JEDEN rezonancni hlas N, jeho amplituda je suma buzeni od M1+M2 × pokles. Zadne dva identicke
 samply na N.
 
+**Scenar: note-on N v okamziku, kdy uz N rezonuje** (uzivatel stiskne primo tu strunu, ktera
+prave rezonuje od drive zahrane noty M). Plati pravidlo B z matrice — explicitne rozepsane,
+protoze je to bezna situace ktera musi byt cista bez cvaknuti:
+
+```
+note-on(N) AND resonance_voices[N] aktivni:
+  1. resonance_voices[N] -> spust FAST FADE (~5 ms linear ramp do ticha)
+  2. resonance_voices[N] = nullptr ihned (eligibility filter od ted blokuje N)
+  3. alokuj hlavni hlas N normalnim postupem (voice pool, onset ramp ~3 ms)
+  → fade ocas rezonance bezi paralelne s onset rampou hlavniho hlasu
+    (oba sou v poolu jako samostatne hlasy; nikdy ticho mezi nimi)
+```
+
+Fyzikalni opodstatneni: ve skutecnem pianu hammer rozkmita strunu o ~60 dB silneji nez indukovana
+rezonance, takze rezonance se v novem tonu "ztrati". Cilem inzeneringu je nezaverit cvaknutim
+diky tvrdemu cutu (proto fade), ne presne modelovat fyzicke sumovani (rozdil v hladine je tak
+velky, ze ho neslysime). Eligibility filter (pravidlo 1) pak zajisti, ze dokud hlavni hlas N
+existuje (HELD/RELEASING/sustained), zadny novy rezonancni hlas N se nealokuje — coz pokryva
+i tremolo a rychle retriggery.
+
+**Hraniční pořadí v MIDI queue:** drain probiha v poradi přijetí — pokud note-on(N) prijde drive
+nez note-on(M) budici N, eligibility blokuje rezonanci od M ihned. Pokud note-on(M) drive,
+rezonance N se alokuje a hned (v ramci stejneho blok-drainu) note-on(N) ji ukonci. Zvukove
+identicke vysledky.
+
 ### 5.6 Kradez hlasu
 
 Pri zaplneni poolu kradni **nejtissi sampl z celeho poolu** (maskuje se lip nez preruseni
