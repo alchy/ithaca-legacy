@@ -54,3 +54,7 @@ add_test(NAME test_stream_engine COMMAND test_stream_engine)
 add_executable(test_long_sample_stream test_long_sample_stream.cpp)
 target_link_libraries(test_long_sample_stream PRIVATE ithaca_core doctest)
 add_test(NAME test_long_sample_stream COMMAND test_long_sample_stream)
+
+add_executable(test_pedal_state test_pedal_state.cpp)
+target_link_libraries(test_pedal_state PRIVATE ithaca_core doctest)
+add_test(NAME test_pedal_state COMMAND test_pedal_state)
