@@ -783,6 +783,18 @@ a ringem pak ma "skok" v hranici — to zatim akceptujeme; v dalsim tasku se to 
 `stream_.start()`, v destruktoru `stream_.stop()`. Pridej `cfg_.stream_threads` (default 1) a
 `cfg_.ring_capacity_frames` (default 8192) do `EngineConfig`. Predej StreamEngine& do VoicePool.
 
+- [ ] **Step 6b: Runtime audio buffer size + reload-rate skalovani s block size**
+  Pozadavek uzivatele (2026-05-30): audio buffer (block size) ma jit menit za behu (jako icr/icr2
+  selector). StreamEngine `refill_threshold` musi skalovat s block_size — vetsi block znamena vetsi
+  spotrebu per audio tick, takze ring potrebuje plnit drive. Pravidlo:
+  `refill_threshold_frames = max(ring_capacity_frames/2, block_size * 4)` — vzdy aspon 4 bloky
+  napred, aby disk mel cas dohnat. AudioDevice z faze 3 uz block_size prijima v `start()`; pridej
+  metodu `Engine::setBlockSize(int)` ktera (a) zastavi audio device, (b) `audio_device.stop()`,
+  (c) `audio_device.start(playAudioCb, &ctx, sr, new_block_size)`, (d) prepocita refill threshold.
+  Voice musi pri svem audio bloku poslat refill request kdyz `ring->available() < refill_threshold`.
+  CLI: pridej `--block-size <N>` (default 256), nastav pred init. Faze 8 (GUI) ho exposne jako
+  combo selector — viz spec [GUI 8.x].
+
 - [ ] **Step 7: Napis integ test `tests/test_long_sample_stream.cpp`** — vytvor 1-sekundovy ramp
 WAV, nacti pres loadLegacyBank s `preload_ms = 50` (→ head = 2400 frames, sampl 48000 → Streamed),
 spust voice, renderuj v malych blocich (128 frames) az do konce samplu, over ze L hodnoty rostou

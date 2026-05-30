@@ -400,6 +400,32 @@ parametry rezonance, mic mix, atd.
 
 ---
 
+## 7a. Dalsi architektonicke pozadavky (zaznamenano 2026-05-30)
+
+Tyto pozadavky pribyly behem implementace; nepatri do jedne konkretni faze, ale ovlivnuji vic z nich.
+
+- **Audio buffer size — runtime selector.** Velikost audio bufferu (block size) ma jit menit
+  za behu, ne jen pri startu. icr i icr2 maji v GUI rolldown. Engine vystavi `setBlockSize(int)`
+  (re-init audio_device, prepocet streamingu — viz nize). Default 256 frames. Faze 4 = backend
+  podpora (CLI `--block-size`); faze 8 = GUI selector.
+- **Reload rate streamingu skaluje s block size** (faze 4). `refill_threshold = max(ring/2,
+  block_size * 4)` — vetsi audio blok = vic frames spotrebovanych per tick = ring potrebuje plnit
+  drive. Pri zmene block size se prepocita.
+- **Render API: castecny buffer.** Engine `processBlock(L, R, n_samples)` uz prijima libovolny
+  `n_samples`. Pozadavek: zajistit, ze lze volat opakovane s ruznymi n (ne nutne plnym blokem).
+  Pouziva offline batch render, JUCE/VST hosti s ruznou block velikosti. Dnes uz tak je;
+  zafixovat jako KONTRAKT (test + komentar v engine.h).
+- **Modularita pro JUCE / VST wrappery (klicovy invariant).** libithaca_core musi zustat
+  cista hosti-agnosticka knihovna (zadny direkt audio_device dep v `Engine`; audio_device je
+  konzument fasady, ne soucast jadra). Pravidla:
+  - Engine fasada NEZAKLADA audio device; konstruktor a init nemaji audio side effects.
+  - Audio I/O (miniaudio) zije v `engine/io/audio_device.*`; JUCE/VST wrapper ho proste
+    nelinkuje a misto toho dela `engine.processBlock(L, R, n)` ze sve audio callbacky.
+  - Engine vystavi vsechny parametry (block size, SR, master gain, atd.) pres explicitni
+    metody — host muze cokoliv menit za behu.
+  - Pripadny JUCE/VST wrapper bude samostatny `app/juce/` modul, neovlivni libithaca_core.
+  Tento invariant resime az kdyz se k JUCE/VST dostaneme; faze 4-7 se ho drzi pasivne.
+
 ## 8. Fazovy plan implementace
 
 1. **Skeleton + build** — struktura, CMake/Makefile, logger, vendored deps, `make smoke` stub.
@@ -412,6 +438,25 @@ parametry rezonance, mic mix, atd.
 6. **DSP chain + mic_mixer** (mic_mixer naplno az s extended bankami).
 7. **Extended format** (multi-mic, round-robin) — az bude mit uzivatel vlastni samply.
 8. **GUI** — Keyscape-style frontend.
+
+### 8.x GUI pozadavky (zaznamenano 2026-05-30, ke specifikaci ve fazi 8)
+
+Minimalni vec, kterou GUI MUSI mit (vychazi z icr/icr2):
+
+- **MIDI input selector + Refresh** — list portu (RtMidi `listMidiPorts`), tlacitko Refresh
+  pro znovunaskenovani po pripojeni noveho zarizeni, current port indikator. (Backend uz mame —
+  spec sekce 5.7/5.8.)
+- **Bank selector (rolldown)** — list bank v `bank_root_dir`, vyber → engine.loadBank(...). Po
+  vyberu noveho ukladani do configu.
+- **Audio buffer size selector (rolldown)** — typicke hodnoty 64/128/256/512/1024/2048; vyber
+  zavola engine.setBlockSize(n). Default z configu.
+- **Master gain + meter, polyphony display, CPU usage** — read-only metry.
+- **DSP chain bypass per stage** + parametry (jakmile bude DSP chain ve fazi 6).
+- **Mic mixer** — per-mic level + mute + invert-phase (jakmile bude extended format ve fazi 7).
+- **Sympathetic resonance amount** — parametrizovatelne (faze 5).
+- **GUI persistuje stav do configu** — pri ukonceni programu serializuje vsechny GUI-nastavene
+  hodnoty (block size, master gain, vybrana banka, MIDI port, DSP/mic/rezonancni parametry, ...)
+  zpet do JSON configu. Pri pristim startu GUI nacte z configu. icr/icr2 to tak delaji.
 
 Ladi se na legacy bankach z `/Users/j/SoundBanks/Ithaca/` (faze 1–6), extended format a
 vlastni samply prichazeji ve fazi 7.
