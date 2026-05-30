@@ -11,6 +11,8 @@
 #include "voice/voice_pool.h"
 #include "voice/patch_manager.h"
 #include "midi/midi_queue.h"
+#include "pedal/pedal_state.h"
+#include "resonance/resonance_engine.h"
 
 #include <atomic>
 #include <memory>
@@ -33,6 +35,10 @@ struct EngineConfig {
     int   stream_threads        = 1;      // pocet worker threads (zatim 1)
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
     int   num_rings             = 32;     // velikost ring poolu
+    // -- Faze 5 sympaticka rezonance --
+    float resonance_strength    = 0.5f;   // 0..1, expose pres CLI
+    int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
+    float excite_decay_ms       = 5000.f; // tau prirozeneho decay last_excite
 };
 
 class Engine {
@@ -71,14 +77,20 @@ private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;
 
-    EngineConfig                  cfg_;
-    Bank                          bank_;
-    std::unique_ptr<VoicePool>    pool_;
-    RoundRobinState               rr_;
-    MidiQueue                     midi_q_;
-    std::unique_ptr<StreamEngine> stream_;
-    std::atomic<float>            master_gain_{1.0f};
-    bool                          initialized_ = false;
+    // Half-pedal continuous release scaling (spec 5.4). Vraci skalovany
+    // release_ms podle aktualniho cc64_ (CC0 → ×1, CC127 → ~×20).
+    float scaledReleaseMs() const;
+
+    EngineConfig                      cfg_;
+    Bank                              bank_;
+    std::unique_ptr<VoicePool>        pool_;
+    RoundRobinState                   rr_;
+    MidiQueue                         midi_q_;
+    std::unique_ptr<StreamEngine>     stream_;
+    PedalState                        pedal_;
+    std::unique_ptr<ResonanceEngine>  resonance_;
+    std::atomic<float>                master_gain_{1.0f};
+    bool                              initialized_ = false;
 };
 
 } // namespace ithaca

@@ -21,6 +21,12 @@ bool Engine::init(const EngineConfig& cfg) {
     pool_->setStreamEngine(stream_.get());
     recomputeRefillThreshold();
     stream_->start();
+    // Faze 5: sympaticka rezonance — sdileny stream engine, vlastni hlasy.
+    resonance_ = std::make_unique<ResonanceEngine>(cfg.max_resonance_voices);
+    resonance_->setStrength(cfg.resonance_strength);
+    resonance_->setStreamEngine(stream_.get());
+    resonance_->setExciteDecayTimeMs(cfg.excite_decay_ms, cfg.block_size,
+                                     (float)cfg.sample_rate);
     master_gain_.store(cfg.master_gain, std::memory_order_relaxed);
     initialized_ = true;
     return true;
@@ -49,29 +55,57 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     if (!initialized_ || !pool_) return;
     const float sr = (float)cfg_.sample_rate;
 
-    // 1. Vyprazdni MIDI frontu (audio thread) → akce do voice poolu.
+    // 1. Vyprazdni MIDI frontu (audio thread) → akce do voice poolu + rezonance.
+    // Drain order per spec 5.5.1: pravidlo B PRED voice noteOn, onPlayedNoteOn
+    // PO voice noteOn (aby eligibility videla novy main voice).
     MidiEvent e;
     while (midi_q_.pop(e)) {
         switch (e.type) {
             case MidiEvent::NoteOn: {
-                VoiceSpec vs = selectVoice(bank_, e.data1, e.data2, rr_);
-                if (vs.asset)
-                    pool_->noteOn(e.data1, vs, sr, cfg_.keyboard_spread);
+                int m = (int)e.data1;
+                int v = (int)e.data2;
+                if (v == 0) {
+                    // MIDI konvence: NoteOn s vel=0 = NoteOff.
+                    pedal_.noteOff(m);
+                    pool_->noteOff(m, scaledReleaseMs(), sr);
+                } else {
+                    pedal_.noteOn(m);
+                    // Pravidlo B PRED voice noteOn: pokud N uz rezonuje,
+                    // zafade rezonanci.
+                    resonance_->onSelfNoteOn(m, sr);
+                    VoiceSpec spec = selectVoice(bank_, m, v, rr_);
+                    if (spec.asset)
+                        pool_->noteOn(m, spec, sr, cfg_.keyboard_spread);
+                    // PO voice noteOn: spusti rezonance harmonicky pribuznych
+                    // strun (eligibility uz vidi novy active main voice).
+                    resonance_->onPlayedNoteOn(m, v, bank_, *pool_, pedal_, sr);
+                }
                 break;
             }
-            case MidiEvent::NoteOff:
-                pool_->noteOff(e.data1, cfg_.release_ms, sr);
+            case MidiEvent::NoteOff: {
+                int m = (int)e.data1;
+                pedal_.noteOff(m);
+                pool_->noteOff(m, scaledReleaseMs(), sr);
                 break;
-            case MidiEvent::AllNotesOff:
+            }
+            case MidiEvent::Sustain: {
+                // CC64 jako spojita hodnota; PedalState prepocita damping_[128].
+                // Resonance se prizpusobi PER-BLOK ve resonance_->processBlock().
+                pedal_.setSustainCC(e.data1);
+                break;
+            }
+            case MidiEvent::AllNotesOff: {
+                pedal_.allNotesOff();
                 pool_->allNotesOff(cfg_.release_ms, sr);
                 break;
-            case MidiEvent::Sustain:
-                break;   // pedal je faze 5
+            }
         }
     }
 
     // 2. Render hlasu (caller buffery vynuloval).
     pool_->processBlock(out_l, out_r, n_samples, sr);
+    // 2b. Pricti sympatickou rezonanci do L/R (sleduje pedal per-blok).
+    if (resonance_) resonance_->processBlock(out_l, out_r, n_samples, pedal_);
 
     // 3. Master gain post-mix.
     float g = master_gain_.load(std::memory_order_relaxed);
@@ -87,6 +121,10 @@ int Engine::setBlockSize(int new_block_size) noexcept {
     if (new_block_size > 8192)  new_block_size = 8192;
     cfg_.block_size = new_block_size;
     recomputeRefillThreshold();
+    // Faze 5: decay_per_block konstanta zavisi na block_size — drz ji v sync.
+    if (resonance_)
+        resonance_->setExciteDecayTimeMs(cfg_.excite_decay_ms, cfg_.block_size,
+                                         (float)cfg_.sample_rate);
     return new_block_size;
 }
 
@@ -100,6 +138,16 @@ void Engine::recomputeRefillThreshold() noexcept {
     if (thr > cap - 64) thr = cap - 64;
     if (thr < 0) thr = 0;
     stream_->setRefillThresholdFrames(thr);
+}
+
+float Engine::scaledReleaseMs() const {
+    // Half-pedal continuous release scaling per spec 5.4:
+    //   CC 0   → release_ms × 1.0   (rychly fade)
+    //   CC 64  → release_ms × ~4.0  (pomaly s pedalem)
+    //   CC 127 → release_ms × ~20.0 (skoro hold)
+    const float t  = (float)pedal_.sustainCC() / 127.f;
+    const float kf = std::exp(t * std::log(20.f));
+    return cfg_.release_ms * kf;
 }
 
 } // namespace ithaca
