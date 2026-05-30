@@ -25,6 +25,7 @@ add_library(ithaca_core STATIC
     engine/util/log.cpp
     engine/io/wav_reader.cpp
     engine/io/wav_writer.cpp
+    engine/io/audio_device.cpp
     engine/sample/bank_index.cpp
     engine/sample/sample_loader.cpp
     engine/sample/sample_store.cpp
@@ -33,9 +34,19 @@ add_library(ithaca_core STATIC
     engine/voice/voice_pool.cpp
     engine/engine.cpp
     engine/render/batch_renderer.cpp
+    engine/miniaudio_impl.cpp
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)
+target_link_libraries(ithaca_core PUBLIC miniaudio_inc)
+if(APPLE)
+    target_link_libraries(ithaca_core PUBLIC
+        "-framework CoreAudio" "-framework AudioToolbox"
+        "-framework CoreFoundation")
+elseif(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(ithaca_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
+endif()
 
 # -- ithaca-cli (headless konzument) --
 add_executable(ithaca-cli app/cli/main.cpp)
