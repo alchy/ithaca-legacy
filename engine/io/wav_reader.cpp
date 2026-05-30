@@ -124,6 +124,72 @@ WavData readWav(const std::string& path) {
     return out;
 }
 
+WavData readWavRange(const std::string& path, int frame_off, int frame_count) {
+    WavData out;
+    if (frame_off < 0 || frame_count <= 0) {
+        // Defensivne: 0 frame_count -> 0-frames valid result.
+        if (frame_off >= 0 && frame_count == 0) { out.valid = true; }
+        return out;
+    }
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return out;
+
+    FmtInfo fmt; uint32_t data_size = 0; bool found_data = false;
+    if (!parseHeader(f, fmt, data_size, found_data) || !found_data) {
+        std::fclose(f);
+        return out;
+    }
+    const int bytes_per_sample = fmt.bits / 8;
+    if (bytes_per_sample <= 0 || fmt.channels == 0) { std::fclose(f); return out; }
+
+    // parseHeader nechal soubor pozicovany na zacatku data chunku. Zjisti realny
+    // zbytek v souboru (header data_size muze lhat — viz peekWavInfo).
+    long data_start = std::ftell(f);
+    std::fseek(f, 0, SEEK_END);
+    long file_end = std::ftell(f);
+    uint32_t avail_bytes = (file_end > data_start)
+                         ? (uint32_t)(file_end - data_start) : 0u;
+    if (avail_bytes < data_size) data_size = avail_bytes;
+
+    const int frame_bytes  = bytes_per_sample * fmt.channels;
+    const int total_frames = (int)(data_size / (uint32_t)frame_bytes);
+
+    // Offset za koncem souboru → 0 frames, ale valid (signal "konec streamu").
+    if (frame_off >= total_frames) {
+        std::fclose(f);
+        out.frames      = 0;
+        out.sample_rate = (int)fmt.sample_rate;
+        out.valid       = true;
+        return out;
+    }
+
+    int avail_frames = total_frames - frame_off;
+    int read_frames  = (frame_count < avail_frames) ? frame_count : avail_frames;
+
+    long byte_off = data_start + (long)frame_off * frame_bytes;
+    std::fseek(f, byte_off, SEEK_SET);
+
+    std::vector<uint8_t> raw((size_t)read_frames * (size_t)frame_bytes);
+    size_t got = std::fread(raw.data(), 1, raw.size(), f);
+    std::fclose(f);
+    int actual_frames = (int)(got / (size_t)frame_bytes);
+
+    out.samples.resize((size_t)actual_frames * 2);
+    for (int i = 0; i < actual_frames; ++i) {
+        const uint8_t* base = raw.data() + (size_t)i * fmt.channels * bytes_per_sample;
+        float L = sampleToFloat(base, fmt.bits, fmt.audio_format);
+        float R = (fmt.channels >= 2)
+                ? sampleToFloat(base + bytes_per_sample, fmt.bits, fmt.audio_format)
+                : L;
+        out.samples[(size_t)i * 2]     = L;
+        out.samples[(size_t)i * 2 + 1] = R;
+    }
+    out.frames      = actual_frames;
+    out.sample_rate = (int)fmt.sample_rate;
+    out.valid       = true;
+    return out;
+}
+
 WavInfo peekWavInfo(const std::string& path) {
     WavInfo out;
     std::FILE* f = std::fopen(path.c_str(), "rb");
