@@ -11,7 +11,8 @@
 namespace ithaca {
 
 Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
-                    int cache_budget_mb) {
+                    int cache_budget_mb,
+                    int midi_from, int midi_to) {
     Bank bank;
     bank.path = dir;
     bank.name = std::filesystem::path(dir).filename().string();
@@ -40,6 +41,7 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
     for (const auto& entry : scan.files) {
         const ParsedName& p = entry.parsed;
         if (p.midi < 0 || p.midi > 127) continue;
+        if (p.midi < midi_from || p.midi > midi_to) continue;   // mimo pozadovany rozsah
 
         WavData w = readWav(entry.full_path);
         if (!w.valid) {

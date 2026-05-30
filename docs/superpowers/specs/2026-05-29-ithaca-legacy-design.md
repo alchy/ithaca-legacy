@@ -62,19 +62,24 @@ Engine sam rozpozna, ktery format je v bance pouzit, a podle toho se chova.
 - `mNNN-velV-fSS.wav` — 8 velocity vrstev (napr. `m060-vel3-f48.wav`). Jen tato varianta;
   16-vrstvou variantu (`mNNN-vVVV-fSS.wav`) NEpodporujeme.
 
-**Extended format** (nove banky, multi-mic):
-- `mNN-MIC-HASH.wav`, napr. `m60-front-HASH.wav` + `m60-soundboard-HASH.wav`.
-- `mNN` = MIDI nota. `MIC` = pojmenovana mic perspektiva (`front` / `soundboard`).
-- `HASH` = parovaci klic spojujici mic perspektivy **tehoz uhozu** (front + soundboard
-  sdileji jeden HASH). Je to libovolny retezec, pravdepodobne zkracene MD5; delka zatim
-  nepodstatna. Je to **posledni token pred `.wav`**, takze ho regexp snadno vyzobne.
-- **Zadny velocity-degree token.** Velocity se DETEKUJE: loader zmeri peak RMS jen z
-  `front` samplu. Soundboard se RMS nemeri — dohleda se podle HASH.
-- **Soundboard je VOLITELNY (2026-05-29):** kdyz k `front` samplu chybi HASH-parovany
-  `soundboard` WAV, loader to jen ZALOGUJE a pokracuje s tim, co ma (jen front). Soundboard
-  nemusi v prvni fazi nahravani vubec existovat. Zadny front sampl se kvuli chybejicimu
-  soundboardu nezahazuje. (Symetricky: front je povinny — je z nej velocity; osamoceny
-  soundboard bez front se preskoci a zaloguje.)
+**Extended format** (nove banky, multi-mic) — ADRESAROVA STRUKTURA (REVIZE 2026-05-29):
+- Layout: `PianoBankFolder/mNNN/<hash>.wav` — pro KAZDOU MIDI notu vlastni PODADRESAR `mNNN/`,
+  v nem vsechny soubory te noty (vsechny velocity + pripadne mic pozice).
+- Soubory NEMAJI jmennou konvenci — jen **hash** (zkraceny, napr. `bcdaf9123fekcne.wav`).
+  Duvod: pri samplovani jedne noty vznikne souvisly WAV, splicer ho nakraje a pojmenuje
+  hashem; staci hotove vyrezy nasypat do adresare noty. V jednom plochem adresari by bylo
+  prilis mnoho souboru (velocity × noty × mic pozice), proto podadresar per nota.
+- **Mic pozice pres suffix:**
+  - `<hash>.wav` (BEZ suffixu) = **primarni** mic pozice ("main"). Je VZDY STEREO.
+  - `<hash>-micpos-A.wav` ... `-micpos-Z.wav` = dalsi mic pozice, razene ABECEDNE.
+  - Parovani uhozu = stejny `<hash>` (main + jeho micpos-A/B/... patri k jednomu uhozu).
+- **Mono / stereo per mic pozice:** main je vzdy stereo. micpos-A..Z mohou byt MONO nebo STEREO
+  (priznak je ve strukture samplu). Mono se EXPANDUJE na stereo az v RT pri prehravani → setri
+  pamet. (Duvod: rezonancni deska / room mic nema vyraznou stereo sirku, lze samplovat mono.)
+- **Velocity se DETEKUJE z RMS** primarni (main) pozice — viz 2.2. Bez velocity tokenu.
+- **micpos je VOLITELNY:** kdyz nejsou zadne micpos soubory, pouzije se jen main `<hash>.wav`.
+  Main je povinny (nese velocity). Chybejici micpos se jen zaloguje a pokracuje.
+- Mix mic pozic je v configu (viz 2.3): default main 100%, nebo napr. main 80% + micpos-A 20%.
 
 ### 2.2 Mereni RMS a dynamicke sloty
 
@@ -109,17 +114,22 @@ Dusledky:
 - Default mic mix je konfiguracni polozka (navrh: oba pary 50/50). Zadna banka zatim neni.
 - Legacy banky jsou single stereo par; multi-mic plati pro novy format.
 
-### 2.4 Pitch-shift pro chybejici noty (fallback ve dvou osach)
+### 2.4 ZADNE odvozovani chybejicich not (REVIZE 2026-05-29 + 2026-05-30)
 
-Kdyz pro pozadovany (nota, velocity) neni sampl, engine hleda nahradu ve DVOU osach:
-1. **Osa noty:** najdi nejblizsi nahranou notu a transponuj ji pitch-shiftem na cilovou vysku.
-2. **Osa velocity:** v te (puvodni i nahradni) note vezmi nejblizsi dostupny velocity slot
-   k pozadovane velocity.
+**Rozhodnuti:** chybejici sample se NIJAK neodvozuje od existujiciho (zadny pitch-shift sousedni
+noty, zadne casove protahovani, zadne dosamplovani RMS). Plati pro legacy I nove banky.
 
-Obe osy musi fungovat soucasne — typicky na zacatku testovani, kdy je jen par roztrousenych
-samplu: chybi cela nota → vezme se sousedni nota, a i v ni se vezme nejblizsi velocity slot.
-icr dnes resi jen velocity fallback (nearest layer), notu netransponuje vubec; my potrebujeme
-oboji. `patch_manager`: "najdi nejblizsi (nota, velocity) + transponuj na cilovou vysku".
+- Kdyz pro pozadovanou (notu, velocity) neni sampl, player jednoduse VI, ze chybi: priznak ve
+  strukture samplu / nulova delka → ticho. Zadna nahrada.
+- Velocity-slot VYBER (mapovani MIDI velocity 0-127 na nahrane dynamiky noty, viz 2.2) zustava —
+  to neni odvozovani, jen vyber z toho, co je nahrane.
+- Puvodne navrzeny pitch-shift "ve dvou osach" je ZRUSEN. Jiz napsany resampling/pitch-shift kod
+  (transpozice sousedni noty) presunut do `engine/voice/_reserved_resampling.h` — mimo build,
+  *reserved for future use*.
+- **SR normalizace samplu (44.1 / 48 / 96 kHz) ZUSTAVA** (potvrzeno 2026-05-30). To NENI
+  "odvozovani" — engine jen prehrava sampl ve spravne vysce, kdyz se jeho SR lisi od engine SR
+  (`pos_inc = pitch_ratio × (sample_sr / engine_sr)` ve `Voice::start`). pitch_ratio je vzdy 1.0
+  (zadna note-transpozice).
 
 ---
 

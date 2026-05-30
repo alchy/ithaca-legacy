@@ -71,6 +71,23 @@ TEST_CASE("loadLegacyBank postavi NoteMap z fixture banky") {
     CHECK_FALSE(bank.notes[61].recorded);
 }
 
+TEST_CASE("loadLegacyBank respektuje MIDI rozsah") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_range";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    writeConstWav(dir + "/m060-vel3-f48.wav", 0.5f);
+    writeConstWav(dir + "/m072-vel3-f48.wav", 0.5f);
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    // Nacti jen notu 60 (rozsah 60..60).
+    Bank bank = loadLegacyBank(dir, L, /*cache_budget_mb=*/0, /*midi_from=*/60, /*midi_to=*/60);
+    fs::remove_all(dir);
+    CHECK(bank.loaded_samples == 1);
+    CHECK(bank.notes[60].recorded);
+    CHECK_FALSE(bank.notes[72].recorded);
+}
+
 TEST_CASE("loadLegacyBank vrati prazdnou banku pro neexistujici adresar") {
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);
