@@ -7,6 +7,10 @@
 namespace ithaca {
 
 void Voice::prepareDamp(float engine_sr) {
+    // TODO (faze 6/7, multi-mic / multi-SR): damping crossfade pocita kroky podle
+    // engine_sr, ale sample muze mit jine sample_sr (pos_inc != 1.0). Pri velkem
+    // SR mismatchu (44.1 kHz sampl v 96 kHz enginu) dochazi pri retriggeru
+    // k drobnemu pitch posunu v damping ocasu. Latentni; opravit az s mic mixerem.
     // Vytvor kratky fade-out ze soucasne pozice → damp_buf_, aby novy ton
     // (retrigger) nelupnul. Funguje jen kdyz hlas hraje a ma data.
     // Faze 4: cteme z preload_head; max_frames = head_frames. Voice pri prekro-

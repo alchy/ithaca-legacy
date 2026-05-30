@@ -157,7 +157,7 @@ int main(int argc, char* argv[]) {
         LOG_INFO("inspect", "Format: %s", bankFormatName(bank.format));
         LOG_INFO("inspect", "Not se samply: %d", notes_with_samples);
         LOG_INFO("inspect", "Celkem samplu: %d, frames: %zu, RAM ~%zu MB",
-                 bank.loaded_samples, bank.total_frames,
+                 bank.loaded_samples, bank.resident_frames,
                  bank.total_bytes / (1024 * 1024));
 
         // Vypis detail pro prvni nalezenou notu se samply (vzorek).

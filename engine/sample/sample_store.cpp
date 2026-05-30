@@ -76,19 +76,29 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
 
         // Nacti preload_head [0 .. head_frames).
         WavData head = readWavRange(entry.full_path, 0, mic.head_frames);
-        if (!head.valid || head.frames < mic.head_frames) {
+        if (!head.valid) {
             logger.log("bank", log::Severity::Warning,
-                       "Nelze nacist preload hlavicky: %s", p.filename.c_str());
+                       "Nelze nacist preload (read failed): %s", p.filename.c_str());
             continue;
+        }
+        if (head.frames < mic.head_frames) {
+            // Soubor je oriznuty — sampl si nechame s tim, co jsme dostali, jen
+            // upravime head_frames. FullyLoaded se zaroven prepocita, kdyz uz
+            // mame mene nez puvodne planovany head (Streamed sampl by tak
+            // streamoval od kratsi pozice — nicotny okrajovy pripad).
+            logger.log("bank", log::Severity::Warning,
+                       "Oriznuty soubor — pouzivam %d/%d frames: %s",
+                       head.frames, mic.head_frames, p.filename.c_str());
+            mic.head_frames = head.frames;
+            if (mic.head_frames >= mic.file.frames) mic.mode = MicLayerMode::FullyLoaded;
         }
         mic.preload_head = std::move(head.samples);
 
         // preload_resonance ve fazi 4 zatim prazdny (rezonance je faze 5).
 
-        // peak_rms_db / attack_end_frame meri z preload_head — typicky u piana
-        // pokryva attack (peak RMS lezi v prvnich ~10-50 ms). U dlouheho samplu
-        // by sice byl idealne meren z resonance regionu (faze 5), ale pro
-        // velocity krivku staci preload.
+        // INVARIANT: u piano-class samplu je peak RMS vzdy v attack fazi, ktera
+        // se vzdy vejde do preload_head. Pri rozsireni na non-piano zvuky (looped
+        // pads atd.) bude treba merit az z preload_resonance regionu (faze 5+).
         float rms = measurePeakRmsDb(mic.preload_head.data(),
                                      mic.head_frames, info.sample_rate);
         int   ae  = findAttackEnd  (mic.preload_head.data(),
@@ -107,8 +117,8 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
         bank.notes[p.midi].recorded = true;
 
         const MicLayer& m = bank.notes[p.midi].slots.back().variants[0].mics[0];
-        // total_frames: pocitej REZIDENTNI v RAM (head + resonance).
-        bank.total_frames += (size_t)m.head_frames + (size_t)m.resonance_frames;
+        // resident_frames: pocitej REZIDENTNI v RAM (head + resonance).
+        bank.resident_frames += (size_t)m.head_frames + (size_t)m.resonance_frames;
         bank.total_bytes  += (m.preload_head.size() + m.preload_resonance.size())
                              * sizeof(float);
         bank.loaded_samples++;
@@ -126,7 +136,7 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
 
     logger.log("bank", log::Severity::Info,
                "Nacteno %d samplu, %zu frames, ~%zu MB RAM",
-               bank.loaded_samples, bank.total_frames,
+               bank.loaded_samples, bank.resident_frames,
                bank.total_bytes / (1024 * 1024));
 
     if (cache_budget_mb > 0) {

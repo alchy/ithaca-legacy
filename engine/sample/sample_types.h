@@ -57,15 +57,6 @@ struct MicLayer {
     std::vector<float> preload_resonance;
     int resonance_start_frame = 0;
     int resonance_frames      = 0;
-
-    // KOMPAT pro faze 2-3: do faze 5 ponechavame nazev `data` jako alias na
-    // preload_head; voice (Task 3) si bude radeji sahat primo na preload_head.
-    // Po dokonceni faze 5 muzeme `data` smazat.
-    const std::vector<float>& data() const { return preload_head; }
-    // Frames pristupne v RAM od zacatku samplu (= head_frames).
-    int  frames_in_ram_head() const { return head_frames; }
-    // Pro voice: kolik frames samplu existuje celkove (file.frames).
-    int  total_frames() const { return file.frames; }
 };
 
 // Jeden uhoz: 1..N mic perspektiv hranych synchronne. Legacy: 1 (stereo).
@@ -94,7 +85,7 @@ struct Bank {
     BankFormat  format = BankFormat::Unknown;
     NoteSlots   notes[128];
     // diagnostika
-    size_t total_frames = 0;        // soucet frames vsech nactenych mic layeru
+    size_t resident_frames = 0;     // frames rezidentni v RAM (head + resonance regiony)
     size_t total_bytes  = 0;        // odhad RAM (data.size()*sizeof(float))
     int    loaded_samples = 0;      // pocet uspesne nactenych SampleAssetu
 };

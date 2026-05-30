@@ -124,7 +124,7 @@ WavData readWav(const std::string& path) {
     return out;
 }
 
-WavData readWavRange(const std::string& path, int frame_off, int frame_count) {
+WavData readWavRange(const std::string& path, int64_t frame_off, int64_t frame_count) {
     WavData out;
     if (frame_off < 0 || frame_count <= 0) {
         // Defensivne: 0 frame_count -> 0-frames valid result.
@@ -151,8 +151,8 @@ WavData readWavRange(const std::string& path, int frame_off, int frame_count) {
                          ? (uint32_t)(file_end - data_start) : 0u;
     if (avail_bytes < data_size) data_size = avail_bytes;
 
-    const int frame_bytes  = bytes_per_sample * fmt.channels;
-    const int total_frames = (int)(data_size / (uint32_t)frame_bytes);
+    const int     frame_bytes  = bytes_per_sample * fmt.channels;
+    const int64_t total_frames = (int64_t)data_size / (int64_t)frame_bytes;
 
     // Offset za koncem souboru → 0 frames, ale valid (signal "konec streamu").
     if (frame_off >= total_frames) {
@@ -163,19 +163,24 @@ WavData readWavRange(const std::string& path, int frame_off, int frame_count) {
         return out;
     }
 
-    int avail_frames = total_frames - frame_off;
-    int read_frames  = (frame_count < avail_frames) ? frame_count : avail_frames;
+    int64_t avail_frames = total_frames - frame_off;
+    int64_t read_frames  = (frame_count < avail_frames) ? frame_count : avail_frames;
 
-    long byte_off = data_start + (long)frame_off * frame_bytes;
-    std::fseek(f, byte_off, SEEK_SET);
+    // 64-bit seek pro WAV >2 GB (streaming worker pro velke samply).
+    int64_t byte_off = (int64_t)data_start + frame_off * (int64_t)frame_bytes;
+#if defined(_WIN32)
+    _fseeki64(f, byte_off, SEEK_SET);
+#else
+    fseeko(f, (off_t)byte_off, SEEK_SET);
+#endif
 
     std::vector<uint8_t> raw((size_t)read_frames * (size_t)frame_bytes);
     size_t got = std::fread(raw.data(), 1, raw.size(), f);
     std::fclose(f);
-    int actual_frames = (int)(got / (size_t)frame_bytes);
+    int64_t actual_frames = (int64_t)(got / (size_t)frame_bytes);
 
     out.samples.resize((size_t)actual_frames * 2);
-    for (int i = 0; i < actual_frames; ++i) {
+    for (int64_t i = 0; i < actual_frames; ++i) {
         const uint8_t* base = raw.data() + (size_t)i * fmt.channels * bytes_per_sample;
         float L = sampleToFloat(base, fmt.bits, fmt.audio_format);
         float R = (fmt.channels >= 2)
@@ -184,7 +189,10 @@ WavData readWavRange(const std::string& path, int frame_off, int frame_count) {
         out.samples[(size_t)i * 2]     = L;
         out.samples[(size_t)i * 2 + 1] = R;
     }
-    out.frames      = actual_frames;
+    // FUTURE: WavData.frames -> int64 kdyz bude potreba. Per-call read_frames je
+    // bounded velikosti pozadavku (typicky maly: preload nebo streaming chunk).
+    if (actual_frames > (int64_t)INT32_MAX) actual_frames = INT32_MAX;
+    out.frames      = (int)actual_frames;
     out.sample_rate = (int)fmt.sample_rate;
     out.valid       = true;
     return out;

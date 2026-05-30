@@ -9,11 +9,20 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace ithaca;
 
 namespace {
+// RAII guard pro temp WAV: smaze soubor v destruktoru, takze REQUIRE-fail
+// uprostred testu nezustavi za sebou bordel v /tmp.
+struct TempFile {
+    std::string path;
+    explicit TempFile(std::string p) : path(std::move(p)) {}
+    ~TempFile() { if (!path.empty()) std::remove(path.c_str()); }
+};
+
 // Vytvori temp WAV s ramp signalem: L[i]=i/N, R[i]=-i/N (4096 stereo frames).
 std::string makeRampWav(const char* tag, int frames = 4096, int sr = 48000) {
     std::vector<float> samples((size_t)frames * 2);
@@ -28,9 +37,8 @@ std::string makeRampWav(const char* tag, int frames = 4096, int sr = 48000) {
 } // namespace
 
 TEST_CASE("readWavRange cte vyrez (offset, count) presne") {
-    std::string p = makeRampWav("mid");
-    WavData w = readWavRange(p, /*frame_off=*/1000, /*frame_count=*/256);
-    std::remove(p.c_str());
+    TempFile p{ makeRampWav("mid") };
+    WavData w = readWavRange(p.path, /*frame_off=*/1000, /*frame_count=*/256);
     REQUIRE(w.valid);
     CHECK(w.frames == 256);
     CHECK(w.sample_rate == 48000);
@@ -44,19 +52,17 @@ TEST_CASE("readWavRange cte vyrez (offset, count) presne") {
 }
 
 TEST_CASE("readWavRange orizne pozadavek presahujici konec souboru") {
-    std::string p = makeRampWav("end");
+    TempFile p{ makeRampWav("end") };
     // Soubor ma 4096 frames; pozadame o 1000 frames od offsetu 4000 → vrati 96.
-    WavData w = readWavRange(p, 4000, 1000);
-    std::remove(p.c_str());
+    WavData w = readWavRange(p.path, 4000, 1000);
     REQUIRE(w.valid);
     CHECK(w.frames == 96);
     CHECK(w.samples.size() == 96u * 2u);
 }
 
 TEST_CASE("readWavRange offset >= konec souboru → 0 frames, stale valid") {
-    std::string p = makeRampWav("past");
-    WavData w = readWavRange(p, 4096, 100);
-    std::remove(p.c_str());
+    TempFile p{ makeRampWav("past") };
+    WavData w = readWavRange(p.path, 4096, 100);
     REQUIRE(w.valid);
     CHECK(w.frames == 0);
     CHECK(w.samples.empty());
