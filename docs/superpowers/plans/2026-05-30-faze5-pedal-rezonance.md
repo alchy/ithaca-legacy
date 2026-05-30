@@ -698,12 +698,20 @@ class ResonanceVoice {
 public:
     void setStreamEngine(StreamEngine* se) { stream_ = se; }
     // Spusti rezonancni hlas pro strunu N samplem z mic. initial_gain = celkovy
-    // start gain. engine_sr potreba kvuli pos_inc + ramp prepoctum.
+    // start gain (excitation × harm × strength × damping_[N] od callera).
+    // engine_sr potreba kvuli pos_inc + ramp prepoctum.
     void start(int midi, const MicLayer* mic, float initial_gain,
                float pan_l, float pan_r, float engine_sr);
     // Pricte buzeni od dalsi hrane noty M (multi-source) — meni target_gain_.
+    // Callee jen nastavi target_gain_ = MAX(current, current + excitation_gain).
     void addExcitation(float excitation_gain);
-    // Spust fast fade do ticha (note-on_self, pedal_up_for_unheld, ...).
+    // Nastavi target_gain_ ABSOLUTNE na novou hodnotu (volat z ResonanceEngine
+    // kazdy audio blok podle pedal.dampingFor(N) × suma probihajicich excitaci).
+    // Pri zmene CC64 (half-pedal) tim rezonance plynule fade na novy gain.
+    // Pri damping → 0 fade do ticha (po dosazeni 0 → active_ = false).
+    void setTargetGain(float target);
+    // Spust fast fade do ticha (note-on_self): nastavi target_gain_ = 0
+    // s ostrejsi rampou (5 ms namisto bezneho ~30 ms).
     void fadeOut(float engine_sr);
     bool process(float* out_l, float* out_r, int n_samples) noexcept;
     bool active() const { return active_; }
@@ -711,7 +719,7 @@ public:
     float currentLevel() const noexcept { return gain_; }
 private:
     // Stejna mechanika cteni jako Voice, viz voice.cpp.
-    // ... (members podobne Voice, viz nize)
+    // gain_ smooth fade na target_gain_ (~30 ms ramp standardne, 5 ms pri fadeOut).
 };
 ```
 
@@ -765,7 +773,7 @@ public:
     // Volane Enginem pri kazdem note-on hraneho hlasu.
     // bank: pro nalezeni samplu pro rezonujici struny.
     // voice_pool: pro zjisteni `notes_with_active_main_voice` (eligibility 1).
-    // pedal: pro `undamped_strings` (eligibility 1).
+    // pedal: pro `damping_[N]` koeficient (eligibility + amplituda).
     void onPlayedNoteOn(int played_midi, int velocity,
                         const Bank& bank, const VoicePool& pool,
                         const PedalState& pedal, float engine_sr);
@@ -775,12 +783,13 @@ public:
     // `active_main_voices` byla az po fade.)
     void onSelfNoteOn(int played_midi, float engine_sr);
 
-    // Volane pri prechodu pedalu down -> up — fade vsech rezonanci, ktere uz
-    // nejsou undamped.
-    void onPedalChanged(const PedalState& pedal, float engine_sr);
-
     // Render vsech rezonancnich hlasu (volane z Engine.processBlock).
-    bool processBlock(float* out_l, float* out_r, int n_samples) noexcept;
+    // Pred renderem pretahne KAZDY aktivni hlas svuj target_gain podle aktualniho
+    // pedal.dampingFor(N) × posledni excitation. Tim se pohyb pedalu (vc. half-pedal)
+    // promita plynule do hlasitosti rezonance — neexistuje "udalost pedal up",
+    // jen plynula zmena CC64 + per-blok update targetu.
+    bool processBlock(float* out_l, float* out_r, int n_samples,
+                      const PedalState& pedal) noexcept;
 
     int activeCount() const noexcept;
 
@@ -796,26 +805,35 @@ private:
 Implementacni logika:
 
 ```cpp
+// Per nota N drzime "posledni excitation gain" (nezavisly na pedalu) tak, aby
+// processBlock mohl per-blok pretahnout target_gain = last_excite × damping_[N].
+struct ExciteState { float last_excite = 0.f; };
+ExciteState excite_state_[128];
+
 void onPlayedNoteOn(played_midi M, vel V, bank, pool, pedal, sr):
     for N in 0..127:
         if N == M: continue                      // play-on-self
-        if !pedal.isUndamped(N): continue        // eligibility (1) cast 1
+        if !pedal.isUndamped(N): continue        // eligibility (1) cast 1 (damping > epsilon)
         if pool.hasActiveMainVoice(N): continue  // eligibility (1) cast 2
         float harm = harmonicProximity(N, M)
         if harm < 0.05f: continue                // zanedbatelne
+        // Holy excitation (BEZ damping multiplikatoru — damping aplikuje processBlock).
         float excite = (V / 127.f) * harm * strength_.load()
         if excite < 0.001f: continue
         if voices_[N] && voices_[N]->active():
+            // Multi-source: pricti k last_excite (preferovany 1-pole IIR misto cele sumy).
+            excite_state_[N].last_excite = max(excite_state_[N].last_excite, excite)
             voices_[N]->addExcitation(excite)    // uniqueness (2)
         else:
-            // Najdi sampl pro N (legacy: jediny slot; extended: ten s nejvyssim RMS — to neva,
-            // rezonance je tichá, presnost dynamiky neni klicova). Pouzij mic[0] (main).
             const SampleAsset* a = bank.notes[N].slots[0].variants[0]    // pripadne if !empty
             const MicLayer* m = &a->mics[0]
             float pl, pr;  panForNote(N, pl, pr)
             if voices_[N] == nullptr: voices_[N] = make_unique<ResonanceVoice>()
             voices_[N]->setStreamEngine(stream_)
-            voices_[N]->start(N, m, excite, pl, pr, sr)
+            // Initial gain: excite × damping (target processBlock pak udrzuje).
+            float init_gain = excite * pedal.dampingFor(N)
+            voices_[N]->start(N, m, init_gain, pl, pr, sr)
+            excite_state_[N].last_excite = excite
             // Pocet aktivnich rezonancnich hlasu nesmi prekrocit max_voices_.
             // Pri prekroceni krad nejtissi rezonancni hlas (NIKOLI hrany hlas — viz spec).
             enforceVoiceBudget()
@@ -825,18 +843,24 @@ void onPlayedNoteOn(played_midi M, vel V, bank, pool, pedal, sr):
 void onSelfNoteOn(played_midi N, sr):       // pravidlo B
     if voices_[N] && voices_[N]->active():
         voices_[N]->fadeOut(sr)              // ResonanceVoice si pak rampuje na 0 a deaktivuje
-        // POZN: slot ne-nullujeme okamzite — voice si dofade ve sve process(). Eligibility filter
-        // se diva na voices_[N]->active() v processBlock + onPlayedNoteOn -> kontrolovat
-        // active() && !fading_out_, ne jen active(). Detail: ResonanceVoice ma flag fadingOut().
+        excite_state_[N].last_excite = 0.f   // pravidlo (1) zablokuje dalsi excitaci
 ```
 
 ```cpp
-void onPedalChanged(pedal, sr):
-    int diff[128]
-    int n = pedal.notesNoLongerUndamped(diff, 128)
-    for i in 0..n-1:
-        N = diff[i]
-        if voices_[N] && voices_[N]->active(): voices_[N]->fadeOut(sr)
+// Vola se na zacatku Engine::processBlock kazdy audio blok. Promita zmeny pedalu
+// (vc. half-pedal) do rezonancnich hlasu PLYNULE — neexistuje "udalost pedal up",
+// jen per-blok update target_gainu kazdeho aktivniho hlasu.
+bool processBlock(out_l, out_r, n_samples, pedal):
+    for N in 0..127 where voices_[N] && voices_[N]->active():
+        // Pomale exponencialni odeznivani last_excite (rezonance prirozene tlumi i bez pedalu).
+        excite_state_[N].last_excite *= kExciteDecayPerBlock  // ~e^(-block_ms/decay_tau)
+        float target = excite_state_[N].last_excite * pedal.dampingFor(N)
+        voices_[N]->setTargetGain(target)
+        // Voice si pak v process() smooth-fade z gain_ na target_; pri target<epsilon → fade ke konci.
+    bool any = false
+    for N in 0..127 where voices_[N]:
+        if voices_[N]->process(out_l, out_r, n_samples): any = true
+    return any
 ```
 
 ```cpp
@@ -844,6 +868,10 @@ void enforceVoiceBudget():
     // Spocti active rezonance. Kdyz > max, najdi nejtissi a fadeOut.
     // Tim nikdy nekrademe HRANY hlas (5.5 invariant).
 ```
+
+**Konstanta:** `kExciteDecayPerBlock` napr. odpovida cas. konstante ~5 s (`exp(-block_ms/5000)`).
+To zajisti, ze i pri trvale stisknutem pedalu rezonance nezni vecne (skutecna struna se taky tlumi
+sama vlivem vnitrniho treni). Konkretni cislo k doladeni pri live overeni (Task 7).
 
 VoicePool potrebuje novou metodu `bool hasActiveMainVoice(int midi) const` — iteruje voices_
 hleda jakykoli active voice s tim midi (vc. releasing). To je trivialni rozsireni (Task 5
@@ -970,7 +998,9 @@ EOF
 - Modify: `app/cli/main.cpp` (CLI parametr `--resonance-strength <0..1>`)
 
 Klicove: zapojit PedalState + ResonanceEngine + drainovat Sustain evnety + volat metody ve
-SPRAVNEM PORADI (viz 5.5.1 hranicni MIDI poradi):
+SPRAVNEM PORADI (viz 5.5.1 hranicni MIDI poradi). POZN: zmena pedalu uz nepotrebuje speciální
+event handler — `resonance_.processBlock(...)` si per-blok pretahne `pedal.dampingFor(N)` a
+plynule fade-uje vsechny rezonancni hlasy. Sustain CC se promita prirozene i pri half-pedal.
 
 ```
 processBlock(L, R, n):
@@ -987,17 +1017,14 @@ processBlock(L, R, n):
                 pool_.noteOff(M, scaled_release_ms(pedal_), sr)
                 // Rezonance se ne-startuje, jen flushne eligibility (pres next note-on).
             Sustain(cc):
-                bool was_down = pedal_.isPedalDown()
-                pedal_.setSustainCC(cc)
-                if was_down && !pedal_.isPedalDown():
-                    resonance_.onPedalChanged(pedal_, sr)
+                pedal_.setSustainCC(cc)            // damping_[N] se prepocita; resonance.processBlock pak fade
             AllNotesOff:
                 pedal_.allNotesOff()
                 pool_.allNotesOff(release_ms, sr)
-                // Vsechny rezonance fade — onPedalChanged to udela kdyz prepoctene undamped je prazdne.
-                resonance_.onPedalChanged(pedal_, sr)
+                // Rezonance taky odejde — vsechny ne-drzene damping → cc/127; pokud pedal nahoru,
+                // damping → 0 → resonance.processBlock plynule fade.
     pool_.processBlock(L, R, n, sr)
-    resonance_.processBlock(L, R, n)              // pricte rezonance do L, R
+    resonance_.processBlock(L, R, n, pedal_)      // pricte rezonance do L, R; pedal updatuje gainy
     apply master gain
 ```
 
