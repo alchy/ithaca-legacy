@@ -17,7 +17,19 @@ Engine::~Engine() {
 bool Engine::init(const EngineConfig& cfg) {
     cfg_ = cfg;
     pool_   = std::make_unique<VoicePool>(cfg.max_voices);
-    stream_ = std::make_unique<StreamEngine>(cfg.num_rings, cfg.ring_capacity_frames);
+    // Bezpecnostni klamr: ring pool MUSI kryt plnou polyfonii (hlavni + rezonance),
+    // jinak hraje pri pedalu se rezonanci docasi k `acquireRing → nullptr` a hlas
+    // utichne po preload_head (fullyloaded_past_head ring=no). Vetsi nez cfg jen
+    // zvedneme; mensi nikdy.
+    const int rings_min = cfg.max_voices + cfg.max_resonance_voices;
+    const int rings_actual = (cfg.num_rings >= rings_min) ? cfg.num_rings : rings_min;
+    if (cfg.num_rings < rings_min) {
+        log::Logger::default_().log("stream", log::Severity::Info,
+            "num_rings %d < max_voices+max_resonance=%d, zvysuji na %d",
+            cfg.num_rings, rings_min, rings_actual);
+    }
+    cfg_.num_rings = rings_actual;
+    stream_ = std::make_unique<StreamEngine>(rings_actual, cfg.ring_capacity_frames);
     pool_->setStreamEngine(stream_.get());
     recomputeRefillThreshold();
     stream_->start();

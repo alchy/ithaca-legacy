@@ -34,7 +34,14 @@ struct EngineConfig {
     // -- Faze 4 streaming --
     int   stream_threads        = 1;      // pocet worker threads (zatim 1)
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
-    int   num_rings             = 32;     // velikost ring poolu
+    // Ring pool je SDILENY mezi hlavnimi (max_voices) a rezonancnimi
+    // (max_resonance_voices) hlasy. Default pokryva plnou polyfonii, aby
+    // pri pedalu + rezonanci nedoslo k `acquireRing → nullptr` (hlas by pak
+    // hral jen preload_head ~150 ms a utichl). Engine::init si pohlida, ze
+    // num_rings >= max_voices + max_resonance_voices.
+    // Pamet: num_rings × ring_capacity_frames × 2 (stereo) × 4 (float) bytes.
+    // Default 288 × 8192 × 8 = ~18 MB.
+    int   num_rings             = 288;
     // -- Faze 5 sympaticka rezonance --
     float resonance_strength    = 0.5f;   // 0..1, expose pres CLI
     int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
