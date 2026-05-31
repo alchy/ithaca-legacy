@@ -229,6 +229,32 @@ float Engine::currentGainFor(int midi) const noexcept {
     return g;
 }
 
+// ----- Runtime settery (GUI) ---------------------------------------------
+// Voláno z GUI threadu; audio thread cte cfg_.release_ms ve scaledReleaseMs().
+// cfg_.release_ms je obycejny float (NE atomic). Zápis z GUI a soubezne cteni
+// z audio threadu zde NENI race-critical: float zápis je atomic na x86/arm
+// (4-byte aligned mov), a pripadny "rozjety" cyklus pred/po zmene daje hrac
+// stejne neslysi — release scaling je hodne hladky. Pridani atomic by bylo
+// over-engineering pro hodnotu, ktera se meni v GUI tempo (jednotky Hz).
+
+void Engine::setReleaseMs(float ms) noexcept {
+    if (ms < 1.f) ms = 1.f;
+    if (ms > 60000.f) ms = 60000.f;
+    cfg_.release_ms = ms;
+}
+
+void Engine::setResonanceStrength(float s) noexcept {
+    // ResonanceEngine::setStrength si sama clampuje 0..1 a uklada atomic.
+    if (resonance_) resonance_->setStrength(s);
+}
+
+void Engine::setExciteDecayMs(float ms) noexcept {
+    // ResonanceEngine::setExciteDecayTimeMs ignoruje tau_ms<=0 (no-op);
+    // sub-ms hodnoty projedou a daji decay_per_block_~0.
+    if (resonance_) resonance_->setExciteDecayTimeMs(ms, cfg_.block_size,
+                                                     (float)cfg_.sample_rate);
+}
+
 float Engine::scaledReleaseMs() const {
     // Half-pedal continuous release scaling per spec 5.4:
     //   CC 0   → release_ms × 1.0   (rychly fade)

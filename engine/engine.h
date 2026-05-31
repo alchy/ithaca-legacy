@@ -101,6 +101,11 @@ public:
     // midi mimo rozsah <0,127> → 0.f. Nezohlednuje releasing samostatne.
     float   currentGainFor(int midi) const noexcept;
 
+    // -- Runtime parametry (GUI; atomic / single-thread-safe) --
+    void setReleaseMs(float ms) noexcept;
+    void setResonanceStrength(float s) noexcept;   // wrap resonance_->setStrength
+    void setExciteDecayMs(float ms) noexcept;      // wrap resonance_->setExciteDecayTimeMs
+
 private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;
