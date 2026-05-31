@@ -23,7 +23,7 @@ namespace ithaca {
 struct EngineConfig {
     int   sample_rate    = 48000;
     int   block_size     = 256;
-    int   max_voices     = 128;
+    int   max_voices     = 256;     // hlavni voice pool (max kMaxPoolSize)
     float master_gain    = 1.0f;     // linearni
     float release_ms     = 200.f;
     float keyboard_spread = 0.6f;

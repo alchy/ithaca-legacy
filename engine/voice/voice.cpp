@@ -35,6 +35,19 @@ void Voice::prepareDamp(float engine_sr) {
     damp_len_ = avail;
     damp_pos_ = 0;
     damping_  = true;
+
+    // Damping buffer hraje SAMOSTATNE (krat fade-out kopie z hlavy samplu);
+    // hlas sam uz nepotrebujeme drzet jako active — slot je hned volny pro
+    // novy retrigger / kradez. Tim odpadne falesny "holding" stav v poolu,
+    // ktery zbytecne pretahuje pool pri rychlych retriggerech a pri pedalu.
+    // Pripadny stream ring uvolnime (vrati se do poolu).
+    if (ring_ && stream_) {
+        stream_->releaseRing(ring_);
+        ring_ = nullptr;
+    }
+    stream_pending_ = false;
+    active_         = false;   // pool ho ted muze rovnou ukrast / pouzit znovu
+    releasing_      = false;
 }
 
 void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,

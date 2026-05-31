@@ -26,10 +26,23 @@ void VoicePool::setStreamEngine(StreamEngine* se) {
 }
 
 int VoicePool::findSlot() {
-    // 1. Volny slot.
+    // 1. Volny slot — vzdy preferovany.
     for (int i = 0; i < (int)voices_.size(); ++i)
         if (!voices_[i].active()) return i;
-    // 2. Kradez: nejtissi hlas z celeho poolu (spec rozhodnuti).
+    // 2. Pool je plny. Preferuj kradez RELEASING hlasu (= po note-off, mizi
+    //    sami od sebe). Mezi releasing vyber nejtissi. Tim ne-releasing hlas
+    //    (HELD / sustained pedalem) zustane jak ma — uzivatel ho vetsinou JESTE
+    //    chce slyset.
+    int best_rel = -1;
+    float best_rel_level = 1e30f;
+    for (int i = 0; i < (int)voices_.size(); ++i) {
+        if (!voices_[i].releasing()) continue;
+        float lvl = voices_[i].currentLevel();
+        if (lvl < best_rel_level) { best_rel_level = lvl; best_rel = i; }
+    }
+    if (best_rel >= 0) return best_rel;
+    // 3. Vsechny hlasy jsou ne-releasing (HELD/sustained) — krad nejtissi
+    //    z celeho poolu (puvodni spec rozhodnuti pro krajni pripady).
     int best = 0;
     float best_level = voices_[0].currentLevel();
     for (int i = 1; i < (int)voices_.size(); ++i) {
