@@ -9,6 +9,11 @@ namespace ithaca::gui {
 
 struct GuiState {
     int         schema_version    = 1;
+    // Adresar, ve kterem se hleda banky (dropdown ho scanu). Pri prazdnem
+    // bank_path je tohle jediny zdroj kandidatu — bez ne by uzivatel nemel
+    // jak vybrat banku z GUI. Settable pres --bank-dir CLI flag nebo
+    // dropdown (Browse... v budoucnu).
+    std::string bank_search_dir;
     std::string bank_path;
     std::string midi_port_name;
     float       master_gain_db      = 0.f;

@@ -33,11 +33,17 @@ void renderTopBar(AppContext& ctx) {
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
 
-    // Bank dropdown - search nad aktualni cestou (parent dir).
+    // Bank dropdown - search root je bank_search_dir (z --bank-dir CLI flag
+    // nebo persistovany v state.json). Fallback na parent dir aktualni banky.
+    // Pokud ani jedno neexistuje, dropdown bude prazdny (uzivatel musi spustit
+    // ithaca-gui s --bank-dir alespon jednou).
     static std::vector<std::string> bank_candidates;
     static std::string              last_root;
-    std::string search_root = ctx.state.bank_path.empty()
-        ? "" : std::filesystem::path(ctx.state.bank_path).parent_path().string();
+    std::string search_root = !ctx.state.bank_search_dir.empty()
+        ? ctx.state.bank_search_dir
+        : (ctx.state.bank_path.empty()
+            ? std::string("")
+            : std::filesystem::path(ctx.state.bank_path).parent_path().string());
     if (search_root != last_root) {
         bank_candidates = scanBanks(search_root);
         last_root = search_root;

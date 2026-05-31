@@ -100,6 +100,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         if (sv.empty()) return std::nullopt;
         s.schema_version = std::stoi(sv);
         if (s.schema_version != 1) return std::nullopt;
+        s.bank_search_dir       = findValue(json, "bank_search_dir");
         s.bank_path             = findValue(json, "bank_path");
         s.midi_port_name        = findValue(json, "midi_port_name");
         s.master_gain_db        = std::stof(findValue(json, "master_gain_db"));
@@ -128,6 +129,7 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         if (!f) return false;
         f << "{\n";
         f << "  \"schema_version\": "    << s.schema_version             << ",\n";
+        f << "  \"bank_search_dir\": \"" << jsonEscape(s.bank_search_dir) << "\",\n";
         f << "  \"bank_path\": \""        << jsonEscape(s.bank_path)      << "\",\n";
         f << "  \"midi_port_name\": \""   << jsonEscape(s.midi_port_name) << "\",\n";
         f << "  \"master_gain_db\": "     << s.master_gain_db             << ",\n";

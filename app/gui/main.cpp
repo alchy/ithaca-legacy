@@ -16,6 +16,8 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -26,14 +28,38 @@ static void glfwErrorCb(int err, const char* desc) {
     std::fprintf(stderr, "GLFW error %d: %s\n", err, desc);
 }
 
-int main() {
+static void printUsage(const char* argv0) {
+    std::fprintf(stderr,
+        "Pouziti: %s [--bank-dir <path>] [--help]\n"
+        "  --bank-dir <path>  adresar s bankami (dropdown bude scanovat odtud);\n"
+        "                     persistovano v state.json, staci zadat jednou.\n"
+        "  --help, -h         tato napoveda\n", argv0);
+}
+
+int main(int argc, char* argv[]) {
     using namespace ithaca::gui;
+
+    // 0. CLI parse: jen --bank-dir a --help.
+    std::string cli_bank_dir;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--help" || a == "-h") { printUsage(argv[0]); return 0; }
+        if (a == "--bank-dir" && i + 1 < argc) {
+            cli_bank_dir = argv[++i];
+        } else {
+            std::fprintf(stderr, "Neznama volba: %s\n", a.c_str());
+            printUsage(argv[0]);
+            return 1;
+        }
+    }
 
     // 1. Load state (nebo defaults pri prvnim spusteni / corrupt JSON).
     GuiState st;
     if (auto loaded = loadState(defaultStatePath()); loaded.has_value()) {
         st = *loaded;
     }
+    // CLI override: --bank-dir nahrad persistovany bank_search_dir.
+    if (!cli_bank_dir.empty()) st.bank_search_dir = cli_bank_dir;
 
     // 2. GLFW window. Pozice nastavime az po vytvoreni (GLFW nema
     //    GLFW_POSITION_X hint v 3.3; v 3.4+ ano, ale my vendorujeme starsi).
