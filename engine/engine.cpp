@@ -29,7 +29,8 @@ bool Engine::init(const EngineConfig& cfg) {
             cfg.num_rings, rings_min, rings_actual);
     }
     cfg_.num_rings = rings_actual;
-    stream_ = std::make_unique<StreamEngine>(rings_actual, cfg.ring_capacity_frames);
+    stream_ = std::make_unique<StreamEngine>(rings_actual, cfg.ring_capacity_frames,
+                                             cfg.stream_threads);
     pool_->setStreamEngine(stream_.get());
     recomputeRefillThreshold();
     stream_->start();

@@ -65,8 +65,9 @@ void RingHandle::resetForReuse() noexcept {
 
 // ----- StreamEngine --------------------------------------------------------
 
-StreamEngine::StreamEngine(int n_rings, int ring_capacity_frames)
-    : ring_capacity_frames_(ring_capacity_frames > 0 ? ring_capacity_frames : 8192) {
+StreamEngine::StreamEngine(int n_rings, int ring_capacity_frames, int n_workers)
+    : ring_capacity_frames_(ring_capacity_frames > 0 ? ring_capacity_frames : 8192)
+    , n_workers_(n_workers > 0 ? n_workers : 4) {
     int n = (n_rings > 0) ? n_rings : 32;
     rings_.reserve((size_t)n);
     for (int i = 0; i < n; ++i) {
@@ -88,13 +89,20 @@ StreamEngine::~StreamEngine() {
 void StreamEngine::start() {
     bool expected = false;
     if (!run_.compare_exchange_strong(expected, true)) return;  // uz bezi
-    worker_ = std::thread([this] { workerLoop(); });
+    workers_.clear();
+    workers_.reserve((size_t)n_workers_);
+    for (int i = 0; i < n_workers_; ++i) {
+        workers_.emplace_back([this] { workerLoop(); });
+    }
 }
 
 void StreamEngine::stop() {
     bool expected = true;
     if (!run_.compare_exchange_strong(expected, false)) return; // uz stoji
-    if (worker_.joinable()) worker_.join();
+    for (auto& w : workers_) {
+        if (w.joinable()) w.join();
+    }
+    workers_.clear();
 }
 
 RingHandle* StreamEngine::acquireRing() {

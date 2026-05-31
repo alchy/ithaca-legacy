@@ -32,7 +32,10 @@ struct EngineConfig {
     int   preload_ms     = 150;      // preload velikost hlavy samplu v ms; ovlivnuje RAM i streaming bezpecnost
     int   resonance_window_ms = 500;  // delka preload_resonance regionu (Streamed mic)
     // -- Faze 4 streaming --
-    int   stream_threads        = 1;      // pocet worker threads (zatim 1)
+    // Pocet worker threadu paralelne pres stream queue. Vice workeru = vetsi
+    // propustnost disku I/O = mensi sance underrunu pri akordu + rezonanci
+    // v jednom audio bloku. Default 4. Na vice-jadernych systemech zvazit 6-8.
+    int   stream_threads        = 4;
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
     // Ring pool je SDILENY mezi hlavnimi (max_voices) a rezonancnimi
     // (max_resonance_voices) hlasy. Default pokryva plnou polyfonii, aby

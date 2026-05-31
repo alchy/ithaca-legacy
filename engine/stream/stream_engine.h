@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -80,12 +81,19 @@ struct StreamRequest {
     bool        eof_when_done = false;   // worker po dokonceni nastavi ring->eof_
 };
 
-// SPSC lock-free fronta StreamRequestu. Vzor: engine/midi/midi_queue.h.
+// SP-MC fronta StreamRequestu. Producent (audio thread) je single lock-free;
+// konzumenti (worker threads) serializuji pop pres mutex (rychle, nesahaji
+// na audio thread). Vzor pro single-producer push: engine/midi/midi_queue.h.
+//
+// POZN.: predtim byla SPSC s jednim workerem. S vice workery byla SPSC pop
+// race-conditional. Misto MPMC lock-free struktury volime jednoduchy mutex
+// na pop side; audio thread (push) zustava lock-free a non-blocking.
 class StreamRequestQueue {
 public:
     static constexpr int kCap = 256;
 
     // Producent (audio thread): push kopirovanim. Vrati false kdyz plne (drop).
+    // Lock-free, RT-safe.
     bool push(const StreamRequest& r) noexcept {
         const size_t w = w_.load(std::memory_order_relaxed);
         const size_t rd = r_.load(std::memory_order_acquire);
@@ -95,8 +103,10 @@ public:
         return true;
     }
 
-    // Konzument (worker thread): vyzvedne dalsi request.
+    // Konzument (worker thread): vyzvedne dalsi request. Mutex serializuje
+    // multiple konzumenty mezi sebou (NE proti push, ten zustava lock-free).
     bool pop(StreamRequest& out) noexcept {
+        std::lock_guard<std::mutex> lk(pop_mtx_);
         const size_t rd = r_.load(std::memory_order_relaxed);
         const size_t w  = w_.load(std::memory_order_acquire);
         if (rd >= w) return false;
@@ -109,19 +119,24 @@ private:
     StreamRequest       buf_[kCap];
     std::atomic<size_t> w_{0};
     std::atomic<size_t> r_{0};
+    std::mutex          pop_mtx_;   // SPMC: serialize multiple worker pops
 };
 
 class StreamEngine {
 public:
-    explicit StreamEngine(int n_rings = 32, int ring_capacity_frames = 8192);
+    // n_workers: pocet worker threadu paralelne pres frontu. Vice workeru =
+    // vetsi propustnost disku I/O = mensi sance underrunu pri akordu + rezonanci
+    // v jednom audio bloku. Default 4 (rozumny kompromis CPU vs prustok).
+    explicit StreamEngine(int n_rings = 32, int ring_capacity_frames = 8192,
+                          int n_workers = 4);
     ~StreamEngine();
 
     StreamEngine(const StreamEngine&) = delete;
     StreamEngine& operator=(const StreamEngine&) = delete;
 
-    // Spusti worker thread. Idempotent.
+    // Spusti vsechny worker threads. Idempotent.
     void start();
-    // Zastavi worker (join). Idempotent.
+    // Zastavi vsechny workers (join). Idempotent.
     void stop();
 
     // Allocator: najdi volny slot. Vrati nullptr kdyz vsechny obsazeny
@@ -163,12 +178,13 @@ private:
     // POZN.: RingHandle ma atomic membery → ani move/copy nedavaji smysl.
     std::vector<std::unique_ptr<RingHandle>> rings_;
     int                 ring_capacity_frames_ = 0;
+    int                 n_workers_ = 4;
 
     StreamRequestQueue  req_q_;
 
     std::atomic<bool>   run_{false};
     std::atomic<int>    refill_threshold_{4096};
-    std::thread         worker_;
+    std::vector<std::thread> workers_;
 };
 
 } // namespace ithaca
