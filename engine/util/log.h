@@ -19,13 +19,26 @@
 #include <cstdarg>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace ithaca::log {
 
 enum class Severity : uint8_t {
     Debug = 0, Info = 1, Warning = 2, Error = 3, Fatal = 4,
+};
+
+// Strukturovany log event — predavany Subscriberum (napr. GUI log strip).
+// timestamp_us je v jednotce, jakou pouziva Logger interne (currently
+// wall-clock micros od epochy, viz Logger::nowMicros()). Pro UI staci
+// relativni razeni; absolutni interpretace neni zaruceny kontrakt.
+struct LogEntry {
+    long long   timestamp_us;
+    std::string topic;
+    Severity    sev;
+    std::string message;
 };
 
 const char* severity_to_string(Severity s);
@@ -81,6 +94,17 @@ public:
     // Pocet RT zprav zahozenych kvuli plnemu ring bufferu (flush nestihal).
     uint64_t rtDroppedCount() const { return rt_dropped_.load(std::memory_order_relaxed); }
 
+    // -- Subscriber API (pro GUI log strip, audit hooks atd.) --
+    // Subscriber je callback volany synchronnousne pri kazdem uspesnem log()
+    // volani (po formatu zpravy, pod separe mutex). Pozn.: zatim NEvolano z
+    // RT cesty (vlogRT); ta jde pres ring buffer a flushRTBuffer() ho jen
+    // tiskne — pokud bude treba notifikovat i flush zpravy, prida se zvlast.
+    // KRITICKE: subscriber callback nesmi sam volat log() (deadlock pres
+    // subscriber_mtx_, byt log_mutex_ je separe).
+    using Subscriber = std::function<void(const LogEntry&)>;
+    void addSubscriber(Subscriber s);
+    void clearSubscribers();
+
 private:
     static constexpr size_t COMPONENT_MAX  = 32;
     static constexpr size_t MESSAGE_MAX    = 256;
@@ -108,6 +132,12 @@ private:
     std::atomic<Severity> min_severity_{Severity::Info};
     std::atomic<bool>     use_console_{true};
     std::atomic<bool>     use_file_{false};
+
+    // Subscribery — separe mutex aby drzeni log_mutex_ a notify nebylo
+    // smichano (a aby pridani subscribera neblokovalo bezici log call s file
+    // I/O na log_mutex_ zbytecne dlouho).
+    mutable std::mutex      subscriber_mtx_;
+    std::vector<Subscriber> subscribers_;
 
     bool shouldLog(Severity s) const;
     void writeEntry(const char* component, Severity severity,

@@ -121,8 +121,38 @@ void Logger::vlog(const char* component, Severity severity,
     if (!shouldLog(severity)) return;
     char buf[MESSAGE_MAX];
     std::vsnprintf(buf, sizeof(buf), format, args);
-    std::lock_guard<std::mutex> lk(log_mutex_);
-    writeEntry(component, severity, buf, nowMicros());
+    const uint64_t ts_us = nowMicros();
+    {
+        std::lock_guard<std::mutex> lk(log_mutex_);
+        writeEntry(component, severity, buf, ts_us);
+    }
+    // Notifikace subscriberum — po I/O, mimo log_mutex_, pod separe mutexem.
+    // Double-check empty bez locku jako fast path (cteni vectoru size je race,
+    // ale benigni: nejhure projdeme do locku zbytecne a najdeme prazdno).
+    if (!subscribers_.empty()) {
+        std::lock_guard<std::mutex> lk(subscriber_mtx_);
+        if (!subscribers_.empty()) {
+            LogEntry e{
+                static_cast<long long>(ts_us),
+                std::string(component ? component : ""),
+                severity,
+                std::string(buf),
+            };
+            for (auto& sub : subscribers_) {
+                if (sub) sub(e);
+            }
+        }
+    }
+}
+
+void Logger::addSubscriber(Subscriber s) {
+    std::lock_guard<std::mutex> lk(subscriber_mtx_);
+    subscribers_.push_back(std::move(s));
+}
+
+void Logger::clearSubscribers() {
+    std::lock_guard<std::mutex> lk(subscriber_mtx_);
+    subscribers_.clear();
 }
 
 void Logger::logRT(const char* component, Severity severity,

@@ -74,3 +74,13 @@ add_test(NAME test_engine_diagnostics COMMAND test_engine_diagnostics)
 add_executable(test_master_peak_meter test_master_peak_meter.cpp)
 target_link_libraries(test_master_peak_meter PRIVATE ithaca_core doctest)
 add_test(NAME test_master_peak_meter COMMAND test_master_peak_meter)
+
+# F8/Task5: GUI LogRingBuffer + Logger Subscriber API. Test linkuje source
+# z app/gui/ napred (jen ten jeden soubor — GUI nema vlastni knihovnu, je to
+# entry-point binary).
+add_executable(test_log_subscriber test_log_subscriber.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/log_subscriber.cpp)
+target_include_directories(test_log_subscriber PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_link_libraries(test_log_subscriber PRIVATE ithaca_core doctest)
+add_test(NAME test_log_subscriber COMMAND test_log_subscriber)
