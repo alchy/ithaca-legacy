@@ -69,6 +69,7 @@ static void printUsage(const char* argv0) {
         "  --block-size N       audio buffer (frames), default 256 (32..8192).\n"
         "                       Vetsi N = vyssi latence, mensi N = vyssi CPU/risk underrunu.\n"
         "  --resonance-strength <f>  Sila sympaticke rezonance (0..1, default 0.5)\n"
+        "  --log-file <path>    krome konzole loguj i do souboru (append)\n"
         "  --help, -h           tato napoveda\n",
         ITHACA_VERSION, argv0, argv0, argv0, argv0, argv0, argv0);
 }
@@ -80,6 +81,7 @@ int main(int argc, char* argv[]) {
     std::string render_dir, render_out;
     std::string play_dir;
     std::string midi_in_spec;          // volitelne: "0"/"1" idx, "substring", "virtual"
+    std::string log_file_path;         // volitelne: --log-file <path> → file output
     log::Severity level = log::Severity::Info;
     int           block_size = 256;       // default audio buffer
     float         resonance_strength = 0.5f;  // faze 5: sila sympaticke rezonance
@@ -119,6 +121,8 @@ int main(int argc, char* argv[]) {
             resonance_strength = (float)std::atof(argv[++i]);
             if (resonance_strength < 0.f) resonance_strength = 0.f;
             if (resonance_strength > 1.f) resonance_strength = 1.f;
+        } else if (a == "--log-file" && i + 1 < argc) {
+            log_file_path = argv[++i];
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n\n", a.c_str());
             printUsage(argv[0]);
@@ -128,7 +132,15 @@ int main(int argc, char* argv[]) {
 
     auto& L = log::Logger::default_();
     L.setMinSeverity(level);
-    L.setOutputMode(/*console=*/true, /*file=*/false);
+    if (!log_file_path.empty()) {
+        bool ok = L.setLogFile(log_file_path);
+        // Konzole zustava zapnuta i kdyz mame file; uzivatel ma stale prehled.
+        L.setOutputMode(/*console=*/true, /*file=*/ok);
+        if (!ok) std::fprintf(stderr, "WARN: nelze otevrit log file: %s\n",
+                              log_file_path.c_str());
+    } else {
+        L.setOutputMode(/*console=*/true, /*file=*/false);
+    }
 
     if (do_midi_list) {
         // Vypise dostupne MIDI vstupni porty (index + nazev) a skonci.
