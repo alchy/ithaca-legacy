@@ -60,6 +60,32 @@ target_link_libraries(ithaca-cli PRIVATE ithaca_core)
 set_target_properties(ithaca-cli PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# -- ithaca-gui (F8: Dear ImGui + GLFW) --
+# Staveni jen kdyz jsou ImGui/GLFW vendorovany (fetch-third-party.sh).
+# Bez nich CLI a tests jdou stavet dal — GUI je optional.
+if(TARGET imgui AND TARGET glfw)
+    add_executable(ithaca-gui app/gui/main.cpp)
+    target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui glfw)
+    set_target_properties(ithaca-gui PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+    # ImGui headery delaji memset(this, 0, sizeof(*this)) v ImDrawList ctorech;
+    # clang -Wnontrivial-memcall to flagne i pri pouhem #include. Vendored kod,
+    # nemuzeme upravit — potlacit jen pro tento target.
+    if(NOT MSVC)
+        target_compile_options(ithaca-gui PRIVATE -Wno-nontrivial-memcall)
+    endif()
+    if(APPLE)
+        # OpenGL je na macOS 10.14+ deprecated, ale stale plne funkcni.
+        # ImGui i nase main.cpp pouzivaji legacy GL volani — silence.
+        target_compile_definitions(ithaca-gui PRIVATE GL_SILENCE_DEPRECATION)
+        target_link_libraries(ithaca-gui PRIVATE
+            "-framework OpenGL" "-framework Cocoa" "-framework IOKit"
+            "-framework CoreVideo")
+    elseif(UNIX)
+        target_link_libraries(ithaca-gui PRIVATE GL)
+    endif()
+endif()
+
 # -- testy (doctest pres CTest) --
 enable_testing()
 add_subdirectory(tests)

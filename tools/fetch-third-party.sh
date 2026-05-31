@@ -16,6 +16,8 @@ DOCTEST_VER="v2.4.11"
 NLOHMANN_VER="v3.11.3"
 MINIAUDIO_VER="0.11.21"
 RTMIDI_VER="6.0.0"
+IMGUI_VER="v1.91.0"
+GLFW_VER="3.4"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 log()  { printf "\033[1;34m[fetch]\033[0m %s\n" "$*"; }
@@ -76,6 +78,36 @@ if [ ! -f "$TP/rtmidi/RtMidi.cpp" ]; then
     cp "$TMP/rtmidi-tmp/RtMidi.cpp" "$TMP/rtmidi-tmp/RtMidi.h" \
         "$TMP/rtmidi-tmp/LICENSE" "$TP/rtmidi/"
     log "  ok RtMidi"
+else
+    log "  (uz je, skip)"
+fi
+
+# -- Dear ImGui (zdrojaky + GLFW/OpenGL3 backendy) -------------------------
+# Pro F8 GUI. Stahujeme cely tarball z release tagu a vytahujeme jen to
+# co linkujeme: core .cpp/.h v rootu + backends/imgui_impl_{glfw,opengl3}.*
+log "ImGui $IMGUI_VER"
+mkdir -p "$TP/imgui"
+if [ ! -f "$TP/imgui/imgui.h" ]; then
+    curl -fsSL "https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_VER}.tar.gz" \
+        -o "$TMP/imgui.tar.gz"
+    mkdir -p "$TP/imgui"
+    tar -xzf "$TMP/imgui.tar.gz" -C "$TP/imgui" --strip-components=1
+    log "  ok ImGui"
+else
+    log "  (uz je, skip)"
+fi
+
+# -- GLFW (vendored zdrojak, vlastni CMakeLists) ---------------------------
+# Klonuje --depth 1 a maze .git aby parent repo nepovazoval GLFW za submodule.
+log "GLFW $GLFW_VER"
+mkdir -p "$TP"
+if [ ! -f "$TP/glfw/CMakeLists.txt" ]; then
+    have git || err "git je potreba pro GLFW clone"
+    rm -rf "$TP/glfw"
+    git clone --depth 1 --branch "$GLFW_VER" \
+        https://github.com/glfw/glfw.git "$TP/glfw" >/dev/null 2>&1
+    rm -rf "$TP/glfw/.git"
+    log "  ok GLFW"
 else
     log "  (uz je, skip)"
 fi

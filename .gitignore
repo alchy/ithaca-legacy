@@ -7,6 +7,8 @@ compile_commands.json
 /third-party/nlohmann_json/
 /third-party/miniaudio/
 /third-party/rtmidi/
+/third-party/imgui/
+/third-party/glfw/
 /third-party/.staging/
 
 # test outputs
