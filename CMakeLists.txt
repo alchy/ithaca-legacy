@@ -69,6 +69,7 @@ if(TARGET imgui AND TARGET glfw)
         app/gui/app_context.cpp
         app/gui/log_subscriber.cpp
         app/gui/panel_topbar.cpp
+        app/gui/panel_keyboard.cpp
         app/gui/panel_diag.cpp
         app/gui/panel_params.cpp
         app/gui/persistence.cpp)

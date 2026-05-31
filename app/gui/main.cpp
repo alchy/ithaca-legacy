@@ -4,6 +4,7 @@
 // s placeholder diag oknem → save state → cisty shutdown.
 #include "app_context.h"
 #include "panel_topbar.h"
+#include "panel_keyboard.h"
 #include "panel_diag.h"
 #include "panel_params.h"
 #include "persistence.h"
@@ -97,19 +98,19 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        renderTopBar(ctx);
-
-        // Layout pod top barem: top bar ~36px, pak placeholder na keyboard
-        // (~180px) v dalsim tasku, diag+params zabira zbytek vysky minus
-        // log strip (96px, Task 11).
+        // Layout: top bar (36px), keyboard viz (180px), diag+params (zbytek
+        // minus log strip 96px, Task 11), log strip (96px).
         const float W = (float)ctx.state.window_w;
         const float H = (float)ctx.state.window_h;
+        const float topbar_h   = 36.f;
         const float keyboard_h = 180.f;
         const float log_h      = 96.f;  // zatim placeholder vysky (Task 11)
-        const float panels_y   = 36.f + keyboard_h;
-        const float panels_h   = H - panels_y - log_h;
-        renderDiagPanel  (ctx, 0,        panels_y, W * 0.5f, panels_h);
-        renderParamsPanel(ctx, W * 0.5f, panels_y, W * 0.5f, panels_h);
+        renderTopBar       (ctx);
+        renderKeyboardPanel(ctx, 0, topbar_h, W, keyboard_h);
+        const float panels_y = topbar_h + keyboard_h;
+        const float panels_h = H - panels_y - log_h;
+        renderDiagPanel    (ctx, 0,        panels_y, W * 0.5f, panels_h);
+        renderParamsPanel  (ctx, W * 0.5f, panels_y, W * 0.5f, panels_h);
 
         ImGui::Render();
         int fbw, fbh; glfwGetFramebufferSize(w, &fbw, &fbh);
