@@ -84,3 +84,12 @@ target_include_directories(test_log_subscriber PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
 target_link_libraries(test_log_subscriber PRIVATE ithaca_core doctest)
 add_test(NAME test_log_subscriber COMMAND test_log_subscriber)
+
+# F8/Task6: GUI persistence (state.json load/save). Stejny pattern jako
+# log_subscriber - linkujeme source z app/gui/ napred.
+add_executable(test_persistence test_persistence.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/persistence.cpp)
+target_include_directories(test_persistence PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_link_libraries(test_persistence PRIVATE ithaca_core doctest)
+add_test(NAME test_persistence COMMAND test_persistence)
