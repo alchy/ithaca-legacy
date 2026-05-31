@@ -3,6 +3,7 @@
 // Ted: load state → GLFW okno → ImGui init → AppContext init → render loop
 // s placeholder diag oknem → save state → cisty shutdown.
 #include "app_context.h"
+#include "panel_topbar.h"
 #include "persistence.h"
 
 #include "imgui.h"
@@ -89,16 +90,8 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::Begin("Ithaca");
-        ImGui::Text("Voices:    %d / %d", ctx.engine.activeVoices(), 256);
-        ImGui::Text("Resonance: %d / %d", ctx.engine.resonanceVoices(),
-                                          ctx.state.max_resonance_voices);
-        ImGui::Text("Rings:     %d / %d", ctx.engine.numRingsUsed(), 288);
-        ImGui::Text("Pedal CC64: %d", (int)ctx.engine.pedalCC());
-        ImGui::Text("Peak L: %.3f  R: %.3f",
-                    ctx.engine.masterPeakL(), ctx.engine.masterPeakR());
-        ImGui::Text("Log entries: %d", ctx.log_buf.size());
-        ImGui::End();
+        renderTopBar(ctx);
+        // Dalsi panely pribydou v Task 9-11 (keyboard, diag, params, log).
 
         ImGui::Render();
         int fbw, fbh; glfwGetFramebufferSize(w, &fbw, &fbh);

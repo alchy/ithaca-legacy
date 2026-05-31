@@ -68,6 +68,7 @@ if(TARGET imgui AND TARGET glfw)
         app/gui/main.cpp
         app/gui/app_context.cpp
         app/gui/log_subscriber.cpp
+        app/gui/panel_topbar.cpp
         app/gui/persistence.cpp)
     target_include_directories(ithaca-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app/gui)
     target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui glfw)
