@@ -64,7 +64,12 @@ set_target_properties(ithaca-cli PROPERTIES
 # Staveni jen kdyz jsou ImGui/GLFW vendorovany (fetch-third-party.sh).
 # Bez nich CLI a tests jdou stavet dal — GUI je optional.
 if(TARGET imgui AND TARGET glfw)
-    add_executable(ithaca-gui app/gui/main.cpp)
+    add_executable(ithaca-gui
+        app/gui/main.cpp
+        app/gui/app_context.cpp
+        app/gui/log_subscriber.cpp
+        app/gui/persistence.cpp)
+    target_include_directories(ithaca-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app/gui)
     target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui glfw)
     set_target_properties(ithaca-gui PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
