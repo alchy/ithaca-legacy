@@ -66,3 +66,7 @@ add_test(NAME test_harmonic_proximity COMMAND test_harmonic_proximity)
 add_executable(test_resonance_engine test_resonance_engine.cpp)
 target_link_libraries(test_resonance_engine PRIVATE ithaca_core doctest)
 add_test(NAME test_resonance_engine COMMAND test_resonance_engine)
+
+add_executable(test_engine_diagnostics test_engine_diagnostics.cpp)
+target_link_libraries(test_engine_diagnostics PRIVATE ithaca_core doctest)
+add_test(NAME test_engine_diagnostics COMMAND test_engine_diagnostics)

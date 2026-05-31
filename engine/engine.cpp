@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace ithaca {
 
@@ -174,6 +175,58 @@ void Engine::recomputeRefillThreshold() noexcept {
     if (thr > cap - 64) thr = cap - 64;
     if (thr < 0) thr = 0;
     stream_->setRefillThresholdFrames(thr);
+}
+
+// ----- Diagnostika (GUI/monitor) -----------------------------------------
+// Vsechny gettery jsou thread-safe pro cteni z GUI threadu, pokud podkladove
+// stavy ctou atomic loads nebo jsou "ramcove" konzistentni (snapshot bez
+// locku, hodnota muze byt o jeden mimo). Engine sam zadny lock nedrzi.
+
+int Engine::resonanceVoices() const noexcept {
+    // ResonanceEngine::activeCount uz dela atomic load pres pool resonance
+    // voicu (faze 5). Pri Engine pred init je resonance_ nullptr.
+    return resonance_ ? resonance_->activeCount() : 0;
+}
+
+int Engine::numRingsUsed() const noexcept {
+    // StreamEngine::numRingsUsed dela snapshot pres rings_[*].in_use_ atomic.
+    return stream_ ? stream_->numRingsUsed() : 0;
+}
+
+uint8_t Engine::pedalCC() const noexcept {
+    // PedalState::sustainCC vraci aktualni CC64 (8-bit getter, neatomic).
+    // Cteni 1 bytu je trivialne atomic na vsech rozumnych platformach;
+    // GUI to ctе ramcove, tolerujeme prechodne hodnoty pri zmene.
+    return pedal_.sustainCC();
+}
+
+void Engine::activeMidiNotes(bool out[128]) const noexcept {
+    // Iteruj pres voice pool, pro kazdy active() zaznamenej jeho midi.
+    // POZN.: Voice::active() neni atomic, ale jednoduchy bool — race-free
+    // pri readeru, ktery toleruje "lehky lag". Pri pool_=nullptr (engine
+    // pred init) vratime same false.
+    std::memset(out, 0, 128 * sizeof(bool));
+    if (!pool_) return;
+    for (const auto& v : pool_->voicesView()) {
+        if (v.active() && v.midi() >= 0 && v.midi() < 128) {
+            out[v.midi()] = true;
+        }
+    }
+}
+
+float Engine::currentGainFor(int midi) const noexcept {
+    // Max currentLevel pres vsechny voicy hrajici notu `midi`. Pouzije se
+    // pro alfu klavesy v GUI (1.0 = svetla, 0.0 = zhasla). Voice
+    // currentLevel je tez "lehky lag" snapshot (ne-atomic float).
+    if (!pool_ || midi < 0 || midi >= 128) return 0.f;
+    float g = 0.f;
+    for (const auto& v : pool_->voicesView()) {
+        if (v.active() && v.midi() == midi) {
+            const float l = v.currentLevel();
+            if (l > g) g = l;
+        }
+    }
+    return g;
 }
 
 float Engine::scaledReleaseMs() const {

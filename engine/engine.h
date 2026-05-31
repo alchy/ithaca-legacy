@@ -87,6 +87,20 @@ public:
     // Pristup ke streaming enginu (potreba pro inspect / diag / GUI).
     StreamEngine* streamEngine() { return stream_.get(); }
 
+    // -- Diagnostika (GUI/monitor; thread-safe atomic loads) --
+    // Pocet aktivnich rezonancnich hlasu (sympaticka rezonance, faze 5).
+    int     resonanceVoices() const noexcept;
+    // Pocet aktualne pouzitych streaming ringu (in_use_ flag).
+    int     numRingsUsed()    const noexcept;
+    // Aktualni hodnota sustain pedalu (CC64, 0..127).
+    uint8_t pedalCC()         const noexcept;
+    // Maska aktivnich main voice midi cisel; vyplni 128 bool out.
+    // out[i] = true kdyz aspon jeden hlas s midi=i je active() (vc. releasing).
+    void    activeMidiNotes(bool out[128]) const noexcept;
+    // Max currentLevel pres vsechny voicy te midi (pro keyboard viz alpha).
+    // midi mimo rozsah <0,127> → 0.f. Nezohlednuje releasing samostatne.
+    float   currentGainFor(int midi) const noexcept;
+
 private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;

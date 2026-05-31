@@ -155,6 +155,8 @@ public:
     // Diagnostika/test.
     int  capacityFrames() const noexcept { return ring_capacity_frames_; }
     int  numRings()       const noexcept { return (int)rings_.size(); }
+    // Pocet ringu, ktere jsou aktualne in_use (diagnostika).
+    int  numRingsUsed()   const noexcept;
 
     // Refill threshold v stereo frames. Voice si pravidlo "kdyz je v ringu
     // mene nez refill_threshold a soubor nedohran → posli refill" cte odsud.

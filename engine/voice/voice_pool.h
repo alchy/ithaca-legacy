@@ -67,6 +67,12 @@ public:
     // rezonance N se nealokuje, dokud existuje hlavni hlas N v jakemkoli stavu.
     bool hasActiveMainVoice(int midi) const noexcept;
 
+    // Const accessor pro diagnostiku/GUI (nikdy NEMENIT vraceny vektor!).
+    // Pouziva Engine::activeMidiNotes / currentGainFor pro vykresleni klavesnice
+    // a polyphony indikatoru. Iterace po vsech slotech (vetsina pool typicky
+    // neaktivni) — pro 128-256 voicu trivialne rychle.
+    const std::vector<Voice>& voicesView() const noexcept { return voices_; }
+
 private:
     // Volny slot; jinak nejtissi releasing; jinak nejtissi NE-drzeny; jinak
     // nejtissi z celeho poolu. pedal nullptr → posledni dva stupne splynou.

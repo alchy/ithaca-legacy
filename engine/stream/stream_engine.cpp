@@ -118,6 +118,17 @@ RingHandle* StreamEngine::acquireRing() {
     return nullptr;
 }
 
+int StreamEngine::numRingsUsed() const noexcept {
+    // Spocti, kolik slotu ma `in_use_` flag nastaveny. Snapshot bez locku —
+    // hodnota muze byt o jeden mimo, kdyz se zrovna acquire/release deje,
+    // ale pro diagnostiku/GUI staci (refresh ~30 Hz).
+    int n = 0;
+    for (const auto& r : rings_) {
+        if (r->in_use_.load(std::memory_order_acquire)) ++n;
+    }
+    return n;
+}
+
 void StreamEngine::releaseRing(RingHandle* r) {
     if (!r) return;
     // Reset PRED uvolnenim flagu — kdyby si jiny thread chnel ring po flagu
