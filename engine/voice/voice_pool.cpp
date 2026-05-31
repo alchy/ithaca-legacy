@@ -73,9 +73,13 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
                        float keyboard_spread, const PedalState* pedal) {
     if (!spec.asset) return;
 
-    // Retrigger: pokud uz nektery hlas hraje tuto notu, damp ho (click-free).
+    // Retrigger: pokud uz nektery hlas hraje tuto notu (V JAKEMKOLI STAVU
+    // vc. releasing a pending_release), damp ho (click-free). Invariant 5.5.1:
+    // NIKDY 2 hlavni hlasy pro stejnou midi. Drive zde byl filtr `!releasing()`,
+    // ktery povolil koexistenci releasing voice + retrigger voice → akumulace
+    // hlasu + ring leak pri opakovanem retriggeru pod pedalem.
     for (auto& v : voices_)
-        if (v.active() && v.midi() == midi && !v.releasing())
+        if (v.active() && v.midi() == midi)
             v.prepareDamp(engine_sr);
 
     int slot = findSlot(pedal);

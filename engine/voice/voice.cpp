@@ -9,37 +9,46 @@
 namespace ithaca {
 
 void Voice::prepareDamp(float engine_sr) {
-    // TODO (faze 6/7, multi-mic / multi-SR): damping crossfade pocita kroky podle
-    // engine_sr, ale sample muze mit jine sample_sr (pos_inc != 1.0). Pri velkem
-    // SR mismatchu (44.1 kHz sampl v 96 kHz enginu) dochazi pri retriggeru
-    // k drobnemu pitch posunu v damping ocasu. Latentni; opravit az s mic mixerem.
-    // Vytvor kratky fade-out ze soucasne pozice → damp_buf_, aby novy ton
-    // (retrigger) nelupnul. Funguje jen kdyz hlas hraje a ma data v preload_head
-    // (faze 4: streaming pozici v ringu damping zatim neresi — TODO faze 5/6).
-    if (!active_ || !mic_) { damping_ = false; return; }
-    int pos = (int)position_;
-    if (pos >= mic_->head_frames) { damping_ = false; return; }
-    int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr), kDampMaxFrames);
-    int avail = (std::min)(damp_frames, mic_->head_frames - pos);
-    if (avail <= 0) { damping_ = false; return; }
-    const float* src = mic_->preload_head.data() + (size_t)pos * 2;
-    float env = vel_gain_;
-    if (releasing_) env *= rel_gain_;
-    float step = 1.f / (float)avail;
-    for (int i = 0; i < avail; ++i) {
-        float fade = 1.f - (float)i * step;
-        damp_buf_[i * 2]     = src[i * 2]     * env * fade * pan_l_;
-        damp_buf_[i * 2 + 1] = src[i * 2 + 1] * env * fade * pan_r_;
-    }
-    damp_len_ = avail;
-    damp_pos_ = 0;
-    damping_  = true;
+    // KRITICKE: cleanup (ring release + active=false) MUSI probehnout VZDY kdyz
+    // je hlas aktivni. Drive prepareDamp delal 3 early-return PRED cleanupem
+    // → pro streamovane hlasy past head se NIC nestalo → voice zustal active
+    // s ringem → retrigger spawnuje novy voice → 2 voicy pro stejnou midi +
+    // ring leak. Pri opakovanem retriggeru (rozklad akordu pod pedalem) se
+    // ring pool (32) vycerpa a nove hlasy dostanou ring=no → hraji jen
+    // preload-head a umiraji fullyloaded_past_head.
+    //
+    // Damping crossfade (fade-out kopie z hlavy samplu) zustava best-effort —
+    // funguje jen kdyz hlas je jeste v head regionu. Pro streamovane voicy
+    // past head je damp_buf_ prazdny (1ms click pri retriggeru, akceptovatelne;
+    // FUTURE: damping z ring bufferu).
 
-    // Damping buffer hraje SAMOSTATNE (krat fade-out kopie z hlavy samplu);
-    // hlas sam uz nepotrebujeme drzet jako active — slot je hned volny pro
-    // novy retrigger / kradez. Tim odpadne falesny "holding" stav v poolu,
-    // ktery zbytecne pretahuje pool pri rychlych retriggerech a pri pedalu.
-    // Pripadny stream ring uvolnime (vrati se do poolu).
+    // 1) Best-effort fade-out kopie z hlavy samplu do damp_buf_.
+    damping_  = false;
+    damp_len_ = 0;
+    damp_pos_ = 0;
+    if (active_ && mic_) {
+        const int pos = (int)position_;
+        if (pos < mic_->head_frames) {
+            int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
+                                         kDampMaxFrames);
+            int avail = (std::min)(damp_frames, mic_->head_frames - pos);
+            if (avail > 0) {
+                const float* src = mic_->preload_head.data() + (size_t)pos * 2;
+                float env = vel_gain_;
+                if (releasing_) env *= rel_gain_;
+                float step = 1.f / (float)avail;
+                for (int i = 0; i < avail; ++i) {
+                    float fade = 1.f - (float)i * step;
+                    damp_buf_[i * 2]     = src[i * 2]     * env * fade * pan_l_;
+                    damp_buf_[i * 2 + 1] = src[i * 2 + 1] * env * fade * pan_r_;
+                }
+                damp_len_ = avail;
+                damping_  = true;
+            }
+        }
+    }
+
+    // 2) VZDY cleanup ring + state (i kdyz damp_buf_ nebyl naplnen).
     if (ring_ && stream_) {
         stream_->releaseRing(ring_);
         ring_ = nullptr;
