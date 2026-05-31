@@ -5,7 +5,6 @@
 #include "util/log.h"
 
 #include <algorithm>
-#include <cmath>
 
 namespace ithaca {
 
@@ -45,9 +44,14 @@ void Voice::prepareDamp(float engine_sr) {
         stream_->releaseRing(ring_);
         ring_ = nullptr;
     }
-    stream_pending_ = false;
-    active_         = false;   // pool ho ted muze rovnou ukrast / pouzit znovu
-    releasing_      = false;
+    stream_pending_  = false;
+    // DEBUG: zaloguj deaktivaci v dusledku retrigger/steal damping.
+    log::Logger::default_().log("voice_end", log::Severity::Info,
+        "DEACTIVATE midi=%d reason=damped_for_retrigger_or_steal damp_len=%d",
+        midi_, damp_len_);
+    active_          = false;   // pool ho ted muze rovnou ukrast / pouzit znovu
+    releasing_       = false;
+    pending_release_ = false;
 }
 
 void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
@@ -67,10 +71,11 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
 
     asset_ = asset;
     mic_   = (asset && !asset->mics.empty()) ? &asset->mics[0] : nullptr;
-    active_    = (mic_ != nullptr && mic_->head_frames > 0);
-    releasing_ = false;
-    in_onset_  = true;
-    position_  = 0.0;
+    active_           = (mic_ != nullptr && mic_->head_frames > 0);
+    releasing_        = false;
+    pending_release_  = false;   // retrigger ruse predchozi pending stav
+    in_onset_         = true;
+    position_         = 0.0;
     double sample_sr = mic_ ? (double)mic_->file.sample_rate : (double)engine_sr;
     pos_inc_ = pitch_ratio * (sample_sr / (double)engine_sr);
     vel_gain_  = vel_gain;
@@ -123,9 +128,29 @@ float Voice::currentLevel() const noexcept {
 }
 
 bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
+    // DEBUG helper: zaloguj kazdou cestu deaktivace s konkretnim duvodem.
+    // Pozn.: pouziva non-RT logger (mutex) — to porusi RT-safety, ale je to
+    // ladici nastroj. V produkcni faze odstranit nebo nahradit RT ringem +
+    // periodickym flushem.
+    auto log_end = [this](const char* reason) {
+        log::Logger::default_().log("voice_end", log::Severity::Info,
+            "DEACTIVATE midi=%d reason=%s pos=%lld total=%d head=%d "
+            "ring=%s ring_avail=%d ring_eof=%d releasing=%d in_onset=%d "
+            "underrun_fading=%d damping=%d",
+            midi_, reason, (long long)position_,
+            mic_ ? mic_->file.frames : -1,
+            mic_ ? mic_->head_frames : -1,
+            ring_ ? "yes" : "no",
+            ring_ ? ring_->available() : -1,
+            (ring_ && ring_->eof_.load(std::memory_order_relaxed)) ? 1 : 0,
+            (int)releasing_, (int)in_onset_,
+            (int)underrun_fading_, (int)damping_);
+    };
+
     if (!mic_ || mic_->head_frames <= 0) {
         // Nic k hrani; pripadny drzeny ring vrat.
         if (ring_ && stream_) { stream_->releaseRing(ring_); ring_ = nullptr; }
+        if (active_) log_end("no_mic_or_empty_head");
         active_ = false;
         return false;
     }
@@ -170,6 +195,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             if (!ring_->popFrame(L, R)) {
                 // Ring prazdny. Pokud worker oznacil EOF, hlas cisto skoncil.
                 if (ring_->eof_.load(std::memory_order_acquire)) {
+                    log_end("ring_eof_drained");
                     active_ = false;
                     break;
                 }
@@ -177,7 +203,11 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
                     underrun_gain_   = 1.f;
-                    LOG_RT_WARN("voice", "underrun midi=%d", midi_);
+                    log::Logger::default_().log("voice_end", log::Severity::Warning,
+                        "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d "
+                        "ring_eof=%d", midi_, (long long)position_, total_frames,
+                        head_frames, ring_->available(),
+                        (int)ring_->eof_.load(std::memory_order_relaxed));
                 }
                 // Bez dat → fade pres tichy vzorek (0,0).
                 sL = 0.f; sR = 0.f;
@@ -187,6 +217,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             position_ += pos_inc_;
         } else {
             // FullyLoaded sampl prekrocil head (= file frames) → konec.
+            log_end("fullyloaded_past_head");
             active_ = false;
             break;
         }
@@ -196,6 +227,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             ring_->eof_.load(std::memory_order_acquire) &&
             ring_->available() == 0) {
             // Spotrebovan posledni vzorek; cisto vypneme po tomto frame.
+            log_end("hard_guard_file_end");
             active_ = false;
         }
 
@@ -210,7 +242,11 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
         if (releasing_) {
             env *= rel_gain_;
             rel_gain_ += rel_step_;
-            if (rel_gain_ <= 0.f) { rel_gain_ = 0.f; active_ = false; }
+            if (rel_gain_ <= 0.f) {
+                rel_gain_ = 0.f;
+                log_end("release_ramp_zero");
+                active_ = false;
+            }
         }
         // Underrun fast fade (multiplikuje pres ostatni envelopy).
         if (underrun_fading_) {
@@ -218,6 +254,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             underrun_gain_ += underrun_step_;
             if (underrun_gain_ <= 0.f) {
                 underrun_gain_ = 0.f;
+                log_end("underrun_fade_zero");
                 active_ = false;
             }
         }

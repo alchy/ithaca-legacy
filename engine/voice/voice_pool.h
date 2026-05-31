@@ -37,6 +37,21 @@ public:
                 const PedalState* pedal = nullptr);
     // Release vsech hlasu dane noty.
     void noteOff(int midi, float release_ms, float engine_sr);
+
+    // Note-off ridene pedalem (spec 5.4 fyzikalni model): kdyz pedal SUSTAINUJE
+    // strunu (pedal.isUndamped(N) → damping_[N] dostatecne nizke), hlas se
+    // OZNACI jako "pending release" — sample hraje dal prirozene, zadny release
+    // ramp ted. Az pedal pustis, VoicePool::releasePendingNotes vola release()
+    // na vsech pending hlasech (jejichz nota neni v pedal.held_).
+    // Kdyz pedal nesustainuje, hlas dostane normalni release().
+    void noteOffWithPedal(int midi, const PedalState& pedal,
+                          float release_ms, float engine_sr);
+
+    // Pri prechodu pedalu dolu → nahoru: pro kazdy pending_release hlas, ktery
+    // NENI v pedal.held_ (klavesa stale drzena), spust release teď.
+    void releasePendingNotes(const PedalState& pedal, float release_ms,
+                             float engine_sr);
+
     // Release vsech hlasu (panic).
     void allNotesOff(float release_ms, float engine_sr);
 

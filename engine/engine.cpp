@@ -87,17 +87,37 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
             }
             case MidiEvent::NoteOff: {
                 int m = (int)e.data1;
+                float rms = scaledReleaseMs();
+                const bool sustained = pedal_.isUndamped(m);
+                log::Logger::default_().log("midi_off", log::Severity::Info,
+                    "noteOff midi=%d release_ms=%.0f cc64=%d sustained=%d",
+                    m, rms, (int)pedal_.sustainCC(), (int)sustained);
+                // Pedal nejdriv noteOff (snizi held_), pak voice off s pedalem
+                // — VoicePool si overi pedal.isUndamped(m): pokud pedal drzi
+                // strunu, sample bude hrat dal jako pending_release; jinak
+                // normalni release ramp.
                 pedal_.noteOff(m);
-                pool_->noteOff(m, scaledReleaseMs(), sr);
+                pool_->noteOffWithPedal(m, pedal_, rms, sr);
                 break;
             }
             case MidiEvent::Sustain: {
                 // CC64 jako spojita hodnota; PedalState prepocita damping_[128].
                 // Resonance se prizpusobi PER-BLOK ve resonance_->processBlock().
+                const bool was_down = pedal_.isPedalDown();
+                log::Logger::default_().log("midi_cc", log::Severity::Info,
+                    "Sustain CC64=%d", (int)e.data1);
                 pedal_.setSustainCC(e.data1);
+                const bool now_down = pedal_.isPedalDown();
+                // Pri prechodu DOWN → UP: aplikuj release na vsechny pending
+                // hlasy, jejichz nota neni aktualne drzena.
+                if (was_down && !now_down) {
+                    pool_->releasePendingNotes(pedal_, scaledReleaseMs(), sr);
+                }
                 break;
             }
             case MidiEvent::AllNotesOff: {
+                log::Logger::default_().log("midi_off", log::Severity::Info,
+                    "AllNotesOff");
                 pedal_.allNotesOff();
                 pool_->allNotesOff(cfg_.release_ms, sr);
                 break;

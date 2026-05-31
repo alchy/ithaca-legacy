@@ -40,6 +40,14 @@ public:
     // Spusti release ramp (note-off).
     void release(float release_ms, float engine_sr);
 
+    // Note-off s pedalem v sustain pozici: NE-spustime release ramp ted, jen
+    // si poznacime ze "klavesa pustena, ale pedal drzi strunu". Sample hraje
+    // dal prirozene (jako kdyby nebyl note-off). Az pedal pustis, VoicePool
+    // vola release() na vsech `pendingRelease()` hlasech.
+    void markPendingRelease() { pending_release_ = true; }
+    bool isPendingRelease() const { return pending_release_; }
+    void clearPendingRelease() { pending_release_ = false; }
+
     // Renderuj n_samples additivne do out_l/out_r. Vrati true kdyz stale aktivni.
     bool process(float* out_l, float* out_r, int n_samples) noexcept;
 
@@ -54,10 +62,11 @@ private:
     const SampleAsset* asset_ = nullptr;
     const MicLayer*    mic_   = nullptr;     // = &asset_->mics[0]
 
-    bool   active_    = false;
-    bool   releasing_ = false;
-    bool   in_onset_  = false;
-    int    midi_      = -1;
+    bool   active_           = false;
+    bool   releasing_        = false;
+    bool   in_onset_         = false;
+    bool   pending_release_  = false;  // note-off prisel, ale pedal sustainuje
+    int    midi_             = -1;
 
     double position_  = 0.0;                 // frame pozice (fractional)
     double pos_inc_   = 1.0;                 // pitch_ratio * (sample_sr/engine_sr)

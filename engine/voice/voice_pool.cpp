@@ -81,9 +81,10 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
     int slot = findSlot(pedal);
     Voice& v = voices_[slot];
 
-    // DEBUG STEALING: kdyz slot byl aktivni a midi ZUSTAVALA jina nez nove
-    // pridelena → ukradli jsme cizi hlas. Zaloguj kdo, ucel + pool stats.
-    if (v.active() && v.midi() != midi) {
+    // DEBUG (NE RT-safe — produkcni build by ho nemel mit; v ladici fazi pomuze
+    // videt skutecne stealy a noteOn frequenci). Pozn.: tady volame non-RT
+    // logger primo (mutex + file/console flush), takze pojede do souboru ihned.
+    {
         int active = activeCount();
         int releasing = 0, held = 0;
         for (const auto& vv : voices_) {
@@ -91,14 +92,21 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
             if (vv.releasing()) releasing++;
             if (pedal && pedal->isHeld(vv.midi())) held++;
         }
-        LOG_RT_WARN("voice_steal",
-                    "STEAL victim_midi=%d victim_lvl=%.3f victim_releasing=%d "
-                    "victim_held=%d → new_midi=%d new_vel=%.2f pool=%d/%d "
-                    "rel=%d held=%d",
-                    v.midi(), v.currentLevel(), (int)v.releasing(),
-                    pedal ? (int)pedal->isHeld(v.midi()) : -1,
-                    midi, spec.vel_gain, active, (int)voices_.size(),
-                    releasing, held);
+        if (v.active() && v.midi() != midi) {
+            log::Logger::default_().log("voice_steal", log::Severity::Warning,
+                "STEAL victim_midi=%d victim_lvl=%.3f victim_releasing=%d "
+                "victim_held=%d → new_midi=%d new_vel=%.2f pool=%d/%d "
+                "rel=%d held=%d",
+                v.midi(), v.currentLevel(), (int)v.releasing(),
+                pedal ? (int)pedal->isHeld(v.midi()) : -1,
+                midi, spec.vel_gain, active, (int)voices_.size(),
+                releasing, held);
+        } else {
+            log::Logger::default_().log("voice_on", log::Severity::Info,
+                "noteOn midi=%d vel=%.2f slot=%d pool=%d/%d rel=%d held=%d",
+                midi, spec.vel_gain, slot, active, (int)voices_.size(),
+                releasing, held);
+        }
     }
 
     // Kdyz krademe aktivni hlas, damp i jeho (jiny ton) → bez lupnuti.
@@ -114,6 +122,41 @@ void VoicePool::noteOff(int midi, float release_ms, float engine_sr) {
     for (auto& v : voices_)
         if (v.active() && v.midi() == midi && !v.releasing())
             v.release(release_ms, engine_sr);
+}
+
+void VoicePool::noteOffWithPedal(int midi, const PedalState& pedal,
+                                 float release_ms, float engine_sr) {
+    // Pokud pedal sustainuje danou strunu, oznac vsechny aktivni (ne-releasing)
+    // hlasy te noty jako pending_release — sample hraje dal, az pedal pustis,
+    // releasePendingNotes na ne spusti release.
+    if (pedal.isUndamped(midi)) {
+        for (auto& v : voices_)
+            if (v.active() && v.midi() == midi && !v.releasing())
+                v.markPendingRelease();
+        return;
+    }
+    // Pedal nesustainuje → normalni release ihned.
+    for (auto& v : voices_)
+        if (v.active() && v.midi() == midi && !v.releasing())
+            v.release(release_ms, engine_sr);
+}
+
+void VoicePool::releasePendingNotes(const PedalState& pedal,
+                                    float release_ms, float engine_sr) {
+    // Pedal byl pusten. Pro kazdy hlas s pending_release: pokud uzivatel
+    // klavesu nedrzi (pedal.isHeld == false), spust release ted. Drzene
+    // klavesy zustanou hrat — uzivatel je drzi, tlumitka nedosednou.
+    for (auto& v : voices_) {
+        if (!v.active() || v.releasing()) continue;
+        if (!v.isPendingRelease()) continue;
+        if (pedal.isHeld(v.midi())) {
+            // Nota se mezitim znovu drzi — pending zrusit, sample hraje dal.
+            v.clearPendingRelease();
+            continue;
+        }
+        v.clearPendingRelease();
+        v.release(release_ms, engine_sr);
+    }
 }
 
 void VoicePool::allNotesOff(float release_ms, float engine_sr) {
