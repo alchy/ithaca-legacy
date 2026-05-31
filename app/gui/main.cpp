@@ -4,6 +4,8 @@
 // s placeholder diag oknem → save state → cisty shutdown.
 #include "app_context.h"
 #include "panel_topbar.h"
+#include "panel_diag.h"
+#include "panel_params.h"
 #include "persistence.h"
 
 #include "imgui.h"
@@ -86,12 +88,28 @@ int main() {
     //    Panely (Task 8-11) pribydou postupne.
     while (!glfwWindowShouldClose(w)) {
         glfwPollEvents();
+        // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
+        // pocitat layout pri resize. Predtim se aktualizovalo jen pri shutdown.
+        glfwGetWindowSize(w, &ctx.state.window_w, &ctx.state.window_h);
+        glfwGetWindowPos(w, &ctx.state.window_x, &ctx.state.window_y);
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
         renderTopBar(ctx);
-        // Dalsi panely pribydou v Task 9-11 (keyboard, diag, params, log).
+
+        // Layout pod top barem: top bar ~36px, pak placeholder na keyboard
+        // (~180px) v dalsim tasku, diag+params zabira zbytek vysky minus
+        // log strip (96px, Task 11).
+        const float W = (float)ctx.state.window_w;
+        const float H = (float)ctx.state.window_h;
+        const float keyboard_h = 180.f;
+        const float log_h      = 96.f;  // zatim placeholder vysky (Task 11)
+        const float panels_y   = 36.f + keyboard_h;
+        const float panels_h   = H - panels_y - log_h;
+        renderDiagPanel  (ctx, 0,        panels_y, W * 0.5f, panels_h);
+        renderParamsPanel(ctx, W * 0.5f, panels_y, W * 0.5f, panels_h);
 
         ImGui::Render();
         int fbw, fbh; glfwGetFramebufferSize(w, &fbw, &fbh);
@@ -102,9 +120,8 @@ int main() {
         glfwSwapBuffers(w);
     }
 
-    // 7. Save state pred shutdown (aktualni window geom + co se zmenilo v ctx).
-    glfwGetWindowSize(w, &ctx.state.window_w, &ctx.state.window_h);
-    glfwGetWindowPos(w, &ctx.state.window_x, &ctx.state.window_y);
+    // 7. Save state pred shutdown. ctx.state.window_* uz je aktualni z render
+    //    loopu (per-frame update), nemusime znovu volat glfwGetWindow*.
     saveState(defaultStatePath(), ctx.state);
 
     // 8. Shutdown — RT flush thread → AppContext → ImGui → GLFW.
