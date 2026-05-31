@@ -106,6 +106,12 @@ public:
     void setResonanceStrength(float s) noexcept;   // wrap resonance_->setStrength
     void setExciteDecayMs(float ms) noexcept;      // wrap resonance_->setExciteDecayTimeMs
 
+    // -- Master peak meter (GUI; atomic) --
+    // Vraci aktualni peak |out| po master_gain, s decay ~100ms mezi bloky.
+    // Cteni je lock-free, GUI muze vzorkovat libovolne casto.
+    float masterPeakL() const noexcept { return master_peak_l_.load(std::memory_order_relaxed); }
+    float masterPeakR() const noexcept { return master_peak_r_.load(std::memory_order_relaxed); }
+
 private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;
@@ -123,6 +129,9 @@ private:
     PedalState                        pedal_;
     std::unique_ptr<ResonanceEngine>  resonance_;
     std::atomic<float>                master_gain_{1.0f};
+    // Master peak meter — psano z audio threadu (processBlock), cteno z GUI.
+    std::atomic<float>                master_peak_l_{0.f};
+    std::atomic<float>                master_peak_r_{0.f};
     bool                              initialized_ = false;
 };
 

@@ -148,6 +148,25 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     float g = master_gain_.load(std::memory_order_relaxed);
     if (std::fabs(g - 1.f) > 0.001f)
         for (int i = 0; i < n_samples; ++i) { out_l[i] *= g; out_r[i] *= g; }
+
+    // 4. Master peak meter pro GUI (decay ~100 ms; non-blocking atomic).
+    // Pocitame ABS peak per blok a kombinujeme s predchozim peak * decay.
+    // Decay vzorec: exp(-n_samples / (tau_s * sample_rate)). Pro tau=0.1 s
+    // a 48k/256 ≈ 0.948 per blok → ~150 ms na poklesni z 1.0 na 0.1.
+    float peak_l = 0.f, peak_r = 0.f;
+    for (int i = 0; i < n_samples; ++i) {
+        const float al = std::fabs(out_l[i]);
+        const float ar = std::fabs(out_r[i]);
+        if (al > peak_l) peak_l = al;
+        if (ar > peak_r) peak_r = ar;
+    }
+    const float decay = std::exp(-(float)n_samples / (0.1f * sr));
+    const float cur_l = master_peak_l_.load(std::memory_order_relaxed);
+    const float cur_r = master_peak_r_.load(std::memory_order_relaxed);
+    const float new_l = (peak_l > cur_l * decay) ? peak_l : cur_l * decay;
+    const float new_r = (peak_r > cur_r * decay) ? peak_r : cur_r * decay;
+    master_peak_l_.store(new_l, std::memory_order_relaxed);
+    master_peak_r_.store(new_r, std::memory_order_relaxed);
 }
 
 int Engine::setBlockSize(int new_block_size) noexcept {
