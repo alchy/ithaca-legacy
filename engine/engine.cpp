@@ -78,7 +78,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                     resonance_->onSelfNoteOn(m, sr);
                     VoiceSpec spec = selectVoice(bank_, m, v, rr_);
                     if (spec.asset)
-                        pool_->noteOn(m, spec, sr, cfg_.keyboard_spread);
+                        pool_->noteOn(m, spec, sr, cfg_.keyboard_spread, &pedal_);
                     // PO voice noteOn: spusti rezonance harmonicky pribuznych
                     // strun (eligibility uz vidi novy active main voice).
                     resonance_->onPlayedNoteOn(m, v, bank_, *pool_, pedal_, sr);

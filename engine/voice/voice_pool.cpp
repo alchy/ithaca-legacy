@@ -1,6 +1,9 @@
 // engine/voice/voice_pool.cpp — viz voice_pool.h.
 #include "voice/voice_pool.h"
 
+#include "pedal/pedal_state.h"
+#include "util/log.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -25,14 +28,12 @@ void VoicePool::setStreamEngine(StreamEngine* se) {
     for (auto& v : voices_) v.setStreamEngine(se);
 }
 
-int VoicePool::findSlot() {
+int VoicePool::findSlot(const PedalState* pedal) {
     // 1. Volny slot — vzdy preferovany.
     for (int i = 0; i < (int)voices_.size(); ++i)
         if (!voices_[i].active()) return i;
     // 2. Pool je plny. Preferuj kradez RELEASING hlasu (= po note-off, mizi
-    //    sami od sebe). Mezi releasing vyber nejtissi. Tim ne-releasing hlas
-    //    (HELD / sustained pedalem) zustane jak ma — uzivatel ho vetsinou JESTE
-    //    chce slyset.
+    //    sami od sebe). Mezi releasing vyber nejtissi.
     int best_rel = -1;
     float best_rel_level = 1e30f;
     for (int i = 0; i < (int)voices_.size(); ++i) {
@@ -41,8 +42,24 @@ int VoicePool::findSlot() {
         if (lvl < best_rel_level) { best_rel_level = lvl; best_rel = i; }
     }
     if (best_rel >= 0) return best_rel;
-    // 3. Vsechny hlasy jsou ne-releasing (HELD/sustained) — krad nejtissi
-    //    z celeho poolu (puvodni spec rozhodnuti pro krajni pripady).
+    // 3. Vsechny hlasy jsou ne-releasing. Pri DRZENEM pedalu pravdepodobne
+    //    plno tonu, ktere uzivatel uz pustil ale pedal je drzi v sustainu.
+    //    Kdyz mame PedalState, krad tise NE-DRZENE (pedal-sustained) hlasy
+    //    pred HELD hlasy (uzivatel je drzi → uziva je). Bez PedalState
+    //    spadne na puvodni "nejtissi z celeho poolu".
+    if (pedal) {
+        int best_sus = -1;
+        float best_sus_level = 1e30f;
+        for (int i = 0; i < (int)voices_.size(); ++i) {
+            // ne-releasing + ne-held uzivatelem → sustained pedalem.
+            if (pedal->isHeld(voices_[i].midi())) continue;
+            float lvl = voices_[i].currentLevel();
+            if (lvl < best_sus_level) { best_sus_level = lvl; best_sus = i; }
+        }
+        if (best_sus >= 0) return best_sus;
+    }
+    // 4. Vsechny hlasy jsou HELD (uzivatel drzi vsechny klavesy a pool je
+    //    presto plny — extrem) — krad nejtissi z celeho poolu.
     int best = 0;
     float best_level = voices_[0].currentLevel();
     for (int i = 1; i < (int)voices_.size(); ++i) {
@@ -53,7 +70,7 @@ int VoicePool::findSlot() {
 }
 
 void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
-                       float keyboard_spread) {
+                       float keyboard_spread, const PedalState* pedal) {
     if (!spec.asset) return;
 
     // Retrigger: pokud uz nektery hlas hraje tuto notu, damp ho (click-free).
@@ -61,8 +78,29 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
         if (v.active() && v.midi() == midi && !v.releasing())
             v.prepareDamp(engine_sr);
 
-    int slot = findSlot();
+    int slot = findSlot(pedal);
     Voice& v = voices_[slot];
+
+    // DEBUG STEALING: kdyz slot byl aktivni a midi ZUSTAVALA jina nez nove
+    // pridelena → ukradli jsme cizi hlas. Zaloguj kdo, ucel + pool stats.
+    if (v.active() && v.midi() != midi) {
+        int active = activeCount();
+        int releasing = 0, held = 0;
+        for (const auto& vv : voices_) {
+            if (!vv.active()) continue;
+            if (vv.releasing()) releasing++;
+            if (pedal && pedal->isHeld(vv.midi())) held++;
+        }
+        LOG_RT_WARN("voice_steal",
+                    "STEAL victim_midi=%d victim_lvl=%.3f victim_releasing=%d "
+                    "victim_held=%d → new_midi=%d new_vel=%.2f pool=%d/%d "
+                    "rel=%d held=%d",
+                    v.midi(), v.currentLevel(), (int)v.releasing(),
+                    pedal ? (int)pedal->isHeld(v.midi()) : -1,
+                    midi, spec.vel_gain, active, (int)voices_.size(),
+                    releasing, held);
+    }
+
     // Kdyz krademe aktivni hlas, damp i jeho (jiny ton) → bez lupnuti.
     if (v.active()) v.prepareDamp(engine_sr);
 

@@ -16,10 +16,13 @@
 #include "midi/midi_input.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ithaca;
@@ -202,7 +205,24 @@ int main(int argc, char* argv[]) {
             eng.noteOn(60, 100); eng.noteOn(64, 100); eng.noteOn(67, 100);
         }
 
+        // Background thread pro pravidelny flush RT log ringu (LOG_RT_* z audio
+        // threadu nezapisuji primo do konzole; RT ring se musi vyprazdnit z
+        // non-RT threadu). Frekvence 100 Hz = ~10 ms — dost rychle aby debug
+        // stealing logy nezhltli ring buffer, pomalu dost aby nezatezovaly CPU.
+        std::atomic<bool> log_run{true};
+        std::thread log_thr([&log_run]() {
+            using namespace std::chrono_literals;
+            while (log_run.load(std::memory_order_relaxed)) {
+                log::Logger::default_().flushRTBuffer();
+                std::this_thread::sleep_for(10ms);
+            }
+            // Posledni flush pri ukonceni, aby se neztratily konecne zpravy.
+            log::Logger::default_().flushRTBuffer();
+        });
+
         std::getchar();                          // ceka na Enter
+        log_run.store(false, std::memory_order_relaxed);
+        log_thr.join();
         if (midi.isOpen()) midi.close();
         dev.stop();
         return 0;
