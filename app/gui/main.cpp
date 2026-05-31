@@ -75,6 +75,35 @@ int main(int argc, char* argv[]) {
                                      "ithaca-gui", nullptr, nullptr);
     if (!w) { glfwTerminate(); return 1; }
     glfwSetWindowPos(w, st.window_x, st.window_y);
+    // Off-screen clamp: pokud byl pred ulozenim pripojeny extra monitor a po
+    // restartu uz neni, restorovana pozice muze byt mimo viditelne plochy.
+    // Spocteme prekryv okna s kazdym pripojenym monitorem; pokud nikde neni
+    // alespon 100×100 px viditelnych, fallback na (100, 100). Persistujeme
+    // i do st aby se ulozila spravna hodnota pri pristim shutdown.
+    auto isWindowOnAnyMonitor = [&]() -> bool {
+        int x, y, w_size, h_size;
+        glfwGetWindowPos(w, &x, &y);
+        glfwGetWindowSize(w, &w_size, &h_size);
+        int count = 0;
+        GLFWmonitor** mons = glfwGetMonitors(&count);
+        for (int i = 0; i < count; ++i) {
+            int mx, my; glfwGetMonitorPos(mons[i], &mx, &my);
+            const GLFWvidmode* mode = glfwGetVideoMode(mons[i]);
+            if (!mode) continue;
+            // Overlap test: okno musi mit alespon 100x100 px viditelnych.
+            const int ox1 = (x > mx) ? x : mx;
+            const int oy1 = (y > my) ? y : my;
+            const int ox2 = (x + w_size < mx + mode->width)  ? x + w_size : mx + mode->width;
+            const int oy2 = (y + h_size < my + mode->height) ? y + h_size : my + mode->height;
+            if (ox2 - ox1 >= 100 && oy2 - oy1 >= 100) return true;
+        }
+        return false;
+    };
+    if (!isWindowOnAnyMonitor()) {
+        glfwSetWindowPos(w, 100, 100);
+        st.window_x = 100;
+        st.window_y = 100;
+    }
     glfwMakeContextCurrent(w);
     glfwSwapInterval(1); // vsync
 

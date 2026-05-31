@@ -59,6 +59,16 @@ public:
     bool init(const EngineConfig& cfg);
     // Nacti legacy banku do RAM (respektuje cfg.midi_from/to). Vrati false kdyz nic.
     bool loadBank(const std::string& dir);
+    // Thread-safe reload banky z GUI/CLI threadu, pres "graceful pause":
+    //   1) push AllNotesOff do MIDI fronty (audio drain ji zpracuje pristi blok),
+    //   2) pockej ~50 ms aby release dobehl,
+    //   3) zapni bank_loading_ flag → audio thread zacne vracet ticho a preskoci
+    //      drain MIDI / voice render (viz processBlock top),
+    //   4) pockej ~10 ms aby pripadny in-flight processBlock dobehl,
+    //   5) loadBank(path) (disk I/O je teď bezpecne, audio mlci),
+    //   6) bank_loading_=false → audio thread se obnovi.
+    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~60 ms.
+    bool reloadBank(const std::string& dir);
 
     // -- Thread-safe MIDI vstup (volat z MIDI/GUI threadu) --
     void noteOn(int midi, int velocity);
@@ -132,6 +142,9 @@ private:
     // Master peak meter — psano z audio threadu (processBlock), cteno z GUI.
     std::atomic<float>                master_peak_l_{0.f};
     std::atomic<float>                master_peak_r_{0.f};
+    // Bank reload guard. Pokud true, processBlock vraci ticho a preskoci
+    // veskery render / drain — chrani pred race s loadBank na non-RT threadu.
+    std::atomic<bool>                 bank_loading_{false};
     bool                              initialized_ = false;
 };
 

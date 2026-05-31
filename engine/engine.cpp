@@ -5,8 +5,10 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <thread>
 
 namespace ithaca {
 
@@ -54,6 +56,28 @@ bool Engine::loadBank(const std::string& dir) {
     return bank_.loaded_samples > 0;
 }
 
+bool Engine::reloadBank(const std::string& dir) {
+    // Graceful reload — viz engine.h dokumentace. Volat jen z non-RT threadu.
+    // 1) Drain: posli AllNotesOff do MIDI fronty. Audio thread ji vyzvedne
+    //    pristi blok a spusti release ramp na vsech aktivnich voicech.
+    allNotesOff();
+    // 2) Pockej ~50 ms aby release dobehl. Pri release_ms ~200 ms je voice
+    //    porad v "releasing" stavu, ale uroven uz hodne klesla; pripadne
+    //    cvaknuti pri prepnuti banky je akceptovatelne (uzivatelska akce).
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // 3) Zapni bank_loading_ flag. processBlock to uvidi a vrati ticho;
+    //    pripadny prave bezici processBlock dobehne s puvodnim bank_.
+    bank_loading_.store(true, std::memory_order_release);
+    // 4) Pockej ~10 ms aby in-flight processBlock dobehl. Audio bloky maji
+    //    typicky pod 6 ms (256 vz / 48k), 10 ms je bezpecna rezerva.
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // 5) Slow disk I/O — bank_ se prepise, ale audio thread to nesahne.
+    const bool ok = loadBank(dir);
+    // 6) Pust audio thread zpet.
+    bank_loading_.store(false, std::memory_order_release);
+    return ok;
+}
+
 void Engine::noteOn(int midi, int velocity) {
     if (velocity <= 0) { noteOff(midi); return; }
     midi_q_.push({MidiEvent::NoteOn, (uint8_t)midi, (uint8_t)velocity});
@@ -70,6 +94,17 @@ void Engine::sustainPedal(uint8_t cc) {
 
 void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     if (!initialized_ || !pool_) return;
+    // Bank reload v progressu? Vrat ticho — nesahej na bank_ (race s reloadBank
+    // na non-RT threadu) a preskoc drain MIDI / voice render. Resetneme i peak
+    // metr aby GUI videlo, ze nic neteche. Caller buffery nemusi mit vynulovane,
+    // proto je explicitne zerujeme (kontrakt: vystup po processBlock je validni).
+    if (bank_loading_.load(std::memory_order_acquire)) {
+        std::memset(out_l, 0, sizeof(float) * (size_t)n_samples);
+        std::memset(out_r, 0, sizeof(float) * (size_t)n_samples);
+        master_peak_l_.store(0.f, std::memory_order_relaxed);
+        master_peak_r_.store(0.f, std::memory_order_relaxed);
+        return;
+    }
     const float sr = (float)cfg_.sample_rate;
 
     // 1. Vyprazdni MIDI frontu (audio thread) → akce do voice poolu + rezonance.

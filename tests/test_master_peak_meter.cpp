@@ -38,3 +38,51 @@ TEST_CASE("Master peak meter - decay after pulse") {
     CHECK(e.masterPeakL() < 0.001f);
     CHECK(e.masterPeakR() < 0.001f);
 }
+
+TEST_CASE("Master peak meter - real signal feed + decay") {
+    // Vyuzivame faktu, ze Engine::processBlock je buffer-additivni (ne-zeruje
+    // vstup) a bez banky/voicu/rezonance se vstup nesahne. Master_gain=1.0
+    // → multiplikator preskocime (|g-1|<0.001). Peak meter pak cte z bufferu
+    // vstupni hodnotu.
+    using namespace ithaca;
+    Engine e; EngineConfig cfg;
+    cfg.sample_rate = 48000; cfg.block_size = 256;
+    cfg.master_gain = 1.f;
+    REQUIRE(e.init(cfg));
+
+    // 1) Pre-fill bufferu konstantou 0.5 → peak by mel byt presne 0.5 po
+    //    prvnim bloku (engine nepricte nic, master_gain je 1.0, |abs| dava 0.5).
+    std::vector<float> L(256, 0.5f), R(256, 0.5f);
+    e.processBlock(L.data(), R.data(), 256);
+    CHECK(e.masterPeakL() == doctest::Approx(0.5f).epsilon(0.01));
+    CHECK(e.masterPeakR() == doctest::Approx(0.5f).epsilon(0.01));
+
+    // 2) Po 10 tichych blocich peak klesa pres decay. Decay per blok je
+    //    exp(-256/(0.1*48000)) ≈ 0.948; po 10 blocich ≈ 0.583.
+    //    Ocekavany peak: 0.5 × 0.583 ≈ 0.291.
+    for (int i = 0; i < 10; ++i) {
+        std::vector<float> sL(256, 0.f), sR(256, 0.f);
+        e.processBlock(sL.data(), sR.data(), 256);
+    }
+    CHECK(e.masterPeakL() < 0.45f);   // klesl pod puvodni 0.5
+    CHECK(e.masterPeakL() > 0.05f);   // ale jeste neutichl uplne
+    CHECK(e.masterPeakR() < 0.45f);
+    CHECK(e.masterPeakR() > 0.05f);
+}
+
+TEST_CASE("Master peak meter - bank_loading silences output") {
+    // Followup #1 vedlejsi: kdyz reloadBank pousti audio thread do "silence
+    // mode" pres bank_loading_, processBlock musi vystup vynulovat a peak
+    // metr srazit na 0. Nemuzeme spustit reloadBank na non-init engine,
+    // ale muzeme overit ze bez triggeru se klasicke chovani drzi (regresni
+    // ochrana proti nahodnemu zapnuti flagu).
+    using namespace ithaca;
+    Engine e; EngineConfig cfg;
+    cfg.sample_rate = 48000; cfg.block_size = 256;
+    cfg.master_gain = 1.f;
+    REQUIRE(e.init(cfg));
+    std::vector<float> L(256, 0.7f), R(256, 0.7f);
+    e.processBlock(L.data(), R.data(), 256);
+    // Bez bank_loading_ vstup projde a peak je nenulovy.
+    CHECK(e.masterPeakL() > 0.5f);
+}

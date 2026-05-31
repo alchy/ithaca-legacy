@@ -61,8 +61,10 @@ void renderTopBar(AppContext& ctx) {
             if (ImGui::Selectable(label.c_str(), sel)) {
                 if (b != ctx.state.bank_path) {
                     ctx.state.bank_path = b;
-                    // Sync load - UI freezne na ~200ms (acceptable MVP).
-                    ctx.engine.loadBank(b);
+                    // Thread-safe reload: drain → silence flag → disk I/O →
+                    // resume. UI freezne na ~60 ms + disk load (acceptable
+                    // MVP); audio thread mezitim hraje ticho misto crashe.
+                    ctx.engine.reloadBank(b);
                 }
             }
         }
