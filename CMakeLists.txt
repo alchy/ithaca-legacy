@@ -72,6 +72,7 @@ if(TARGET imgui AND TARGET glfw)
         app/gui/panel_keyboard.cpp
         app/gui/panel_diag.cpp
         app/gui/panel_params.cpp
+        app/gui/panel_log.cpp
         app/gui/persistence.cpp)
     target_include_directories(ithaca-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app/gui)
     target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui glfw)

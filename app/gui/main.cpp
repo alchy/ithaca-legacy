@@ -1,12 +1,13 @@
 // app/gui/main.cpp - F8 GUI entry point. AppContext + ImGui skeleton.
-// Panely (top bar, keyboard viz, diag, params, log) pribydou v tascich 8-11.
-// Ted: load state → GLFW okno → ImGui init → AppContext init → render loop
-// s placeholder diag oknem → save state → cisty shutdown.
+// Panely: top bar, keyboard viz, diag, params, log strip.
+// Lifecycle: load state → GLFW okno → ImGui init → AppContext init → render
+// loop (panely + debounced state save) → save state → cisty shutdown.
 #include "app_context.h"
 #include "panel_topbar.h"
 #include "panel_keyboard.h"
 #include "panel_diag.h"
 #include "panel_params.h"
+#include "panel_log.h"
 #include "persistence.h"
 
 #include "imgui.h"
@@ -18,6 +19,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <optional>
 
 // GLFW error callback — bez nej se chyby ztracene loguji jen ad-hoc do stderr.
 static void glfwErrorCb(int err, const char* desc) {
@@ -85,8 +87,10 @@ int main() {
         ithaca::log::Logger::default_().flushRTBuffer();
     });
 
-    // 6. Render loop. Placeholder: jedno diag okno s engine metrikami.
-    //    Panely (Task 8-11) pribydou postupne.
+    // 6. Render loop. Panely top bar + keyboard + diag + params + log strip.
+    //    Persistence debounce: sleduj zmeny GuiState, ulozi po 1s idle (Task 12).
+    std::optional<std::chrono::steady_clock::time_point> dirty_since;
+    GuiState last_saved = ctx.state;
     while (!glfwWindowShouldClose(w)) {
         glfwPollEvents();
         // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
@@ -99,18 +103,40 @@ int main() {
         ImGui::NewFrame();
 
         // Layout: top bar (36px), keyboard viz (180px), diag+params (zbytek
-        // minus log strip 96px, Task 11), log strip (96px).
+        // minus log strip 96px), log strip (96px).
         const float W = (float)ctx.state.window_w;
         const float H = (float)ctx.state.window_h;
         const float topbar_h   = 36.f;
         const float keyboard_h = 180.f;
-        const float log_h      = 96.f;  // zatim placeholder vysky (Task 11)
+        const float log_h      = 96.f;
         renderTopBar       (ctx);
         renderKeyboardPanel(ctx, 0, topbar_h, W, keyboard_h);
         const float panels_y = topbar_h + keyboard_h;
         const float panels_h = H - panels_y - log_h;
         renderDiagPanel    (ctx, 0,        panels_y, W * 0.5f, panels_h);
         renderParamsPanel  (ctx, W * 0.5f, panels_y, W * 0.5f, panels_h);
+        renderLogPanel     (ctx, 0,        H - log_h, W, log_h);
+
+        // Persistence debounce: zaznamenat zmenu, ulozi az po 1s ticha. Pri
+        // tahani slideru se nezbytecne neulozi kazdy frame; jen 1s po dokonceni.
+        bool changed =
+            last_saved.bank_path           != ctx.state.bank_path ||
+            last_saved.midi_port_name      != ctx.state.midi_port_name ||
+            last_saved.master_gain_db      != ctx.state.master_gain_db ||
+            last_saved.resonance_strength  != ctx.state.resonance_strength ||
+            last_saved.release_ms          != ctx.state.release_ms ||
+            last_saved.excite_decay_ms     != ctx.state.excite_decay_ms;
+        if (changed && !dirty_since) {
+            dirty_since = std::chrono::steady_clock::now();
+        }
+        if (dirty_since) {
+            auto now = std::chrono::steady_clock::now();
+            if (now - *dirty_since > std::chrono::seconds(1)) {
+                saveState(defaultStatePath(), ctx.state);
+                last_saved = ctx.state;
+                dirty_since.reset();
+            }
+        }
 
         ImGui::Render();
         int fbw, fbh; glfwGetFramebufferSize(w, &fbw, &fbh);
