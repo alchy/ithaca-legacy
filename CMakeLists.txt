@@ -34,6 +34,7 @@ add_library(ithaca_core STATIC
     engine/voice/voice.cpp
     engine/voice/voice_pool.cpp
     engine/voice/resonance_voice.cpp
+    engine/midi/midi_input.cpp
     engine/pedal/pedal_state.cpp
     engine/resonance/harmonic_proximity.cpp
     engine/resonance/resonance_engine.cpp
@@ -43,7 +44,7 @@ add_library(ithaca_core STATIC
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)
-target_link_libraries(ithaca_core PUBLIC miniaudio_inc)
+target_link_libraries(ithaca_core PUBLIC miniaudio_inc rtmidi)
 if(APPLE)
     target_link_libraries(ithaca_core PUBLIC
         "-framework CoreAudio" "-framework AudioToolbox"

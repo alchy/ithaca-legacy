@@ -50,6 +50,9 @@ void Engine::noteOff(int midi) {
 void Engine::allNotesOff() {
     midi_q_.push({MidiEvent::AllNotesOff, 0, 0});
 }
+void Engine::sustainPedal(uint8_t cc) {
+    midi_q_.push({MidiEvent::Sustain, cc, 0});
+}
 
 void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     if (!initialized_ || !pool_) return;

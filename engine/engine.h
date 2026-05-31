@@ -54,6 +54,10 @@ public:
     void noteOn(int midi, int velocity);
     void noteOff(int midi);
     void allNotesOff();
+    // Sustain pedal CC64 — spojita hodnota 0..127. Promita se do PedalState
+    // a per-blok do rezonanci (viz spec 5.4 + 5.5). Thread-safe (jen vlozi
+    // udalost do MidiQueue).
+    void sustainPedal(uint8_t cc);
 
     // -- Audio thread -- renderuj n_samples do interleaved-by-caller L/R bufferu.
     // Caller buffery nuluje. Drainuje MIDI frontu pred renderem.
