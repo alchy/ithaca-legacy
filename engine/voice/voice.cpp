@@ -5,36 +5,62 @@
 #include "util/log.h"
 
 #include <algorithm>
-#include <cmath>
 
 namespace ithaca {
 
 void Voice::prepareDamp(float engine_sr) {
-    // TODO (faze 6/7, multi-mic / multi-SR): damping crossfade pocita kroky podle
-    // engine_sr, ale sample muze mit jine sample_sr (pos_inc != 1.0). Pri velkem
-    // SR mismatchu (44.1 kHz sampl v 96 kHz enginu) dochazi pri retriggeru
-    // k drobnemu pitch posunu v damping ocasu. Latentni; opravit az s mic mixerem.
-    // Vytvor kratky fade-out ze soucasne pozice → damp_buf_, aby novy ton
-    // (retrigger) nelupnul. Funguje jen kdyz hlas hraje a ma data v preload_head
-    // (faze 4: streaming pozici v ringu damping zatim neresi — TODO faze 5/6).
-    if (!active_ || !mic_) { damping_ = false; return; }
-    int pos = (int)position_;
-    if (pos >= mic_->head_frames) { damping_ = false; return; }
-    int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr), kDampMaxFrames);
-    int avail = (std::min)(damp_frames, mic_->head_frames - pos);
-    if (avail <= 0) { damping_ = false; return; }
-    const float* src = mic_->preload_head.data() + (size_t)pos * 2;
-    float env = vel_gain_;
-    if (releasing_) env *= rel_gain_;
-    float step = 1.f / (float)avail;
-    for (int i = 0; i < avail; ++i) {
-        float fade = 1.f - (float)i * step;
-        damp_buf_[i * 2]     = src[i * 2]     * env * fade * pan_l_;
-        damp_buf_[i * 2 + 1] = src[i * 2 + 1] * env * fade * pan_r_;
-    }
-    damp_len_ = avail;
+    // KRITICKE: cleanup (ring release + active=false) MUSI probehnout VZDY kdyz
+    // je hlas aktivni. Drive prepareDamp delal 3 early-return PRED cleanupem
+    // → pro streamovane hlasy past head se NIC nestalo → voice zustal active
+    // s ringem → retrigger spawnuje novy voice → 2 voicy pro stejnou midi +
+    // ring leak. Pri opakovanem retriggeru (rozklad akordu pod pedalem) se
+    // ring pool (32) vycerpa a nove hlasy dostanou ring=no → hraji jen
+    // preload-head a umiraji fullyloaded_past_head.
+    //
+    // Damping crossfade (fade-out kopie z hlavy samplu) zustava best-effort —
+    // funguje jen kdyz hlas je jeste v head regionu. Pro streamovane voicy
+    // past head je damp_buf_ prazdny (1ms click pri retriggeru, akceptovatelne;
+    // FUTURE: damping z ring bufferu).
+
+    // 1) Best-effort fade-out kopie z hlavy samplu do damp_buf_.
+    damping_  = false;
+    damp_len_ = 0;
     damp_pos_ = 0;
-    damping_  = true;
+    if (active_ && mic_) {
+        const int pos = (int)position_;
+        if (pos < mic_->head_frames) {
+            int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
+                                         kDampMaxFrames);
+            int avail = (std::min)(damp_frames, mic_->head_frames - pos);
+            if (avail > 0) {
+                const float* src = mic_->preload_head.data() + (size_t)pos * 2;
+                float env = vel_gain_;
+                if (releasing_) env *= rel_gain_;
+                float step = 1.f / (float)avail;
+                for (int i = 0; i < avail; ++i) {
+                    float fade = 1.f - (float)i * step;
+                    damp_buf_[i * 2]     = src[i * 2]     * env * fade * pan_l_;
+                    damp_buf_[i * 2 + 1] = src[i * 2 + 1] * env * fade * pan_r_;
+                }
+                damp_len_ = avail;
+                damping_  = true;
+            }
+        }
+    }
+
+    // 2) VZDY cleanup ring + state (i kdyz damp_buf_ nebyl naplnen).
+    if (ring_ && stream_) {
+        stream_->releaseRing(ring_);
+        ring_ = nullptr;
+    }
+    stream_pending_  = false;
+    // DEBUG: zaloguj deaktivaci v dusledku retrigger/steal damping.
+    log::Logger::default_().log("voice_end", log::Severity::Info,
+        "DEACTIVATE midi=%d reason=damped_for_retrigger_or_steal damp_len=%d",
+        midi_, damp_len_);
+    active_          = false;   // pool ho ted muze rovnou ukrast / pouzit znovu
+    releasing_       = false;
+    pending_release_ = false;
 }
 
 void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
@@ -54,10 +80,11 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
 
     asset_ = asset;
     mic_   = (asset && !asset->mics.empty()) ? &asset->mics[0] : nullptr;
-    active_    = (mic_ != nullptr && mic_->head_frames > 0);
-    releasing_ = false;
-    in_onset_  = true;
-    position_  = 0.0;
+    active_           = (mic_ != nullptr && mic_->head_frames > 0);
+    releasing_        = false;
+    pending_release_  = false;   // retrigger ruse predchozi pending stav
+    in_onset_         = true;
+    position_         = 0.0;
     double sample_sr = mic_ ? (double)mic_->file.sample_rate : (double)engine_sr;
     pos_inc_ = pitch_ratio * (sample_sr / (double)engine_sr);
     vel_gain_  = vel_gain;
@@ -110,9 +137,29 @@ float Voice::currentLevel() const noexcept {
 }
 
 bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
+    // DEBUG helper: zaloguj kazdou cestu deaktivace s konkretnim duvodem.
+    // Pozn.: pouziva non-RT logger (mutex) — to porusi RT-safety, ale je to
+    // ladici nastroj. V produkcni faze odstranit nebo nahradit RT ringem +
+    // periodickym flushem.
+    auto log_end = [this](const char* reason) {
+        log::Logger::default_().log("voice_end", log::Severity::Info,
+            "DEACTIVATE midi=%d reason=%s pos=%lld total=%d head=%d "
+            "ring=%s ring_avail=%d ring_eof=%d releasing=%d in_onset=%d "
+            "underrun_fading=%d damping=%d",
+            midi_, reason, (long long)position_,
+            mic_ ? mic_->file.frames : -1,
+            mic_ ? mic_->head_frames : -1,
+            ring_ ? "yes" : "no",
+            ring_ ? ring_->available() : -1,
+            (ring_ && ring_->eof_.load(std::memory_order_relaxed)) ? 1 : 0,
+            (int)releasing_, (int)in_onset_,
+            (int)underrun_fading_, (int)damping_);
+    };
+
     if (!mic_ || mic_->head_frames <= 0) {
         // Nic k hrani; pripadny drzeny ring vrat.
         if (ring_ && stream_) { stream_->releaseRing(ring_); ring_ = nullptr; }
+        if (active_) log_end("no_mic_or_empty_head");
         active_ = false;
         return false;
     }
@@ -157,6 +204,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             if (!ring_->popFrame(L, R)) {
                 // Ring prazdny. Pokud worker oznacil EOF, hlas cisto skoncil.
                 if (ring_->eof_.load(std::memory_order_acquire)) {
+                    log_end("ring_eof_drained");
                     active_ = false;
                     break;
                 }
@@ -164,7 +212,11 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
                     underrun_gain_   = 1.f;
-                    LOG_RT_WARN("voice", "underrun midi=%d", midi_);
+                    log::Logger::default_().log("voice_end", log::Severity::Warning,
+                        "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d "
+                        "ring_eof=%d", midi_, (long long)position_, total_frames,
+                        head_frames, ring_->available(),
+                        (int)ring_->eof_.load(std::memory_order_relaxed));
                 }
                 // Bez dat → fade pres tichy vzorek (0,0).
                 sL = 0.f; sR = 0.f;
@@ -174,6 +226,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             position_ += pos_inc_;
         } else {
             // FullyLoaded sampl prekrocil head (= file frames) → konec.
+            log_end("fullyloaded_past_head");
             active_ = false;
             break;
         }
@@ -183,6 +236,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             ring_->eof_.load(std::memory_order_acquire) &&
             ring_->available() == 0) {
             // Spotrebovan posledni vzorek; cisto vypneme po tomto frame.
+            log_end("hard_guard_file_end");
             active_ = false;
         }
 
@@ -197,7 +251,11 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
         if (releasing_) {
             env *= rel_gain_;
             rel_gain_ += rel_step_;
-            if (rel_gain_ <= 0.f) { rel_gain_ = 0.f; active_ = false; }
+            if (rel_gain_ <= 0.f) {
+                rel_gain_ = 0.f;
+                log_end("release_ramp_zero");
+                active_ = false;
+            }
         }
         // Underrun fast fade (multiplikuje pres ostatni envelopy).
         if (underrun_fading_) {
@@ -205,6 +263,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             underrun_gain_ += underrun_step_;
             if (underrun_gain_ <= 0.f) {
                 underrun_gain_ = 0.f;
+                log_end("underrun_fade_zero");
                 active_ = false;
             }
         }

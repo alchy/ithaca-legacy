@@ -13,11 +13,16 @@
 #include "engine.h"
 #include "render/batch_renderer.h"
 #include "io/audio_device.h"
+#include "midi/midi_input.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ithaca;
@@ -47,7 +52,8 @@ static void printUsage(const char* argv0) {
         "  %s --selftest [--log-level <lvl>]\n"
         "  %s --inspect <dir> [--log-level <lvl>]\n"
         "  %s --render <dir> --out <wav> [--log-level <lvl>]\n"
-        "  %s --play <dir> [--block-size N] [--log-level <lvl>]\n"
+        "  %s --play <dir> [--midi-in <port>] [--block-size N] [--log-level <lvl>]\n"
+        "  %s --midi-list\n"
         "\n"
         "Volby:\n"
         "  --version            vypise verzi a skonci\n"
@@ -56,19 +62,26 @@ static void printUsage(const char* argv0) {
         "  --inspect <dir>      nacti banku a vypis prehled\n"
         "  --render <dir>       nacti banku a renderuj test noty do --out WAV\n"
         "  --out <wav>          vystupni WAV pro --render\n"
-        "  --play <dir>         nacti banku, otevri audio device a zahraj akord\n"
+        "  --play <dir>         nacti banku, otevri audio device a (volitelne) MIDI vstup\n"
+        "  --midi-in <port>     MIDI vstupni port: index (0,1,..), substring nazvu, nebo 'virtual'\n"
+        "                       Bez --midi-in --play jen zahraje testovaci akord C-E-G.\n"
+        "  --midi-list          vypis dostupne MIDI vstupni porty a skonci\n"
         "  --block-size N       audio buffer (frames), default 256 (32..8192).\n"
         "                       Vetsi N = vyssi latence, mensi N = vyssi CPU/risk underrunu.\n"
         "  --resonance-strength <f>  Sila sympaticke rezonance (0..1, default 0.5)\n"
+        "  --log-file <path>    krome konzole loguj i do souboru (append)\n"
         "  --help, -h           tato napoveda\n",
-        ITHACA_VERSION, argv0, argv0, argv0, argv0, argv0);
+        ITHACA_VERSION, argv0, argv0, argv0, argv0, argv0, argv0);
 }
 
 int main(int argc, char* argv[]) {
     bool do_selftest = false;
+    bool do_midi_list = false;
     std::string inspect_dir;
     std::string render_dir, render_out;
     std::string play_dir;
+    std::string midi_in_spec;          // volitelne: "0"/"1" idx, "substring", "virtual"
+    std::string log_file_path;         // volitelne: --log-file <path> → file output
     log::Severity level = log::Severity::Info;
     int           block_size = 256;       // default audio buffer
     float         resonance_strength = 0.5f;  // faze 5: sila sympaticke rezonance
@@ -93,6 +106,10 @@ int main(int argc, char* argv[]) {
             render_out = argv[++i];
         } else if (a == "--play" && i + 1 < argc) {
             play_dir = argv[++i];
+        } else if (a == "--midi-in" && i + 1 < argc) {
+            midi_in_spec = argv[++i];
+        } else if (a == "--midi-list") {
+            do_midi_list = true;
         } else if (a == "--block-size" && i + 1 < argc) {
             block_size = std::atoi(argv[++i]);
             if (block_size < 32 || block_size > 8192) {
@@ -104,6 +121,8 @@ int main(int argc, char* argv[]) {
             resonance_strength = (float)std::atof(argv[++i]);
             if (resonance_strength < 0.f) resonance_strength = 0.f;
             if (resonance_strength > 1.f) resonance_strength = 1.f;
+        } else if (a == "--log-file" && i + 1 < argc) {
+            log_file_path = argv[++i];
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n\n", a.c_str());
             printUsage(argv[0]);
@@ -113,7 +132,28 @@ int main(int argc, char* argv[]) {
 
     auto& L = log::Logger::default_();
     L.setMinSeverity(level);
-    L.setOutputMode(/*console=*/true, /*file=*/false);
+    if (!log_file_path.empty()) {
+        bool ok = L.setLogFile(log_file_path);
+        // Konzole zustava zapnuta i kdyz mame file; uzivatel ma stale prehled.
+        L.setOutputMode(/*console=*/true, /*file=*/ok);
+        if (!ok) std::fprintf(stderr, "WARN: nelze otevrit log file: %s\n",
+                              log_file_path.c_str());
+    } else {
+        L.setOutputMode(/*console=*/true, /*file=*/false);
+    }
+
+    if (do_midi_list) {
+        // Vypise dostupne MIDI vstupni porty (index + nazev) a skonci.
+        auto ports = MidiInput::listPorts();
+        if (ports.empty()) {
+            std::printf("Zadne MIDI vstupni porty nenalezeny.\n");
+            return 0;
+        }
+        std::printf("Dostupne MIDI vstupni porty (%zu):\n", ports.size());
+        for (size_t i = 0; i < ports.size(); ++i)
+            std::printf("  [%zu] %s\n", i, ports[i].c_str());
+        return 0;
+    }
 
     if (!play_dir.empty()) {
         Engine eng;
@@ -131,9 +171,71 @@ int main(int argc, char* argv[]) {
             LOG_ERROR("play", "Nelze otevrit audio device");
             return 1;
         }
-        LOG_INFO("play", "Hraje. Spoustim testovaci akord C-E-G, pak Enter pro konec.");
-        eng.noteOn(60, 100); eng.noteOn(64, 100); eng.noteOn(67, 100);
+
+        // Volitelne otevri MIDI vstup. --midi-in <spec> kde spec je bud:
+        //   - cislo (index do listPorts), napr. "0"
+        //   - "virtual" (vytvori virtualni port pro DAW/loopback)
+        //   - jinak substring nazvu portu (case-sensitive, prvni shoda)
+        MidiInput midi;
+        bool midi_open = false;
+        if (!midi_in_spec.empty()) {
+            if (midi_in_spec == "virtual") {
+                midi_open = midi.openVirtual(eng, "ithaca-cli");
+            } else {
+                // Index?
+                char* endp = nullptr;
+                long idx = std::strtol(midi_in_spec.c_str(), &endp, 10);
+                if (endp != midi_in_spec.c_str() && *endp == '\0') {
+                    midi_open = midi.open(eng, (int)idx);
+                } else {
+                    // Substring match — najdi prvni port co obsahuje spec.
+                    auto ports = MidiInput::listPorts();
+                    int matched = -1;
+                    for (size_t i = 0; i < ports.size(); ++i) {
+                        if (ports[i].find(midi_in_spec) != std::string::npos) {
+                            matched = (int)i; break;
+                        }
+                    }
+                    if (matched < 0) {
+                        LOG_ERROR("play", "MIDI port nenalezen: %s (zkus --midi-list)",
+                                  midi_in_spec.c_str());
+                        dev.stop();
+                        return 1;
+                    }
+                    midi_open = midi.open(eng, matched);
+                }
+            }
+            if (!midi_open) {
+                LOG_ERROR("play", "Nelze otevrit MIDI port: %s", midi_in_spec.c_str());
+                dev.stop();
+                return 1;
+            }
+            LOG_INFO("play", "MIDI vstup: %s. Hraj na klavesy; Enter pro konec.",
+                     midi.portName().c_str());
+        } else {
+            LOG_INFO("play", "Bez MIDI vstupu — zahraji testovaci akord C-E-G, Enter pro konec.");
+            eng.noteOn(60, 100); eng.noteOn(64, 100); eng.noteOn(67, 100);
+        }
+
+        // Background thread pro pravidelny flush RT log ringu (LOG_RT_* z audio
+        // threadu nezapisuji primo do konzole; RT ring se musi vyprazdnit z
+        // non-RT threadu). Frekvence 100 Hz = ~10 ms — dost rychle aby debug
+        // stealing logy nezhltli ring buffer, pomalu dost aby nezatezovaly CPU.
+        std::atomic<bool> log_run{true};
+        std::thread log_thr([&log_run]() {
+            using namespace std::chrono_literals;
+            while (log_run.load(std::memory_order_relaxed)) {
+                log::Logger::default_().flushRTBuffer();
+                std::this_thread::sleep_for(10ms);
+            }
+            // Posledni flush pri ukonceni, aby se neztratily konecne zpravy.
+            log::Logger::default_().flushRTBuffer();
+        });
+
         std::getchar();                          // ceka na Enter
+        log_run.store(false, std::memory_order_relaxed);
+        log_thr.join();
+        if (midi.isOpen()) midi.close();
         dev.stop();
         return 0;
     }

@@ -17,7 +17,19 @@ Engine::~Engine() {
 bool Engine::init(const EngineConfig& cfg) {
     cfg_ = cfg;
     pool_   = std::make_unique<VoicePool>(cfg.max_voices);
-    stream_ = std::make_unique<StreamEngine>(cfg.num_rings, cfg.ring_capacity_frames);
+    // Bezpecnostni klamr: ring pool MUSI kryt plnou polyfonii (hlavni + rezonance),
+    // jinak hraje pri pedalu se rezonanci docasi k `acquireRing → nullptr` a hlas
+    // utichne po preload_head (fullyloaded_past_head ring=no). Vetsi nez cfg jen
+    // zvedneme; mensi nikdy.
+    const int rings_min = cfg.max_voices + cfg.max_resonance_voices;
+    const int rings_actual = (cfg.num_rings >= rings_min) ? cfg.num_rings : rings_min;
+    if (cfg.num_rings < rings_min) {
+        log::Logger::default_().log("stream", log::Severity::Info,
+            "num_rings %d < max_voices+max_resonance=%d, zvysuji na %d",
+            cfg.num_rings, rings_min, rings_actual);
+    }
+    cfg_.num_rings = rings_actual;
+    stream_ = std::make_unique<StreamEngine>(rings_actual, cfg.ring_capacity_frames);
     pool_->setStreamEngine(stream_.get());
     recomputeRefillThreshold();
     stream_->start();
@@ -50,6 +62,9 @@ void Engine::noteOff(int midi) {
 void Engine::allNotesOff() {
     midi_q_.push({MidiEvent::AllNotesOff, 0, 0});
 }
+void Engine::sustainPedal(uint8_t cc) {
+    midi_q_.push({MidiEvent::Sustain, cc, 0});
+}
 
 void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     if (!initialized_ || !pool_) return;
@@ -75,7 +90,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                     resonance_->onSelfNoteOn(m, sr);
                     VoiceSpec spec = selectVoice(bank_, m, v, rr_);
                     if (spec.asset)
-                        pool_->noteOn(m, spec, sr, cfg_.keyboard_spread);
+                        pool_->noteOn(m, spec, sr, cfg_.keyboard_spread, &pedal_);
                     // PO voice noteOn: spusti rezonance harmonicky pribuznych
                     // strun (eligibility uz vidi novy active main voice).
                     resonance_->onPlayedNoteOn(m, v, bank_, *pool_, pedal_, sr);
@@ -84,17 +99,37 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
             }
             case MidiEvent::NoteOff: {
                 int m = (int)e.data1;
+                float rms = scaledReleaseMs();
+                const bool sustained = pedal_.isUndamped(m);
+                log::Logger::default_().log("midi_off", log::Severity::Info,
+                    "noteOff midi=%d release_ms=%.0f cc64=%d sustained=%d",
+                    m, rms, (int)pedal_.sustainCC(), (int)sustained);
+                // Pedal nejdriv noteOff (snizi held_), pak voice off s pedalem
+                // — VoicePool si overi pedal.isUndamped(m): pokud pedal drzi
+                // strunu, sample bude hrat dal jako pending_release; jinak
+                // normalni release ramp.
                 pedal_.noteOff(m);
-                pool_->noteOff(m, scaledReleaseMs(), sr);
+                pool_->noteOffWithPedal(m, pedal_, rms, sr);
                 break;
             }
             case MidiEvent::Sustain: {
                 // CC64 jako spojita hodnota; PedalState prepocita damping_[128].
                 // Resonance se prizpusobi PER-BLOK ve resonance_->processBlock().
+                const bool was_down = pedal_.isPedalDown();
+                log::Logger::default_().log("midi_cc", log::Severity::Info,
+                    "Sustain CC64=%d", (int)e.data1);
                 pedal_.setSustainCC(e.data1);
+                const bool now_down = pedal_.isPedalDown();
+                // Pri prechodu DOWN → UP: aplikuj release na vsechny pending
+                // hlasy, jejichz nota neni aktualne drzena.
+                if (was_down && !now_down) {
+                    pool_->releasePendingNotes(pedal_, scaledReleaseMs(), sr);
+                }
                 break;
             }
             case MidiEvent::AllNotesOff: {
+                log::Logger::default_().log("midi_off", log::Severity::Info,
+                    "AllNotesOff");
                 pedal_.allNotesOff();
                 pool_->allNotesOff(cfg_.release_ms, sr);
                 break;

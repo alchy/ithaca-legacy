@@ -23,7 +23,7 @@ namespace ithaca {
 struct EngineConfig {
     int   sample_rate    = 48000;
     int   block_size     = 256;
-    int   max_voices     = 128;
+    int   max_voices     = 256;     // hlavni voice pool (max kMaxPoolSize)
     float master_gain    = 1.0f;     // linearni
     float release_ms     = 200.f;
     float keyboard_spread = 0.6f;
@@ -34,7 +34,14 @@ struct EngineConfig {
     // -- Faze 4 streaming --
     int   stream_threads        = 1;      // pocet worker threads (zatim 1)
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
-    int   num_rings             = 32;     // velikost ring poolu
+    // Ring pool je SDILENY mezi hlavnimi (max_voices) a rezonancnimi
+    // (max_resonance_voices) hlasy. Default pokryva plnou polyfonii, aby
+    // pri pedalu + rezonanci nedoslo k `acquireRing → nullptr` (hlas by pak
+    // hral jen preload_head ~150 ms a utichl). Engine::init si pohlida, ze
+    // num_rings >= max_voices + max_resonance_voices.
+    // Pamet: num_rings × ring_capacity_frames × 2 (stereo) × 4 (float) bytes.
+    // Default 288 × 8192 × 8 = ~18 MB.
+    int   num_rings             = 288;
     // -- Faze 5 sympaticka rezonance --
     float resonance_strength    = 0.5f;   // 0..1, expose pres CLI
     int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
@@ -54,6 +61,10 @@ public:
     void noteOn(int midi, int velocity);
     void noteOff(int midi);
     void allNotesOff();
+    // Sustain pedal CC64 — spojita hodnota 0..127. Promita se do PedalState
+    // a per-blok do rezonanci (viz spec 5.4 + 5.5). Thread-safe (jen vlozi
+    // udalost do MidiQueue).
+    void sustainPedal(uint8_t cc);
 
     // -- Audio thread -- renderuj n_samples do interleaved-by-caller L/R bufferu.
     // Caller buffery nuluje. Drainuje MIDI frontu pred renderem.
