@@ -3,7 +3,6 @@
 // zlato=zivy akcent), fonty (Cormorant), apply_theme/load_fonts. Header-only,
 // vzor prevzat z icr2 player/gui/theme.h.
 #include "imgui.h"
-#include <cstdint>
 #include <fstream>
 #include <string>
 
@@ -73,9 +72,15 @@ inline void load_fonts(const std::string& ttf_path) {
     ImFontConfig cfg;
     cfg.OversampleH = 2; cfg.OversampleV = 2; cfg.PixelSnapH = true;
 
+    // Letterspacing: ImGui 1.91 ma GlyphExtraSpacing (ImVec2, jen X osa).
+    // (Novejsi ImGui to prejmenovalo na GlyphExtraAdvanceX — my mame 1.91.)
+    cfg.GlyphExtraSpacing.x = 0.f;
     Fonts::body = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 18.f, &cfg, ranges);
+    cfg.GlyphExtraSpacing.x = 1.5f;   // prostrkane eyebrow popisky
     Fonts::eyebrow = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 11.f, &cfg, ranges);
+    cfg.GlyphExtraSpacing.x = 0.f;
     Fonts::value = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 26.f, &cfg, ranges);
+    cfg.GlyphExtraSpacing.x = 6.f;    // prostrkane logo ITHACA
     Fonts::brand = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 20.f, &cfg, ranges);
 
     if (!Fonts::body) { // load failed → default
