@@ -120,7 +120,7 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
             slot->addExcitation(excite);
             // DEBUG: existujici rezonance posilena. RT-safe (onPlayedNoteOn bezi
             // na audio threadu pres processBlock) — LOG_RT do lock-free ringu.
-            LOG_RT_INFO("resonance",
+            LOG_RT_DEBUG("resonance",
                 "EXCITE+ played=%d N=%d harm=%.3f excite=%.4f cc64=%d damping[N]=%.3f",
                 played_midi, N, harm, excite, (int)pedal.sustainCC(),
                 pedal.dampingFor(N));
@@ -152,7 +152,7 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         // damping[N] musi byt > 0 → buď N je drzene (main voice eligibility
         // filter to ma blokovat), nebo damping nevynulovany pri lift.
         // RT-safe (audio thread) — LOG_RT do lock-free ringu.
-        LOG_RT_INFO("resonance",
+        LOG_RT_DEBUG("resonance",
             "SPAWN  played=%d N=%d harm=%.3f excite=%.4f init_gain=%.4f cc64=%d damping[N]=%.3f",
             played_midi, N, harm, excite, init_gain, (int)pedal.sustainCC(),
             pedal.dampingFor(N));
