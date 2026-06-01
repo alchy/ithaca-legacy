@@ -225,7 +225,13 @@ int main(int argc, char* argv[]) {
         // Vertikalni rozpocet: hlavni rada se drzi pri obsahu (strop main_h_max),
         // klaviatura nasleduje hned pod ni; LOG pohlti zbytek vysky. Tim se
         // klaviatura priblizi ke sliderum a LOG ziska vic mista na zpravy.
-        const float vfixed = 2.f*PAD + topbar_h + 2.f + strip_h + kbd_h + 3.f*L::Dims::row_gap;
+        // vfixed zahrnuje i skryte ItemSpacing.y, ktere ImGui vklada mezi 9
+        // naskladanych sekci root okna (topbar, dummy, strip, dummy, hl.rada,
+        // dummy, kbd, dummy, log + trailing) — jinak je obsah o ~9*spacing vyssi
+        // nez okno a da se o par px skrolovat. Pocita se ze stylu (sptd).
+        const float spacing = ImGui::GetStyle().ItemSpacing.y;
+        const float vfixed = 2.f*PAD + topbar_h + 2.f + strip_h + kbd_h
+                           + 3.f*L::Dims::row_gap + 9.f*spacing;
         const float body   = H - vfixed;   // = main_h + log_h
         float main_h = std::min(L::Dims::main_h_max, body - L::Dims::log_h);
         if (main_h < 0.f) main_h = body * 0.5f;
