@@ -5,9 +5,28 @@
 
 #include "sample/bank_index.h"
 
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace ithaca;
+
+TEST_CASE("scanBank detekuje dynamic-velocity dle m### podslozek") {
+    namespace fs = std::filesystem;
+    auto root = fs::temp_directory_path() / "ithaca_dynbank_scan_test";
+    fs::remove_all(root);
+    fs::create_directories(root / "m060");
+    fs::create_directories(root / "m061");
+    std::ofstream(root / "m060" / "aaaa.wav") << "x";
+    std::ofstream(root / "m060" / "bbbb.wav") << "x";   // 2 vrstvy pro notu 60
+    std::ofstream(root / "m061" / "cccc.wav") << "x";   // 1 vrstva pro notu 61
+    std::ofstream(root / "m060" / "notes.txt") << "x";  // ne-wav → preskocit
+
+    BankScan scan = scanBank(root.string());
+    CHECK(scan.format == BankFormat::DynamicVelocity);
+    CHECK(scan.files.size() == 3);                      // jen .wav
+    fs::remove_all(root);
+}
 
 TEST_CASE("parseFixedVelocityName rozparsuje mNNN-velV-fSS.wav") {
     ParsedName p = parseFixedVelocityName("m060-vel3-f48.wav");
