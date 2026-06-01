@@ -91,6 +91,7 @@ bool AppContext::initFromState(const GuiState& s) {
             if (ports[i].find(state.midi_port_name) != std::string::npos) {
                 if (midi.open(engine, (int)i)) {
                     state.midi_port_name = ports[i];   // ulozit presnou jmenovku
+                    midi.setChannel(state.midi_channel);
                     opened = true;
                     break;
                 }
