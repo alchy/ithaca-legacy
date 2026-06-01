@@ -6,6 +6,7 @@
 #include "dsp/limiter.h"
 #include "dsp/bbe.h"
 #include "dsp/agc.h"
+#include "dsp/dsp_chain.h"
 #include <cmath>
 #include <string>
 
@@ -160,4 +161,31 @@ TEST_CASE("AGC: disabled bypass + param round-trip") {
     CHECK(agc.paramCount()==3);
     agc.set(0, 99.f); CHECK(agc.get(0)==doctest::Approx(0.5f));   // TARGET max 0.5
     CHECK(std::string(agc.name())=="AGC");
+}
+
+TEST_CASE("DspChain: vsechny stage disabled = identita") {
+    dsp::DspChain ch; ch.prepare(48000.f, 256);
+    CHECK(ch.stageCount()==3);
+    float L[4]={0.3f,-0.4f,0.5f,-0.6f}, R[4]={0.1f,0.2f,-0.2f,0.4f};
+    float L0[4]; for(int i=0;i<4;++i) L0[i]=L[i];
+    ch.process(L,R,4);
+    for(int i=0;i<4;++i) CHECK(L[i]==L0[i]);
+}
+
+TEST_CASE("DspChain: poradi stage je AGC, BBE, LIMITER") {
+    dsp::DspChain ch; ch.prepare(48000.f, 256);
+    CHECK(std::string(ch.stage(0).name())=="AGC");
+    CHECK(std::string(ch.stage(1).name())=="BBE");
+    CHECK(std::string(ch.stage(2).name())=="LIMITER");
+}
+
+TEST_CASE("DspChain: enabled limiter omezi spicku") {
+    dsp::DspChain ch; ch.prepare(48000.f, 4800);
+    ch.stage(2).setEnabled(true);       // LIMITER
+    ch.stage(2).set(0, -12.f);          // threshold
+    ch.stage(2).set(1, 50.f);
+    float L[4800], R[4800];
+    for(int i=0;i<4800;++i){ L[i]=0.9f; R[i]=0.9f; }
+    ch.process(L,R,4800);
+    CHECK(std::abs(L[4799]) <= dsp::db_to_lin(-12.f) * 1.05f);
 }
