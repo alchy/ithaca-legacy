@@ -17,6 +17,12 @@ TEST_CASE("severity_from_string parsuje zname hodnoty") {
     CHECK(log::severity_from_string("warning") == log::Severity::Warning);
     CHECK(log::severity_from_string("error")   == log::Severity::Error);
     CHECK(log::severity_from_string("fatal")   == log::Severity::Fatal);
+    CHECK(log::severity_from_string("off")     == log::Severity::Off);
+}
+
+TEST_CASE("Off je nejvyssi severity (potlaci i Fatal)") {
+    // Gating je sev >= min; Off > Fatal, takze min=Off nepropusti nic.
+    CHECK((uint8_t)log::Severity::Off > (uint8_t)log::Severity::Fatal);
 }
 
 TEST_CASE("severity_from_string vraci default pro neznamou hodnotu") {
@@ -27,6 +33,7 @@ TEST_CASE("severity_from_string vraci default pro neznamou hodnotu") {
 TEST_CASE("severity_to_string je nenulovy retezec") {
     CHECK(std::string(log::severity_to_string(log::Severity::Info)) == "INFO");
     CHECK(std::string(log::severity_to_string(log::Severity::Error)) == "ERROR");
+    CHECK(std::string(log::severity_to_string(log::Severity::Off)) == "OFF");
 }
 
 TEST_CASE("setMinSeverity / getMinSeverity round-trip") {

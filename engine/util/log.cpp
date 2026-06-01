@@ -16,6 +16,7 @@ const char* severity_to_string(Severity s) {
         case Severity::Warning: return "WARNING";
         case Severity::Error:   return "ERROR";
         case Severity::Fatal:   return "FATAL";
+        case Severity::Off:     return "OFF";
     }
     return "INFO";
 }
@@ -29,6 +30,7 @@ Severity severity_from_string(const char* s, Severity default_value) {
     if (v == "warn" || v == "warning") return Severity::Warning;
     if (v == "error")              return Severity::Error;
     if (v == "fatal")              return Severity::Fatal;
+    if (v == "off")                return Severity::Off;
     return default_value;
 }
 

@@ -28,6 +28,9 @@ namespace ithaca::log {
 
 enum class Severity : uint8_t {
     Debug = 0, Info = 1, Warning = 2, Error = 3, Fatal = 4,
+    // Off > vsechny realne severity → setMinSeverity(Off) potlaci veskery vystup
+    // (gating je sev >= min). Zadna zprava nikdy nema sev == Off.
+    Off = 5,
 };
 
 // Strukturovany log event — predavany Subscriberum (napr. GUI log strip).

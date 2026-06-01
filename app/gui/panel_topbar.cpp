@@ -95,7 +95,7 @@ void renderTopBar(AppContext& ctx) {
     ImGui::PopStyleColor();
     ImGui::SameLine(); ImGui::SetNextItemWidth(120);
     {
-        static const char* kLevels[] = { "debug","info","warn","error","fatal" };
+        static const char* kLevels[] = { "debug","info","warn","error","fatal","off" };
         constexpr int kNum = IM_ARRAYSIZE(kLevels);
         int cur = 1;
         for (int i=0;i<kNum;++i) if (ctx.state.log_level==kLevels[i]){cur=i;break;}
