@@ -18,6 +18,7 @@ TEST_CASE("Persistence round-trip") {
     s.excite_decay_ms     = 4000.f;
     s.max_resonance_voices = 16;
     s.window_x = 200; s.window_y = 300; s.window_w = 800; s.window_h = 600;
+    s.log_level = "debug";
 
     REQUIRE(saveState(p, s));
     auto loaded = loadState(p);
@@ -31,6 +32,7 @@ TEST_CASE("Persistence round-trip") {
     CHECK(loaded->max_resonance_voices == 16);
     CHECK(loaded->window_w == 800);
     CHECK(loaded->window_h == 600);
+    CHECK(loaded->log_level == "debug");
 
     std::filesystem::remove(p);
 }
@@ -50,6 +52,17 @@ TEST_CASE("Persistence wrong schema_version") {
         f << "{\"schema_version\":99,\"bank_path\":\"\"}\n";
     }
     CHECK_FALSE(loadState(p).has_value());
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Persistence schema v1 odmitnuta (zadna zpetna kompatibilita)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v1_schema.json";
+    {
+        std::ofstream f(p);
+        f << "{\"schema_version\":1,\"bank_path\":\"/old/bank\"}\n";
+    }
+    CHECK_FALSE(loadState(p).has_value());   // v1 se zahodi → GUI nastartuje s defaulty
     std::filesystem::remove(p);
 }
 

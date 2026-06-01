@@ -99,10 +99,12 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         std::string sv = findValue(json, "schema_version");
         if (sv.empty()) return std::nullopt;
         s.schema_version = std::stoi(sv);
-        if (s.schema_version != 1) return std::nullopt;
+        if (s.schema_version != 2) return std::nullopt;
         s.bank_search_dir       = findValue(json, "bank_search_dir");
         s.bank_path             = findValue(json, "bank_path");
         s.midi_port_name        = findValue(json, "midi_port_name");
+        s.log_level             = findValue(json, "log_level");
+        if (s.log_level.empty()) s.log_level = "info";
         s.master_gain_db        = std::stof(findValue(json, "master_gain_db"));
         s.resonance_strength    = std::stof(findValue(json, "resonance_strength"));
         s.release_ms            = std::stof(findValue(json, "release_ms"));
@@ -132,6 +134,7 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"bank_search_dir\": \"" << jsonEscape(s.bank_search_dir) << "\",\n";
         f << "  \"bank_path\": \""        << jsonEscape(s.bank_path)      << "\",\n";
         f << "  \"midi_port_name\": \""   << jsonEscape(s.midi_port_name) << "\",\n";
+        f << "  \"log_level\": \""       << jsonEscape(s.log_level)      << "\",\n";
         f << "  \"master_gain_db\": "     << s.master_gain_db             << ",\n";
         f << "  \"resonance_strength\": " << s.resonance_strength         << ",\n";
         f << "  \"release_ms\": "         << s.release_ms                 << ",\n";
