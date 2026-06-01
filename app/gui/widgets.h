@@ -3,8 +3,10 @@
 // adaptovano na nase tokeny (stribro/zlato) a nase indikatory (sustain/peak
 // vodorovne, half-pedal ryska, 88-key klaviatura, grid rysky).
 #include "theme.h"
+#include "layout.h"
 #include "imgui.h"
 #include <algorithm>
+#include <cstdio>
 #include <string>
 
 namespace ithaca::gui::wdg {
@@ -45,6 +47,59 @@ inline bool ParamSliderF(const char* label, float* v, float lo, float hi,
     Eyebrow(label);
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     return ImGui::SliderFloat((std::string("##") + label).c_str(), v, lo, hi, fmt);
+}
+
+// Deco slider: tenka linka (track) + mala zarazka (grab) + hodnota vpravo.
+// Kresleny pres ImDrawList (NE defaultni tlusty ImGui slider). grab_col rozhoduje
+// zlato/stribro. Plnosirkovy. Vraci true kdyz se meni.
+inline bool DecoSlider(const char* label, float* v, float lo, float hi,
+                       const char* fmt = "%.2f",
+                       ImU32 grab_col = Colors::silver2) {
+    using namespace ithaca::gui::layout;
+    const float row_h   = Dims::slider_h;
+    const float track_h = Dims::slider_track;
+    const float grab_h  = Dims::slider_grab;
+    const float grab_w  = 3.f;
+
+    const float width = ImGui::GetContentRegionAvail().x;
+    ImVec2 o = ImGui::GetCursorScreenPos();
+    auto* dl = ImGui::GetWindowDrawList();
+
+    // Label (eyebrow, vlevo) + hodnota (vpravo) na horni linii radku.
+    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
+    dl->AddText(ImVec2(o.x, o.y), Colors::muted, label);
+    char buf[32]; std::snprintf(buf, sizeof(buf), fmt, *v);
+    float tw = ImGui::CalcTextSize(buf).x;
+    dl->AddText(ImVec2(o.x + width - tw, o.y), Colors::ink, buf);
+    if (Fonts::eyebrow) ImGui::PopFont();
+
+    // Track linie ve spodni tretine radku.
+    float track_y = o.y + row_h - grab_h * 0.5f - 2.f;
+    dl->AddRectFilled(ImVec2(o.x, track_y - track_h*0.5f),
+                      ImVec2(o.x + width, track_y + track_h*0.5f),
+                      Colors::line_soft);
+    // Vyplnena cast po grab.
+    float t = (hi > lo) ? (*v - lo) / (hi - lo) : 0.f;
+    t = std::clamp(t, 0.f, 1.f);
+    float gx = o.x + width * t;
+    dl->AddRectFilled(ImVec2(o.x, track_y - track_h*0.5f),
+                      ImVec2(gx, track_y + track_h*0.5f), grab_col);
+    // Zarazka (svisla).
+    dl->AddRectFilled(ImVec2(gx - grab_w*0.5f, track_y - grab_h*0.5f),
+                      ImVec2(gx + grab_w*0.5f, track_y + grab_h*0.5f),
+                      Colors::ink);
+
+    // Interakce: invisible button pres cely radek, drag nastavuje hodnotu.
+    ImGui::SetCursorScreenPos(o);
+    ImGui::InvisibleButton((std::string("##ds_")+label).c_str(), ImVec2(width, row_h));
+    bool changed = false;
+    if (ImGui::IsItemActive()) {
+        float mx = ImGui::GetIO().MousePos.x;
+        float nt = std::clamp((mx - o.x) / width, 0.f, 1.f);
+        float nv = lo + nt * (hi - lo);
+        if (nv != *v) { *v = nv; changed = true; }
+    }
+    return changed;
 }
 
 // Vodorovny gradient fill bar s volitelnou ryskou. Pouziti: sustain (jeden,

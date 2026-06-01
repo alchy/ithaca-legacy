@@ -86,7 +86,7 @@ void renderBankPanel(AppContext& ctx) {
     ImGui::Dummy({0, 10});
 
     // RELOAD
-    if (ImGui::Button("\xE2\x86\xBB RELOAD",
+    if (ImGui::Button("RELOAD",
                       ImVec2(ImGui::GetContentRegionAvail().x - pad, 0))) {
         if (!ctx.state.bank_path.empty()) ctx.engine.reloadBank(ctx.state.bank_path);
     }

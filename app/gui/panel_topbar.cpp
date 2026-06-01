@@ -54,11 +54,11 @@ void renderTopBar(AppContext& ctx) {
     ImGui::SameLine();
     // ⟳ rescan: listPorts() se vola kazdy frame (zive), tlacitko je vizualni
     // hook (a misto pro budouci cache-clear). U+21BB = ↻.
-    ImGui::Button("\xE2\x86\xBB##reload");
+    ImGui::Button("RESCAN##reload");
     ImGui::SameLine(0, 18);
 
     // CHANNEL dropdown: OMNI + 1..16.
-    wdg::Eyebrow("CH"); ImGui::SameLine(); ImGui::SetNextItemWidth(70);
+    wdg::Eyebrow("CH"); ImGui::SameLine(); ImGui::SetNextItemWidth(90);
     char chlbl[8];
     if (ctx.state.midi_channel < 0) std::snprintf(chlbl, sizeof(chlbl), "OMNI");
     else std::snprintf(chlbl, sizeof(chlbl), "%d", ctx.state.midi_channel + 1);

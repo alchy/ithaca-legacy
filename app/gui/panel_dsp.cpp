@@ -15,7 +15,7 @@ void renderDspRack(AppContext& ctx) {
     struct Mod { const char* name; const char* val; bool on; };
     // FUTURE: realne moduly + ovladace z DSP chain featury (AGC/conv/BBE/limiter).
     const Mod mods[] = {
-        {"AGC", "\xE2\x88\x92" "2.1 dB", true},   // −2.1 dB
+        {"AGC", "-2.1 dB", true},
         {"CONVOLVER", "body \xC2\xB7 38%", true},
         {"BBE", "+ presence", true},
         {"LIMITER", "off", false},
@@ -37,7 +37,7 @@ void renderDspRack(AppContext& ctx) {
     ImGui::Dummy({0,4});
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::line));
     if (theme::Fonts::eyebrow) ImGui::PushFont(theme::Fonts::eyebrow);
-    ImGui::TextUnformatted("signal \xE2\x96\xB8 AGC \xE2\x96\xB8 conv \xE2\x96\xB8 bbe \xE2\x96\xB8 lim \xE2\x96\xB8 out");
+    ImGui::TextUnformatted("signal > AGC > conv > bbe > lim > out");
     if (theme::Fonts::eyebrow) ImGui::PopFont();
     ImGui::PopStyleColor();
     ImGui::Unindent(14.f);
