@@ -34,12 +34,10 @@ void renderParamsPanel(AppContext& ctx) {
         ctx.engine.setExciteDecayMs(ctx.state.excite_decay_ms);
     ImGui::Dummy({0, L::Dims::row_gap});
 
-    // MAX RESONANCE — init-only, disabled (zustava default ImGui slider, je read-only).
-    ImGui::BeginDisabled();
-    wdg::Eyebrow("MAX RESONANCE");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - L::Dims::pad_panel);
-    ImGui::SliderInt("##maxres", &ctx.state.max_resonance_voices, 1, 64);
-    ImGui::EndDisabled();
+    // MAX RESONANCE — init-only, read-only DecoSlider (stejny vzhled jako skupina,
+    // jen ztlumeny + bez interakce). Zmena vyzaduje restart aplikace.
+    float maxres = (float)ctx.state.max_resonance_voices;
+    wdg::DecoSlider("MAX RESONANCE", &maxres, 1.f, 64.f, "%.0f", Colors::silver2, false);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vyzaduje restart aplikace");
     // LOG LEVEL + RESET jsou presunute do topbaru (panel_topbar.cpp).
     ImGui::Unindent(L::Dims::pad_panel);

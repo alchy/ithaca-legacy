@@ -52,9 +52,12 @@ inline bool ParamSliderF(const char* label, float* v, float lo, float hi,
 // Deco slider: tenka linka (track) + mala zarazka (grab) + hodnota vpravo.
 // Kresleny pres ImDrawList (NE defaultni tlusty ImGui slider). grab_col rozhoduje
 // zlato/stribro. Plnosirkovy. Vraci true kdyz se meni.
+// enabled=false → read-only: stejny vzhled, ztlumene barvy, bez interakce
+// (pro init-only parametry jako MAX RESONANCE).
 inline bool DecoSlider(const char* label, float* v, float lo, float hi,
                        const char* fmt = "%.2f",
-                       ImU32 grab_col = Colors::silver2) {
+                       ImU32 grab_col = Colors::silver2,
+                       bool enabled = true) {
     using namespace ithaca::gui::layout;
     const float row_h   = Dims::slider_h;
     const float track_h = Dims::slider_track;
@@ -65,12 +68,17 @@ inline bool DecoSlider(const char* label, float* v, float lo, float hi,
     ImVec2 o = ImGui::GetCursorScreenPos();
     auto* dl = ImGui::GetWindowDrawList();
 
+    // Ztlumene barvy v read-only rezimu (init-only parametr).
+    const ImU32 fill_col  = enabled ? grab_col      : Colors::line;
+    const ImU32 grab_dot  = enabled ? Colors::ink    : Colors::muted;
+    const ImU32 value_col = enabled ? Colors::ink    : Colors::muted;
+
     // Label (eyebrow, vlevo) + hodnota (vpravo) na horni linii radku.
     if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
     dl->AddText(ImVec2(o.x, o.y), Colors::muted, label);
     char buf[32]; std::snprintf(buf, sizeof(buf), fmt, *v);
     float tw = ImGui::CalcTextSize(buf).x;
-    dl->AddText(ImVec2(o.x + width - tw, o.y), Colors::ink, buf);
+    dl->AddText(ImVec2(o.x + width - tw, o.y), value_col, buf);
     if (Fonts::eyebrow) ImGui::PopFont();
 
     // Track linie ve spodni tretine radku.
@@ -83,12 +91,18 @@ inline bool DecoSlider(const char* label, float* v, float lo, float hi,
     t = std::clamp(t, 0.f, 1.f);
     float gx = o.x + width * t;
     dl->AddRectFilled(ImVec2(o.x, track_y - track_h*0.5f),
-                      ImVec2(gx, track_y + track_h*0.5f), grab_col);
+                      ImVec2(gx, track_y + track_h*0.5f), fill_col);
     // Zarazka (svisla).
     dl->AddRectFilled(ImVec2(gx - grab_w*0.5f, track_y - grab_h*0.5f),
                       ImVec2(gx + grab_w*0.5f, track_y + grab_h*0.5f),
-                      Colors::ink);
+                      grab_dot);
 
+    // Read-only: jen rezervuj misto (Dummy), zadna interakce.
+    if (!enabled) {
+        ImGui::SetCursorScreenPos(o);
+        ImGui::Dummy(ImVec2(width, row_h));
+        return false;
+    }
     // Interakce: invisible button pres cely radek, drag nastavuje hodnotu.
     ImGui::SetCursorScreenPos(o);
     ImGui::InvisibleButton((std::string("##ds_")+label).c_str(), ImVec2(width, row_h));
