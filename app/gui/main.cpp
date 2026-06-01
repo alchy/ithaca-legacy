@@ -9,6 +9,7 @@
 #include "panel_params.h"
 #include "panel_log.h"
 #include "persistence.h"
+#include "theme.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -118,7 +119,15 @@ int main(int argc, char* argv[]) {
     // 3. ImGui init.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
+    {
+        ithaca::gui::theme::apply_theme();
+        std::string ttf = ithaca::gui::theme::find_asset_path("cormorant/Cormorant-Medium.ttf");
+        if (ttf.empty())
+            std::fprintf(stderr, "WARN: Cormorant TTF nenalezen — default font.\n");
+        ithaca::gui::theme::load_fonts(ttf);
+        ImGuiIO& io = ImGui::GetIO();
+        if (ithaca::gui::theme::Fonts::body) io.FontDefault = ithaca::gui::theme::Fonts::body;
+    }
     ImGui_ImplGlfw_InitForOpenGL(w, true);
     ImGui_ImplOpenGL3_Init("#version 150");
 
