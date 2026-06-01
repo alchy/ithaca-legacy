@@ -64,6 +64,17 @@ Notes (all non-binding):
 - Filenames are free-form; the manifest's `entries` table is what binds a file
   to a (note, layer, mic).
 
+> **Key change from legacy — velocity layering becomes explicit instead of
+> loader-derived.** In the [legacy format](bank-format-legacy.md#5-velocity-layering)
+> the loader does **not** trust the `velN` filename token: it measures each
+> sample's peak RMS at load time and orders the velocity layers by that measured
+> RMS. This proposed format moves that decision into the manifest — `velocity_layers`
+> + `velocity_map` declare the layer count and the velocity→layer mapping
+> directly, so the loader no longer needs to infer ordering from RMS (an optional
+> per-entry `rms_db` may still be supplied to skip load-time measurement). This
+> removes the implicit "loudness == velocity" assumption baked into the legacy
+> loader.
+
 ---
 
 ## 3. Proposed `manifest.json` schema

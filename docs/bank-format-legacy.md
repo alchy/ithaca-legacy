@@ -19,6 +19,13 @@ note, which velocity layer, the recorded sample rate) is **encoded in each
 file's name**. The directory name itself becomes the bank name
 (`sample_store.cpp:21`: `bank.name = path(dir).filename()`).
 
+> **Important — velocity layers are derived in the loader, not taken from the
+> filename.** The `velN` token is advisory only. At load time the loader measures
+> each sample's peak RMS and **orders the velocity layers by that measured RMS**
+> (softest → loudest); the numeric `velN` value is not used for ordering. See
+> [§5 Velocity layering](#5-velocity-layering) for the exact mechanism and code
+> references.
+
 The reference bank shipped for development is
 `/Users/j/SoundBanks/Ithaca/vi-ravenscroft`:
 
