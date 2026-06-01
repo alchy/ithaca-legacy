@@ -70,7 +70,6 @@ if(TARGET imgui AND TARGET glfw)
         app/gui/log_subscriber.cpp
         app/gui/panel_topbar.cpp
         app/gui/panel_keyboard.cpp
-        app/gui/panel_diag.cpp
         app/gui/panel_bank.cpp
         app/gui/panel_indicators.cpp
         app/gui/panel_dsp.cpp
