@@ -20,12 +20,10 @@ bool isBlackKey(int midi) {
 }
 } // namespace
 
-void renderKeyboardPanel(AppContext& ctx, float x, float y, float w, float h) {
-    ImGui::SetNextWindowPos({x, y});
-    ImGui::SetNextWindowSize({w, h});
-    ImGui::Begin("Keyboard", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+void renderKeyboardPanel(AppContext& ctx) {
+    // Klaviatura vyplni dostupnou sirku, vyska fixne 60 px (klavesovy proužek).
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float h = 60.f;
 
     // Cti masku aktivnich not (atomic snapshot).
     bool active[128];
@@ -36,7 +34,7 @@ void renderKeyboardPanel(AppContext& ctx, float x, float y, float w, float h) {
     for (int m = kFirstMidi; m <= kLastMidi; ++m) {
         if (!isBlackKey(m)) ++white_count;
     }
-    if (white_count <= 0) { ImGui::End(); return; }
+    if (white_count <= 0) return;
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float padding = 10.f;
@@ -98,8 +96,6 @@ void renderKeyboardPanel(AppContext& ctx, float x, float y, float w, float h) {
     std::string txt = "Pedal CC64=" + std::to_string(cc);
     dl->AddText({pos.x + padding + 4.f, pedal_y + 11.f},
                 IM_COL32(200, 200, 200, 255), txt.c_str());
-
-    ImGui::End();
 }
 
 } // namespace ithaca::gui

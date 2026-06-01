@@ -11,12 +11,7 @@
 
 namespace ithaca::gui {
 
-void renderLogPanel(AppContext& ctx, float x, float y, float w, float h) {
-    ImGui::SetNextWindowPos({x, y});
-    ImGui::SetNextWindowSize({w, h});
-    ImGui::Begin("Log", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-
+void renderLogPanel(AppContext& ctx) {
     // Snapshot poslednich 50 zaznamu (lokalni copy, GUI thread).
     static std::array<log::LogEntry, 50> tmp;
     const int n = ctx.log_buf.snapshot(tmp.data(), (int)tmp.size());

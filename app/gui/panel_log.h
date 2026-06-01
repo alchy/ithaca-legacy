@@ -2,5 +2,5 @@
 #pragma once
 namespace ithaca::gui {
 struct AppContext;
-void renderLogPanel(AppContext& ctx, float x, float y, float w, float h);
+void renderLogPanel(AppContext& ctx);
 }

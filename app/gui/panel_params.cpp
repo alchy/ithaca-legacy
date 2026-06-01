@@ -7,12 +7,7 @@
 
 namespace ithaca::gui {
 
-void renderParamsPanel(AppContext& ctx, float x, float y, float w, float h) {
-    ImGui::SetNextWindowPos({x, y});
-    ImGui::SetNextWindowSize({w, h});
-    ImGui::Begin("Params", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-
+void renderParamsPanel(AppContext& ctx) {
     if (ImGui::SliderFloat("Resonance str", &ctx.state.resonance_strength, 0.f, 1.f, "%.2f")) {
         ctx.engine.setResonanceStrength(ctx.state.resonance_strength);
     }
@@ -59,8 +54,6 @@ void renderParamsPanel(AppContext& ctx, float x, float y, float w, float h) {
         ctx.engine.setExciteDecayMs(ctx.state.excite_decay_ms);
         ctx.engine.setMasterGain(1.f);
     }
-
-    ImGui::End();
 }
 
 } // namespace ithaca::gui

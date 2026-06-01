@@ -5,11 +5,14 @@
 #include "app_context.h"
 #include "panel_topbar.h"
 #include "panel_keyboard.h"
-#include "panel_diag.h"
+#include "panel_bank.h"
+#include "panel_indicators.h"
+#include "panel_dsp.h"
 #include "panel_params.h"
 #include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
+#include "widgets.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -174,20 +177,43 @@ int main(int argc, char* argv[]) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Layout: top bar (36px), keyboard viz (180px), diag+params (zbytek
-        // minus log strip 96px), log strip (96px).
+        // Layout: TOP BAR (full) → INDICATOR STRIP (full) → MAIN ROW
+        // (BANK 230 | VOICE flex | DSP 280) → KEYBOARD (full) → LOG (full).
         const float W = (float)ctx.state.window_w;
         const float H = (float)ctx.state.window_h;
-        const float topbar_h   = 36.f;
-        const float keyboard_h = 180.f;
-        const float log_h      = 96.f;
-        renderTopBar       (ctx);
-        renderKeyboardPanel(ctx, 0, topbar_h, W, keyboard_h);
-        const float panels_y = topbar_h + keyboard_h;
-        const float panels_h = H - panels_y - log_h;
-        renderDiagPanel    (ctx, 0,        panels_y, W * 0.5f, panels_h);
-        renderParamsPanel  (ctx, W * 0.5f, panels_y, W * 0.5f, panels_h);
-        renderLogPanel     (ctx, 0,        H - log_h, W, log_h);
+        const float COL1 = 230.f, COL3 = 280.f;
+        const float topbar_h = 48.f, strip_h = 78.f, kbd_h = 70.f, log_h = 64.f;
+
+        ImGui::SetNextWindowPos({0,0});
+        ImGui::SetNextWindowSize({W,H});
+        ImGui::Begin("##root", nullptr,
+            ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
+            ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|
+            ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
+
+        ImGui::BeginChild("##topbar", {0, topbar_h}, false); renderTopBar(ctx); ImGui::EndChild();
+        renderIndicatorStrip(ctx, COL1, COL3);   // draws its own strip_h-tall content
+        ImGui::Dummy({0,2});
+
+        const float main_h = H - topbar_h - strip_h - kbd_h - log_h - 24.f;
+        ImGui::BeginChild("##bank",  {COL1, main_h}, false); renderBankPanel(ctx);   ImGui::EndChild();
+        ImGui::SameLine(0,0);
+        ImGui::BeginChild("##voice", {W-COL1-COL3, main_h}, false); renderParamsPanel(ctx); ImGui::EndChild();
+        ImGui::SameLine(0,0);
+        ImGui::BeginChild("##dsp",   {COL3, main_h}, false); renderDspRack(ctx);     ImGui::EndChild();
+
+        ImGui::BeginChild("##kbd", {0, kbd_h}, false); renderKeyboardPanel(ctx); ImGui::EndChild();
+        ImGui::BeginChild("##log", {0, log_h}, false); renderLogPanel(ctx);      ImGui::EndChild();
+
+        // grid rysky na krizeni sloupcove drahy (screen coords)
+        {
+            ImVec2 wp = ImGui::GetWindowPos();
+            wdg::GridTick(wp.x + COL1, wp.y + topbar_h);
+            wdg::GridTick(wp.x + W - COL3, wp.y + topbar_h);
+            wdg::GridTick(wp.x + COL1, wp.y + topbar_h + strip_h);
+            wdg::GridTick(wp.x + W - COL3, wp.y + topbar_h + strip_h);
+        }
+        ImGui::End();
 
         // Persistence debounce: zaznamenat zmenu, ulozi az po 1s ticha. Pri
         // tahani slideru se nezbytecne neulozi kazdy frame; jen 1s po dokonceni.

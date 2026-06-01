@@ -27,12 +27,6 @@ std::vector<std::string> scanBanks(const std::string& search_root) {
 } // namespace
 
 void renderTopBar(AppContext& ctx) {
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({(float)ctx.state.window_w, 36.f});
-    ImGui::Begin("##topbar", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
-
     // Bank dropdown - search root je bank_search_dir (z --bank-dir CLI flag
     // nebo persistovany v state.json). Fallback na parent dir aktualni banky.
     // Pokud ani jedno neexistuje, dropdown bude prazdny (uzivatel musi spustit
@@ -112,8 +106,6 @@ void renderTopBar(AppContext& ctx) {
         ctx.engine.setMasterGain(g);
     }
     ImGui::PopItemWidth();
-
-    ImGui::End();
 }
 
 } // namespace ithaca::gui
