@@ -3,330 +3,349 @@
 > ## ⚠️ PROPOSAL — NOT YET IMPLEMENTED
 >
 > **This format does not exist in code.** There is no loader, no parser, and no
-> data model for it. This document is a **design proposal** intended as a basis
-> for future work. Nothing here is binding: every "would", "should", and
-> "proposed" item is open to revision by whoever implements it.
+> autodetection for it yet. This document is a **design proposal** intended as a
+> basis for future work. Nothing here is binding; everything marked "would",
+> "should", or "proposed" is open to revision by whoever implements it.
 >
 > The only hint of this format in the current codebase is a TYPE badge and a
-> FUTURE comment in `app/gui/panel_bank.cpp:67-68`:
-> *"FUTURE: `ctx.engine.bankType()` once there is a folder-type loader +
-> autodetection; for now we only support legacy."* and the hardcoded `LEGACY ·
-> auto` badge.
+> FUTURE comment in `app/gui/panel_bank.cpp:67-68`
+> (*"FUTURE: `ctx.engine.bankType()` once there is a folder-type loader +
+> autodetection; for now only legacy is supported"*).
 >
-> For the format that **is** implemented today, see
-> **[bank-format-legacy.md](bank-format-legacy.md)**.
+> For the format that **is** implemented today, see the
+> [legacy format reference](bank-format-legacy.md).
 
 ---
 
-## 1. Motivation — why a new format
+## 1. Overview
 
-The [legacy format](bank-format-legacy.md) encodes all structure in WAV
-filenames (`m<midi>-vel<N>-f<sr>.wav`) and carries no metadata of its own. Its
-documented limitations (legacy doc §12) motivate this proposal:
-
-| Legacy limitation | Proposed improvement |
-|-------------------|----------------------|
-| No bank-level metadata | A `bank.json` manifest that describes the bank |
-| Layer count / order inferred by measuring RMS | Explicit `velocity_layers` count + velocity→layer mapping |
-| Sample rate inferred from headers / advisory `fSS` | Explicit `sample_rate` in the manifest |
-| No per-sample loop/gain/tuning | Optional per-entry `gain_db`, `loop`, `tuning_cents` |
-| One `"stereo"` mic only | Optional named `mic_layers` |
-| Fixed filename grammar | Filenames become arbitrary; the manifest maps them |
-| No version field | `version` for forward compatibility |
-
-**Design principle:** the manifest is the source of truth; WAV filenames become
-opaque references. This is additive — legacy banks keep working unchanged via
-autodetection (§5).
-
----
-
-## 2. Proposed directory layout
+The new format is a **folder-per-note** layout. Each MIDI note gets its own
+subfolder; inside it sits an arbitrary number of WAV samples (the velocity
+layers for that note), each named by a **short content hash**. There is **no
+velocity encoded in the filename** and (in the base proposal) **no manifest**:
 
 ```
-my-piano-bank/                 ← bank directory (name overridable in manifest)
-├── bank.json                  ← REQUIRED manifest (presence selects new loader)
-└── samples/                   ← all WAV files live here (path is manifest-relative)
-    ├── A0_p.wav
-    ├── A0_mf.wav
-    ├── A0_ff.wav
-    ├── ...
-    ├── C4_p_close.wav         ← optional mic-layer variants
-    ├── C4_p_room.wav
+<BankName>/
+├── m021/
+│   ├── 3f9a1c2b.wav        ← one velocity layer for MIDI 21 (A0)
+│   ├── a7e0445d.wav        ← another layer
+│   └── c81b9f30.wav
+├── m022/
+│   ├── 9d2e7a10.wav
+│   └── 11ff6c8e.wav
+├── ...
+└── m108/
+    ├── 0042ab7e.wav
     └── ...
 ```
 
-Notes (all non-binding):
+The crucial idea: **the loader derives the entire velocity layering at load
+time.** For each note it reads every WAV in the folder, measures loudness, sorts
+the samples, and uses *that* as the note's velocity layers — so different notes
+can have **different numbers of layers**, and the velocity resolution varies
+across the keyboard accordingly.
 
-- The manifest filename **would** be `bank.json`. `manifest.json` **could** be
-  accepted as an alias (open question §7).
-- Sample paths in the manifest **would** be resolved relative to the bank
-  directory, so a `samples/` subfolder is a convention, not a requirement.
-- Filenames are free-form; the manifest's `entries` table is what binds a file
-  to a (note, layer, mic).
+This is deliberately a small step from legacy. The legacy loader *already*
+builds a per-note, variable-length, RMS-sorted layer table
+([legacy §5](bank-format-legacy.md#5-velocity-layering)) and the playback path
+*already* maps incoming MIDI velocity onto a variable slot count
+(`patch_manager.cpp:18-25`). **The new format reuses that in-memory model and
+that velocity mapping unchanged** — only the on-disk layout and the loader
+change.
 
-> **Key change from legacy — velocity layering becomes explicit instead of
-> loader-derived.** In the [legacy format](bank-format-legacy.md#5-velocity-layering)
-> the loader does **not** trust the `velN` filename token: it measures each
-> sample's peak RMS at load time and orders the velocity layers by that measured
-> RMS. This proposed format moves that decision into the manifest — `velocity_layers`
-> + `velocity_map` declare the layer count and the velocity→layer mapping
-> directly, so the loader no longer needs to infer ordering from RMS (an optional
-> per-entry `rms_db` may still be supplied to skip load-time measurement). This
-> removes the implicit "loudness == velocity" assumption baked into the legacy
+---
+
+## 2. Directory & file layout
+
+### 2.1 Note folders
+
+- One subfolder per recorded MIDI note, named `m` + **3-digit zero-padded MIDI
+  number** — the same `m###` convention as legacy (`m021` = MIDI 21 = A0,
+  `m108` = MIDI 108 = C8). Notes not represented simply have no folder.
+- The bank name is the top-level directory name (same rule as legacy:
+  `bank.name = path(dir).filename()`).
+- Scanning is per-note: the loader lists `m###/` subfolders, then lists the WAV
+  files inside each. (Legacy, by contrast, scans a single flat directory.)
+
+### 2.2 Sample filenames — short content hash
+
+Each WAV is named by a **truncated content hash** (e.g. the first 8–12 hex
+characters of a SHA-256 over the file's audio data), plus the `.wav` extension:
+`3f9a1c2b.wav`.
+
+Rationale:
+
+- **Opaque to the loader.** The loader never parses the name — ordering comes
+  from measured loudness (§4), not from the filename. The hash only has to be
+  **unique within its note folder**.
+- **Content-addressed.** Identical recordings dedupe to the same name; a
+  re-export with changed audio gets a new name automatically.
+- **No naming constraints.** No velocity index, sample-rate tag, or ordering is
+  baked into the name — removing the brittle, semantics-in-the-filename problem
+  of the legacy format.
+
+> A real hash is the intended convention, but the format only *requires*
+> per-folder-unique WAV filenames. The hash scheme itself is not validated by the
 > loader.
 
----
+### 2.3 What is stored vs. derived
 
-## 3. Proposed `manifest.json` schema
+Nothing structural is stored on disk except **the MIDI note (folder name)**.
+Everything else is derived at load time, exactly like legacy derives loudness:
 
-Annotated schema. Optional fields are marked `// optional`. Types are
-informal.
+| Property            | Source |
+|---------------------|--------|
+| MIDI note           | Folder name `m###` |
+| Sample rate         | WAV header (per file), via `peekWavInfo` — not declared |
+| Channels            | WAV header; mono is up-mixed to stereo (as legacy, `wav_reader.cpp:115`) |
+| Number of velocity layers | **= number of WAV files in the note folder** (varies per note) |
+| Layer ordering (soft→loud) | **Measured peak RMS in dBFS** (§4) |
+| Velocity → layer mapping | Derived at play time from the layer count (§5) |
 
-```jsonc
-{
-  // --- Forward-compat / identity ---
-  "format": "ithaca-bank",        // fixed discriminator string
-  "version": 1,                   // integer; loader rejects versions it doesn't know
-
-  "name": "VI Ravenscroft 275",   // human bank name (overrides directory name)
-  "description": "...",           // optional, free text
-  "credits": "...",               // optional
-  "license": "...",               // optional
-
-  // --- Global audio properties ---
-  "sample_rate": 48000,           // Hz; authoritative declared rate
-  "channels": 2,                  // 1 = mono, 2 = stereo (matches WAV reader output)
-
-  // --- MIDI coverage ---
-  "midi_range": { "from": 21, "to": 108 },   // inclusive; informational + validation
-
-  // --- Velocity layering ---
-  "velocity_layers": 8,           // explicit layer count (replaces RMS-inferred ordering)
-
-  // velocity -> layer index mapping. Each row: incoming MIDI velocity range
-  // [lo,hi] (1..127) maps to layer index (0-based, 0 = softest).
-  // The loader would use THIS instead of measuring RMS at load time.
-  "velocity_map": [
-    { "vel": [1,   16],  "layer": 0 },
-    { "vel": [17,  32],  "layer": 1 },
-    { "vel": [33,  48],  "layer": 2 },
-    { "vel": [49,  64],  "layer": 3 },
-    { "vel": [65,  80],  "layer": 4 },
-    { "vel": [81,  96],  "layer": 5 },
-    { "vel": [97,  112], "layer": 6 },
-    { "vel": [113, 127], "layer": 7 }
-  ],
-
-  // --- Optional mic layers (close/room/...) ---
-  // optional; if absent, a single implicit "stereo" mic is assumed (legacy-like).
-  "mic_layers": [                 // optional
-    { "id": "close", "name": "Close",  "default_gain_db": 0.0 },
-    { "id": "room",  "name": "Room",   "default_gain_db": -3.0 }
-  ],
-
-  // --- Sample entries ---
-  // The core mapping table. One entry per (note, layer[, mic]). `file` is
-  // relative to the bank dir. Optional per-entry overrides cover the metadata
-  // legacy cannot express.
-  "entries": [
-    {
-      "midi": 21,                 // MIDI note this sample plays
-      "layer": 0,                 // velocity layer index (0-based)
-      "mic": "close",             // optional; references mic_layers[].id; omit if no mics
-      "file": "samples/A0_p_close.wav",
-
-      "gain_db": 0.0,             // optional per-sample trim, applied at playback
-      "tuning_cents": 0.0,        // optional pitch offset in cents
-      "loop": {                   // optional sustain loop (frames, source SR)
-        "start": 132000,
-        "end":   180000,
-        "mode":  "forward"        // "forward" | "ping-pong" (proposed)
-      },
-      "rms_db": -24.3             // optional precomputed peak RMS (skips load-time measure)
-    }
-    // ... one entry per sample ...
-  ],
-
-  // --- Optional explicit resonance/streaming hints ---
-  "preload_ms": 150,              // optional; default falls back to engine config
-  "resonance_window_ms": 500      // optional; default falls back to engine config
-}
-```
-
-### Realistic minimal example
-
-A small bank without mic layers, two notes, two velocity layers:
-
-```json
-{
-  "format": "ithaca-bank",
-  "version": 1,
-  "name": "Tiny Demo Piano",
-  "sample_rate": 48000,
-  "channels": 2,
-  "midi_range": { "from": 60, "to": 61 },
-  "velocity_layers": 2,
-  "velocity_map": [
-    { "vel": [1, 64],   "layer": 0 },
-    { "vel": [65, 127], "layer": 1 }
-  ],
-  "entries": [
-    { "midi": 60, "layer": 0, "file": "samples/C4_soft.wav" },
-    { "midi": 60, "layer": 1, "file": "samples/C4_loud.wav", "gain_db": -1.5 },
-    { "midi": 61, "layer": 0, "file": "samples/Cs4_soft.wav" },
-    { "midi": 61, "layer": 1, "file": "samples/Cs4_loud.wav" }
-  ]
-}
-```
+There is **no manifest in the base proposal** — this keeps the format as simple
+as legacy while removing the filename-encoding problems. Optional bank-level
+metadata (display name, license, per-sample loop/gain) is discussed as an
+extension in §8.
 
 ---
 
-## 4. How this maps to the existing data model
+## 3. In-memory model (unchanged from legacy)
 
-The proposed manifest maps cleanly onto the existing
-`Bank → NoteSlots[128] → VelocitySlot → SampleAsset → MicLayer` hierarchy
-(see legacy doc §9, defined in `engine/sample/sample_types.h`), so a folder
-loader **would not require a new in-memory model**:
+The loader would produce the **same** `Bank` structure legacy produces
+(`engine/sample/sample_types.h`), so the voice/engine layers need no changes:
 
-- `velocity_layers` / `velocity_map` → ordering and count of `VelocitySlot`s
-  (no RMS sort needed; `rms_db` taken from manifest or measured if absent).
-- `mic_layers` + per-entry `mic` → multiple `MicLayer`s under one `SampleAsset`
-  (the multi-mic axis that legacy leaves degenerate).
-- per-entry `loop` / `gain_db` / `tuning_cents` → **new fields** that would need
-  adding to `MicLayer` / `SampleAsset` (these do not exist today; an open
-  question is whether to extend the structs or thread the metadata separately).
-- `BankFormat` already has a third enum value usable for this format:
-  `BankFormat::Extended` (`sample_types.h:16`). The proposal could reuse it or
-  add a dedicated `BankFormat::Folder`.
+```
+Bank
+ └─ notes[midi] : NoteSlots          (recorded = true if the m### folder exists)
+      └─ slots[] : VelocitySlot       (sorted ascending by rms_db; length = file count)
+           ├─ rms_db                  (measured peak RMS, soft→loud ordering key)
+           └─ variants[] : SampleAsset
+                ├─ peak_rms_db, attack_end_frame
+                └─ mics[] : MicLayer  (single "stereo" mic, head + optional resonance)
+```
+
+`NoteSlots.slots` is already a variable-length vector sorted ascending by
+`rms_db` (`sample_types.h:75-77`). The new loader simply fills it from a folder
+instead of from `velN`-tagged flat files.
 
 ---
 
-## 5. Autodetection rule
+## 4. Loader algorithm (proposed `loadFolderBank`)
 
-Proposed selection logic, run when a bank directory is opened:
+A future `loadFolderBank(dir, logger, …)` would mirror the existing
+`loadLegacyBank` signature (`sample_store.h:23`) and, for each note folder:
 
-```
-if (exists(dir / "bank.json") || exists(dir / "manifest.json"))
-    → NEW folder format   → loadFolderBank(dir, ...)
-else
-    → fall back to LEGACY → loadLegacyBank(dir, ...)   // unchanged
-```
+1. **Enumerate** `<BankName>/m###/*.wav`.
+2. For each WAV: build a `MicLayer` (head preload + optional resonance window),
+   exactly as legacy does (`sample_store.cpp`), and **measure peak RMS** with the
+   existing `measurePeakRmsDb` (`sample_loader.cpp`, sliding ~50 ms window, max →
+   dBFS).
+3. Wrap each into a `VelocitySlot` with `slot.rms_db = measured RMS`.
+4. **Sort the note's slots ascending by `rms_db`** (softest → loudest) — the same
+   `std::sort` legacy uses (`sample_store.cpp:152-158`).
+5. The resulting slot count is **whatever the folder contained** — the loader
+   does not require a fixed number, nor that counts match across notes.
 
-This is purely additive: a directory with no manifest behaves exactly as today.
-Banks that contain both a manifest and legacy-named WAVs would prefer the
-manifest.
+The result is an ordinary `NoteSlots` whose `slots[]` is RMS-sorted. No velocity
+information is needed on disk because **velocity → layer is resolved at play
+time** (§5).
 
-### Proposed engine API (parallel to legacy)
+> The peak-RMS measurement, attack-end detection, FullyLoaded/Streamed decision,
+> and resonance-window preload are all reused verbatim from the legacy loader —
+> only the file discovery differs (per-note folder vs. flat directory).
 
-For structural parallelism with the implemented
-`loadLegacyBank` (`engine/sample/sample_store.h:23-27`), a folder loader
-**would** have a matching signature:
+---
+
+## 5. Velocity → layer mapping (proportional, variable density)
+
+At play time, an incoming MIDI velocity `v ∈ [1,127]` selects a layer. The
+engine **already** does this for the variable-length, RMS-sorted slot list, in
+`slotIndexForVelocity` (`patch_manager.cpp:18-25`):
 
 ```cpp
-// PROPOSED — does not exist.
-Bank loadFolderBank(const std::string& dir, log::Logger& logger,
-                    int cache_budget_mb = 0,
-                    int midi_from = 0, int midi_to = 127,
-                    int preload_ms = 150,            // overridden by manifest if present
-                    int resonance_window_ms = 500);  // overridden by manifest if present
-```
-
-And the engine would gain a dispatcher plus a type query to back the GUI badge
-(`panel_bank.cpp:67`):
-
-```cpp
-// PROPOSED.
-BankFormat Engine::bankType() const;        // returns bank_.format
-bool       Engine::loadBank(const std::string& dir) {
-    bank_ = (detectBankFormat(dir) == BankFormat::Legacy)
-              ? loadLegacyBank(dir, ...)
-              : loadFolderBank(dir, ...);
-    return bank_.loaded_samples > 0;
+int slotIndexForVelocity(int velocity, int nslots) {
+    if (nslots <= 1) return 0;
+    float t   = (float)velocity / 127.f;            // 0..1
+    int   idx = (int)((t * (nslots - 1)) + 0.5f);   // round to nearest layer
+    return clamp(idx, 0, nslots - 1);
 }
 ```
 
-The GUI's TYPE badge (`app/gui/panel_bank.cpp:69-71`, currently hardcoded
-`LEGACY`) would then read `ctx.engine.bankType()` and the `· auto` suffix would
-reflect that detection actually happened.
+This is a **proportional** mapping: the velocity axis `0..127` is divided into
+`nslots` bands of roughly equal width `≈ 127 / (nslots − 1)`, and the layer is
+picked by rounding. Because `nslots` is **per note** (= file count in that
+folder), the **velocity resolution varies across the keyboard** — exactly the
+intended behaviour:
+
+| Note folder | Files (layers) | Approx. band width | Effect |
+|-------------|----------------|--------------------|--------|
+| `m036` | 4 layers  | ~42 velocities | coarse dynamics |
+| `m060` | 8 layers  | ~18 velocities | medium |
+| `m072` | 12 layers | ~11 velocities | **dense** dynamics |
+
+So a note recorded with more samples automatically gets finer velocity
+resolution; "some ranges are denser" falls out of the per-note layer count with
+no extra metadata.
+
+### 5.1 Optional: non-uniform (curve-weighted) mapping
+
+The baseline mapping above is **linear** in velocity. If denser resolution is
+wanted in specific dynamic regions *within a note* (e.g. more layers spent
+around `mf`–`f`), the mapping could be made non-linear by warping `t` through a
+monotonic curve before indexing, e.g. `t' = pow(t, γ)`. This is an **optional
+extension / open question** (§8) — the base proposal keeps the existing linear
+`slotIndexForVelocity` and gets variable density purely from the per-note layer
+count.
+
+> Velocity *gain* shaping is separate and already perceptual-quadratic
+> (`patch_manager.cpp:67-68`, `vel_gain = (v/127)²`); the mapping above only
+> chooses *which sample* plays, not its gain.
 
 ---
 
-## 6. Migration: wrapping an existing legacy bank
+## 6. Round-robin via peak-RMS tolerance clustering
 
-An existing legacy bank can be upgraded **without moving or renaming any WAV
-files** by dropping a generated `bank.json` next to them that points at the
-existing `m###-vel#-f##.wav` files:
+When two samples of the **same note** have nearly equal peak RMS (within a small
+dB tolerance), they represent the *same* dynamic captured as different takes —
+i.e. **round-robin variants**, not distinct velocity layers. The new loader
+**would cluster them into one `VelocitySlot` with multiple `variants[]`**.
 
-```json
-{
-  "format": "ithaca-bank",
-  "version": 1,
-  "name": "vi-ravenscroft",
-  "sample_rate": 48000,
-  "channels": 2,
-  "midi_range": { "from": 21, "to": 108 },
-  "velocity_layers": 8,
-  "velocity_map": [
-    { "vel": [1, 16],    "layer": 0 },
-    { "vel": [17, 32],   "layer": 1 },
-    { "vel": [33, 48],   "layer": 2 },
-    { "vel": [49, 64],   "layer": 3 },
-    { "vel": [65, 80],   "layer": 4 },
-    { "vel": [81, 96],   "layer": 5 },
-    { "vel": [97, 112],  "layer": 6 },
-    { "vel": [113, 127], "layer": 7 }
-  ],
-  "entries": [
-    { "midi": 21, "layer": 0, "file": "m021-vel0-f48.wav" },
-    { "midi": 21, "layer": 1, "file": "m021-vel1-f48.wav" },
-    // ... 704 entries, one per legacy WAV ...
-    { "midi": 108, "layer": 7, "file": "m108-vel7-f48.wav" }
-  ]
-}
+### 6.1 Implementation status (verified)
+
+- **Round-robin *selection* is implemented.** `selectVoice` already picks a
+  random variant `≠` the last one played when a slot has more than one variant
+  (`patch_manager.cpp:51-63`).
+- **Round-robin *clustering* is NOT implemented.** The legacy loader stores
+  **exactly one variant per slot** (`sample_store.cpp:137`; one `VelocitySlot`
+  per WAV). Nothing groups near-equal-RMS samples. The data model documents this
+  as future work (`sample_types.h:6-8` "round-robin … in later phases";
+  `sample_types.h:69` "Legacy: 1").
+
+So the playback path is **ready**; the only missing piece is populating
+`variants[]` at load time. Once the folder loader clusters samples into a slot's
+`variants[]`, round-robin works with **no playback-side change**.
+
+### 6.2 Proposed clustering (and the fallback)
+
+After measuring peak RMS for every WAV in a note folder and **sorting ascending**
+(§4), walk the sorted list and group with an **anchor-bounded greedy** pass:
+
+```
+clusters = []
+for sample s in rms_sorted:
+    if clusters is empty OR (s.rms_db - clusters.last.anchor_rms_db) > TOL_DB:
+        clusters.push(new cluster, anchor = s.rms_db)   # start new velocity layer
+    clusters.last.add(s)                                 # round-robin variant
 ```
 
-A small converter tool **could** generate this by running the existing
-`scanBank()` / `parseLegacyName()` logic (`bank_index.cpp:28-44`, `71-114`) over
-the directory and emitting one entry per parsed file, using the `vel` tag as the
-`layer` index and `fSS` as `sample_rate`. Because the WAV files are untouched,
-the bank still loads as legacy when the manifest is removed.
+- Each **cluster → one `VelocitySlot`**; its members → `variants[]`.
+- `slot.rms_db` = the cluster's representative RMS (anchor or mean).
+- The slot count (= cluster count) feeds the velocity→layer mapping in §5.
+
+**If round-robin is *not* implemented** (the current reality), the loader uses
+the **same clustering** but keeps only the **first** sample of each cluster
+(`variants = [first]`) and discards the near-duplicates — i.e. "for a given
+velocity tolerance, just use the first hash". Either way the clustering pass is
+new loader work; the only difference is whether extras become round-robin
+variants or are dropped.
+
+### 6.3 Tolerance — design notes
+
+- **Unit: decibels, not linear.** RMS is already measured in dBFS
+  (`measurePeakRmsDb`), and dB is logarithmic, so a *fixed dB* tolerance is
+  perceptually uniform across the dynamic range — no need for a relative/linear
+  threshold.
+- **Default ≈ 1.5 dB.** Round-robin takes of one hit typically differ by well
+  under ~1 dB, while a deliberate velocity *layer* step is usually larger. ~1.5 dB
+  separates "same dynamic, different take" from "next layer". The exact value is
+  tunable (open question §8).
+- **Anchor-bounded, not single-linkage.** Grouping must compare each candidate to
+  the **cluster's anchor**, not merely to its immediate predecessor. Single-linkage
+  ("within TOL of the previous sample") would *chain* a smooth loudness ramp into
+  one giant cluster. Anchor-bounding caps a cluster's span at ≤ `TOL_DB`, so a
+  gradual ramp still produces several layers.
+- **Order-stable & deterministic.** The pass runs over the RMS-sorted list, so
+  the result is reproducible; round-robin *playback* order is randomized at run
+  time (`lcgNext`, `patch_manager.cpp:60`), not baked into the bank.
+- **Open edges:** anchor = cluster-start vs running mean; whether `TOL_DB` is a
+  fixed constant, a per-bank value, or auto-derived from the loudness histogram
+  (e.g. gaps between natural clusters). The base proposal: fixed `TOL_DB = 1.5`,
+  anchor = cluster-start.
 
 ---
 
-## 7. Open questions for the implementer
+## 7. Autodetection (legacy vs. new)
 
-These are explicitly **unresolved**; the implementer decides:
+A future `Engine::bankType()` / loader dispatch would pick the format by
+inspecting the bank directory:
 
-1. **Manifest filename.** `bank.json` only, or also accept `manifest.json`? The
-   GUI scan in `panel_bank.cpp:17-26` treats any subdirectory as a bank
-   candidate, so detection must be cheap.
-2. **`BankFormat` enum.** Reuse `BankFormat::Extended`
-   (`sample_types.h:16`, currently rejected by `loadLegacyBank` at
-   `sample_store.cpp:32-37`) or add `BankFormat::Folder`?
-3. **Struct extension vs. side table.** `loop`, `gain_db`, `tuning_cents` have no
-   home in `MicLayer`/`SampleAsset` today. Extend the structs, or carry the
-   metadata in a parallel map keyed by sample?
-4. **Velocity selection authority.** Legacy reorders by measured RMS
-   (`sample_store.cpp:152-158`). The new format declares `velocity_map`
-   explicitly — should the loader still measure RMS as a fallback when
-   `rms_db` is omitted, or require it?
-5. **Mic-layer playback.** Multiple mics imply summing/mixing logic in the voice
-   path that does not exist yet; what is the mixing/gain model?
-6. **Loop support in the streaming engine.** The current streaming model
-   (head + resonance window, legacy doc §8) has no loop concept; sustain loops
-   would need ring-buffer/loop-point support.
-7. **Path resolution & security.** Should sample paths be restricted to within
-   the bank directory (no `..` escapes)?
-8. **Validation policy.** On a malformed/partial manifest, fail hard or
-   degrade gracefully the way legacy silently skips bad files?
-9. **Sample-rate mismatch.** If a WAV header disagrees with the manifest
-   `sample_rate`, warn, resample, or reject?
+- If it contains **`m###/` subdirectories** → new folder format → `loadFolderBank`.
+- Else if it contains flat **`m###-vel#-f##.wav`** files → `loadLegacyBank`.
+- Else → empty / unrecognised bank.
+
+This drives the GUI TYPE badge (`panel_bank.cpp`, currently hard-coded
+`LEGACY`). Detection should be cheap (a single directory listing).
 
 ---
 
-## 8. Status recap
+## 8. Migration & extensions
 
-Nothing in this document is implemented. The implemented format is
-[legacy](bank-format-legacy.md). This proposal exists so that future folder-bank
-work has a concrete starting point rather than starting from the bare GUI hint
-in `app/gui/panel_bank.cpp`.
+### 8.1 Converting a legacy bank
+
+A legacy bank converts to the new layout without re-encoding audio:
+
+```
+for each  m<NNN>-vel<K>-f<SS>.wav  in  <LegacyBank>/:
+    hash = first 12 hex of sha256(file)
+    move/copy to  <NewBank>/m<NNN>/<hash>.wav
+```
+
+The `vel<K>` tag is simply dropped — it was advisory in legacy anyway
+([legacy §5](bank-format-legacy.md#5-velocity-layering)). RMS ordering on load
+reproduces the same layer order.
+
+### 8.2 Optional metadata side-file (future)
+
+If bank-level metadata is later needed (display name ≠ folder name, license,
+default master trim, per-sample loop points or gain offsets, named mic layers),
+an **optional** `bank.json` could be added *alongside* the folders without
+changing the core layout — present → richer metadata, absent → everything
+derived as above. This is intentionally **out of the base proposal** to keep v1
+as simple as legacy.
+
+### 8.3 Open questions for the implementer
+
+- **Hash spec:** which algorithm / truncation length; is collision handling
+  needed, or is per-folder uniqueness assumed?
+- **Round-robin tolerance (§6):** the `TOL_DB` value (default ~1.5 dB), anchor =
+  cluster-start vs running mean, and whether round-robin variants are kept or the
+  first-only fallback is used (clustering pass is required either way).
+- **Velocity curve (§5.1):** keep linear `slotIndexForVelocity`, or support a
+  per-bank/per-note warp for denser bands?
+- **Sample-rate consistency:** legacy reads SR per WAV header; should the folder
+  loader enforce a single SR per bank, or allow mixed and resample?
+- **`bankType()` placement:** new enum value vs. reuse of the existing
+  `BankFormat::Extended` (`sample_store.cpp:32-37`, currently rejected).
+- **Metadata side-file (§8.2):** needed for v1, or strictly deferred?
+
+---
+
+## 9. Comparison with legacy
+
+| Aspect | Legacy (implemented) | New folder format (proposed) |
+|--------|----------------------|------------------------------|
+| Layout | Flat dir of WAVs | One `m###/` subfolder per note |
+| Filename | `m###-vel#-f##.wav` (semantics encoded) | `<hash>.wav` (opaque) |
+| Velocity in name | `vel#` token (advisory, ignored for ordering) | none |
+| Layer count per note | = matching files (variable) | = files in folder (variable) |
+| Layer ordering | Measured peak RMS (`velN` ignored) | Measured peak RMS (identical) |
+| Velocity → layer | `slotIndexForVelocity` (proportional) | **same** `slotIndexForVelocity` |
+| Round-robin | selection supported, but loader fills 1 variant/slot → never active | cluster within ~1.5 dB peak RMS → `variants[]` → round-robin active |
+| Sample rate | WAV header (`f##` tag advisory) | WAV header (no tag) |
+| Manifest | none | none (optional side-file later, §8.2) |
+| In-memory model | `Bank`/`NoteSlots`/`VelocitySlot` | **identical** |
+| Loader | `loadLegacyBank` (implemented) | `loadFolderBank` (proposed) |
+
+The net change is: **a different on-disk layout and a new loader that fills the
+same data model** — the velocity-layer derivation and playback selection are
+already what the engine does today.
