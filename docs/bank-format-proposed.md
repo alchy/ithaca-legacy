@@ -1,19 +1,25 @@
-# Ithaca Sample-Bank Format — NEW / FOLDER FORMAT (DESIGN PROPOSAL)
+# Ithaca Sample-Bank Format — DYNAMIC-VELOCITY (FOLDER) FORMAT
 
-> ## ⚠️ PROPOSAL — NOT YET IMPLEMENTED
+> ## ⚙️ PARTIALLY IMPLEMENTED
 >
-> **This format does not exist in code.** There is no loader, no parser, and no
-> autodetection for it yet. This document is a **design proposal** intended as a
-> basis for future work. Nothing here is binding; everything marked "would",
-> "should", or "proposed" is open to revision by whoever implements it.
+> The two formats are now named **fixed-velocity** (the flat `m###-vel#-f##.wav`
+> bank — see the [fixed-velocity reference](bank-format-legacy.md)) and
+> **dynamic-velocity** (this per-note-folder bank). The core of this format is
+> **implemented**:
 >
-> The only hint of this format in the current codebase is a TYPE badge and a
-> FUTURE comment in `app/gui/panel_bank.cpp:67-68`
-> (*"FUTURE: `ctx.engine.bankType()` once there is a folder-type loader +
-> autodetection; for now only legacy is supported"*).
+> - ✅ **Autodetection** — `scanBank` recognises `m###/` subfolders →
+>   `BankFormat::DynamicVelocity` (`bank_index.cpp`).
+> - ✅ **Loading** — `loadBank` dispatches by detected format and ingests the
+>   folder samples (`sample_store.cpp`); velocity layers are derived by sorting
+>   each note's samples by measured peak RMS.
+> - ✅ **Variable per-note layer count** — slot count = files in the folder.
+> - ✅ **GUI** — `Engine::bankType()` drives the TYPE badge (FIXED / DYNAMIC).
+> - ✅ **Test fixtures** — `tools/make_dynamic_bank.sh` converts a flat bank to
+>   this layout (MD5-16 filenames), incl. a `thin` mode for variable counts.
 >
-> For the format that **is** implemented today, see the
-> [legacy format reference](bank-format-legacy.md).
+> **Still proposed / future** (described below, not yet built): round-robin via
+> peak-RMS tolerance clustering (§6), the non-linear velocity curve (§5.1), and
+> mic positions (§7). Those sections remain design notes.
 
 ---
 
