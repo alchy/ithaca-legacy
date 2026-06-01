@@ -133,7 +133,16 @@ instead of from `velN`-tagged flat files.
 ## 4. Loader algorithm (proposed `loadFolderBank`)
 
 A future `loadFolderBank(dir, logger, …)` would mirror the existing
-`loadLegacyBank` signature (`sample_store.h:23`) and, for each note folder:
+`loadLegacyBank` signature (`sample_store.h:23`). The per-note pipeline is, in
+order:
+
+> **1. Load every WAV** in `<BankName>/m###/`.
+> **2. Measure peak RMS** of each (`measurePeakRmsDb`).
+> **3. Sort ascending** by peak RMS (softest → loudest).
+> **4. (Cluster** near-equal RMS into round-robin variants — §6.)
+> **5. Map** the resulting layers onto **MIDI velocity 0–127** (§5).
+
+Concretely, for each `m###/` folder:
 
 1. **Enumerate** `<BankName>/m###/*.wav`.
 2. For each WAV: build a `MicLayer` (head preload + optional resonance window),
@@ -143,8 +152,16 @@ A future `loadFolderBank(dir, logger, …)` would mirror the existing
 3. Wrap each into a `VelocitySlot` with `slot.rms_db = measured RMS`.
 4. **Sort the note's slots ascending by `rms_db`** (softest → loudest) — the same
    `std::sort` legacy uses (`sample_store.cpp:152-158`).
-5. The resulting slot count is **whatever the folder contained** — the loader
-   does not require a fixed number, nor that counts match across notes.
+5. Optionally **cluster** slots whose RMS is within `TOL_DB` into a single slot
+   with round-robin `variants[]` (§6); without clustering, every WAV is its own
+   layer.
+6. The resulting (possibly clustered) slot list is **paired onto the velocity
+   axis 0–127** — see §5. The slot count is **whatever the folder produced**; the
+   loader requires no fixed number and no agreement across notes.
+
+> Steps 1–3 + the 0–127 pairing are the core recipe; everything else (head/
+> resonance preload, attack detection, the in-memory structs) is reused verbatim
+> from the legacy loader.
 
 The result is an ordinary `NoteSlots` whose `slots[]` is RMS-sorted. No velocity
 information is needed on disk because **velocity → layer is resolved at play
@@ -276,15 +293,54 @@ variants or are dropped.
 
 ## 7. Autodetection (legacy vs. new)
 
-A future `Engine::bankType()` / loader dispatch would pick the format by
-inspecting the bank directory:
+### 7.1 What exists today
 
-- If it contains **`m###/` subdirectories** → new folder format → `loadFolderBank`.
-- Else if it contains flat **`m###-vel#-f##.wav`** files → `loadLegacyBank`.
-- Else → empty / unrecognised bank.
+There **is** a format-detection mechanism, but it is **filename-based over flat
+files** and **ignores subdirectories** — so it does *not* yet recognise the
+folder format:
 
-This drives the GUI TYPE badge (`panel_bank.cpp`, currently hard-coded
-`LEGACY`). Detection should be cheap (a single directory listing).
+- `BankFormat { Legacy, Extended, Unknown }` + `detectFormatFromName`
+  (`bank_index.cpp:65-69`).
+- `scanBank(dir)` (`bank_index.cpp:71-114`) iterates **regular files only**
+  (`bank_index.cpp:81`: `if (!entry.is_regular_file()) continue;`), classifies
+  each filename with `parseLegacyName` (`m###-vel#-f##.wav`) or
+  `parseExtendedName` (`m##-MIC-HASH.wav`), and picks the format by **majority
+  count** (`bank_index.cpp:99-113`).
+- `Engine::loadBank` (`engine.cpp:54`) calls `loadLegacyBank` unconditionally;
+  `loadLegacyBank` (`sample_store.cpp:23-37`) takes `scanBank`'s verdict and:
+  Legacy → load; **Extended → warn "extended format zatim nepodporovan (faze 7)"
+  + empty bank** (`sample_store.cpp:32-36`); Unknown → warn + empty.
+
+**Consequence for the new format:** a folder bank has `m###/` *subdirectories*
+and **no matching flat WAVs at the top level**. `scanBank` skips subdirectories,
+finds zero recognised files → `legacy_count == extended_count == 0` →
+`BankFormat::Unknown` → `loadLegacyBank` logs *"zadne rozpoznane samply"* and
+returns an **empty bank**. So today the folder format is **neither detected nor
+loaded** — nothing ever looks inside subfolders.
+
+> Note: the existing `Extended` format (`m##-MIC-HASH.wav`, mic + hash encoded in
+> the filename) is **still a flat-file format** and is a *different* thing from
+> this proposal's per-note **folders**. Don't conflate them.
+
+### 7.2 What needs to change
+
+The detection hook is exactly the `is_regular_file` filter. To add the folder
+format:
+
+1. **Directory-aware detection.** Before (or alongside) the flat-file scan, check
+   whether the bank dir contains **`m###/` subdirectories** (a cheap single
+   `directory_iterator` pass testing `is_directory()` + an `m\d{1,3}` name). If
+   so, classify as a new **`BankFormat::Folder`** (or repurpose the currently
+   unused `Extended` loader slot — open question §8).
+2. **Dispatch.** Route `Folder` to a new `loadFolderBank` (§4) instead of the
+   legacy file loop; `Engine::loadBank` would pick the loader by the detected
+   format rather than always calling `loadLegacyBank`.
+3. **GUI.** Expose the detected format via a future `Engine::bankType()` to
+   replace the hard-coded `LEGACY` TYPE badge (`panel_bank.cpp:67-68`).
+
+Detection stays cheap — one directory listing; the presence of any `m###/`
+subdirectory is an unambiguous discriminator from the flat legacy/extended
+layouts (which have none).
 
 ---
 
