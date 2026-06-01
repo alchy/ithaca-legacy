@@ -1,5 +1,5 @@
 // app/gui/panel_bank.cpp - BANK sloupec (levy). Select banky + TYPE badge
-// (zatim hardcoded LEGACY — autodetekce je samostatny engine task) + fakta
+// TYPE badge = autodetekovany format (FIXED/DYNAMIC) z ctx.engine.bankType() + fakta
 // o bance + RELOAD. Kresli do ##bank childu.
 #include "panel_bank.h"
 #include "app_context.h"
@@ -64,11 +64,17 @@ void renderBankPanel(AppContext& ctx) {
     }
     ImGui::Dummy({0, 8});
 
-    // TYPE badge (read-only). FUTURE: ctx.engine.bankType() az bude folder-type
-    // loader + autodetekce; zatim podporujeme jen legacy.
+    // TYPE badge (read-only) — autodetekovany format banky z engine.
+    const char* type_label = "—";
+    switch (ctx.engine.bankType()) {
+        case BankFormat::FixedVelocity:   type_label = "FIXED";   break;
+        case BankFormat::DynamicVelocity: type_label = "DYNAMIC"; break;
+        case BankFormat::Extended:        type_label = "EXTENDED"; break;
+        case BankFormat::Unknown:         type_label = "—";       break;
+    }
     wdg::Eyebrow("TYPE"); ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::gold));
-    ImGui::TextUnformatted("LEGACY");
+    ImGui::TextUnformatted(type_label);
     ImGui::PopStyleColor();
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
