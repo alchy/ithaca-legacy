@@ -74,7 +74,7 @@ void Voice::hardStop() noexcept {
     damp_len_ = 0; damp_pos_ = 0;
     asset_ = nullptr;
     mic_   = nullptr;
-    ring_cur_idx_ = -1;
+    ring_lo_idx_ = -1;
 }
 
 void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
@@ -91,7 +91,9 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
     underrun_gain_    = 1.f;
     underrun_step_    = 0.f;
     file_request_off_ = 0;
-    ring_cur_l_ = 0.f; ring_cur_r_ = 0.f; ring_cur_idx_ = -1;
+    ring_lo_l_ = 0.f; ring_lo_r_ = 0.f;
+    ring_hi_l_ = 0.f; ring_hi_r_ = 0.f;
+    ring_lo_idx_ = -1;
 
     asset_ = asset;
     mic_   = (asset && !asset->mics.empty()) ? &asset->mics[0] : nullptr;
@@ -205,34 +207,45 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             sL = head_data[p0 * 2]     * (1.f - frac) + head_data[p1 * 2]     * frac;
             sR = head_data[p0 * 2 + 1] * (1.f - frac) + head_data[p1 * 2 + 1] * frac;
             position_ += pos_inc_;
-        } else if (p0 < head_frames) {
-            // Posledni vzorek hlavy — bez interpolace pres hranici (TODO faze
-            // 6/7: 1-frame lookbehind v ringu pro plynuly join).
-            sL = head_data[p0 * 2];
-            sR = head_data[p0 * 2 + 1];
-            position_ += pos_inc_;
         } else if (ring_) {
-            // Streamed: nearest-neighbor, ale konzumuj spravny pocet frames podle
-            // pos_inc_. ring_cur_idx_ = FILE-GLOBAL index naposledy popnuteho
-            // frame; popujeme dokud nedosahneme floor(position_).
-            if (ring_cur_idx_ < 0) {
-                ring_cur_idx_ = (int64_t)head_frames - 1;
-                ring_cur_l_   = head_data[(size_t)(head_frames - 1) * 2];
-                ring_cur_r_   = head_data[(size_t)(head_frames - 1) * 2 + 1];
+            // Streamed: lin. interpolace pres lo/hi okno. Posledni head frame
+            // (p0 == head_frames-1) sem spada take — seed lo = posledni head
+            // frame, hi = prvni ring pop → plynuly sev head->ring.
+            if (ring_lo_idx_ < 0) {
+                ring_lo_idx_ = (int64_t)head_frames - 1;
+                ring_lo_l_   = head_data[(size_t)(head_frames - 1) * 2];
+                ring_lo_r_   = head_data[(size_t)(head_frames - 1) * 2 + 1];
+                // hi = prvni ring frame (lookahead). Kdyz neni, vyresi to nize
+                // posun okna / EOF clamp.
+                float L, R;
+                if (ring_->popFrame(L, R)) { ring_hi_l_ = L; ring_hi_r_ = R; }
+                else { ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_; }
             }
             const int64_t target = (int64_t)position_;
-            bool ok = true;
-            while (ring_cur_idx_ < target) {
+            bool underrun = false;
+            while (ring_lo_idx_ < target) {
+                // posun okna: hi → lo, novy hi z ringu.
+                ring_lo_l_ = ring_hi_l_; ring_lo_r_ = ring_hi_r_;
                 float L, R;
-                if (!ring_->popFrame(L, R)) { ok = false; break; }
-                ring_cur_l_ = L; ring_cur_r_ = R; ring_cur_idx_++;
-            }
-            if (!ok) {
-                if (ring_->eof_.load(std::memory_order_acquire)) {
-                    log_end("ring_eof_drained");
-                    active_ = false;
+                if (ring_->popFrame(L, R)) {
+                    ring_hi_l_ = L; ring_hi_r_ = R;
+                } else if (ring_->eof_.load(std::memory_order_acquire)) {
+                    // EOF: clamp hi=lo (hold last sample), prestan posouvat.
+                    ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_;
+                    ring_lo_idx_++;
+                    // pokud uz jsme za koncem souboru, ukonci cisto.
+                    if (ring_lo_idx_ >= (int64_t)total_frames - 1) {
+                        log_end("ring_eof_drained");
+                        active_ = false;
+                    }
+                    break;
+                } else {
+                    underrun = true;
                     break;
                 }
+                ring_lo_idx_++;
+            }
+            if (underrun) {
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
                     underrun_gain_   = 1.f;
@@ -244,7 +257,11 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 }
                 sL = 0.f; sR = 0.f;
             } else {
-                sL = ring_cur_l_; sR = ring_cur_r_;
+                float frac = (float)(position_ - (double)ring_lo_idx_);
+                if (frac < 0.f) frac = 0.f;
+                if (frac > 1.f) frac = 1.f;
+                sL = ring_lo_l_ * (1.f - frac) + ring_hi_l_ * frac;
+                sR = ring_lo_r_ * (1.f - frac) + ring_hi_r_ * frac;
             }
             position_ += pos_inc_;
         } else {

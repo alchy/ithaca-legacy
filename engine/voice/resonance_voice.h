@@ -132,10 +132,12 @@ private:
     float         underrun_gain_    = 1.f;
     float         underrun_step_    = 0.f;
 
-    // -- SR konverze ve streamovane (ring) casti (viz Voice). --
-    float    ring_cur_l_   = 0.f;
-    float    ring_cur_r_   = 0.f;
-    int64_t  ring_cur_idx_ = -1;
+    // -- SR konverze ve streamovane (ring) casti: lo/hi sliding window (viz Voice). --
+    float    ring_lo_l_   = 0.f;
+    float    ring_lo_r_   = 0.f;
+    float    ring_hi_l_   = 0.f;
+    float    ring_hi_r_   = 0.f;
+    int64_t  ring_lo_idx_ = -1;
 
     // Recompute `gain_step_` z (gain_, target_gain_, ramp_frames_).
     // Pri is_fading_out_ se nepocita znovu (uz nastaveny ostry step z fadeOut).

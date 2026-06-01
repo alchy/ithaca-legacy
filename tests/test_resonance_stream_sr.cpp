@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -124,6 +125,91 @@ TEST_CASE("Streamed resonance @96kHz traverses file once (ring honors pos_inc)")
     // konzumace dreni ring 1 frame/vystup → ~84000 vystupu → ~347 bloku (~2x
     // dele). Mereno: fix ~183, broken ~347. Prah 280 je cleanly oddeli.
     CHECK(active_blocks < 280);
+
+    eng.allNotesOff();
+}
+
+// -----------------------------------------------------------------------------
+// Hladkost streamovane rezonance (lin. interpolace v ring-read vetvi).
+//
+// DULEZITE: pri pos_inc=2.0 (file 96k @ engine 48k, jako test vyse) je position_
+// VZDY cele cislo → frac = position_ - ring_lo_idx_ = 0.0 → interpolace
+// `lo*(1-0)+hi*0 == lo` je BITOVE shodna s nearest-neighbor. Smoothness sonda
+// proto pri celociselnem pomeru NEDOKAZE rozlisit interpolaci od schodu (overeno
+// docasnym revertem: eq/nz identicke 5107/47076 v obou variantach). Stejny jev
+// dokumentuje i Voice test (test_streamed_interp.cpp: "48k regrese: frac=0").
+//
+// Aby sonda byla diskriminujici, musi byt pos_inc NEcelociselny → frac kolisa →
+// interpolace produkuje mezihodnoty. Pouzijeme header SR 44100 @ engine 48000:
+// pos_inc = 44100/48000 = 0.91875. Spravna interpolace da temer linearni sklon
+// (malo presne-stejnych sousednich dvojic, jen z 16-bit kvantizace rampy);
+// nearest-neighbor da schody = mnoho stejnych dvojic.
+//
+// I pri pos_inc=0.91875 je rampa tak mirne stoupajici, ze nearest-neighbor
+// (ring_lo_l_) zustava vetsinou ruzny od predchoziho → equal pairs je nizke v
+// OBOU variantach; rozdil je ale jasny a prah musi byt tesny.
+// Mereno (header 44.1k, pos_inc=0.91875, nz=47087, overeno temp-revertem
+// ring-read radku 240-241 resonance_voice.cpp):
+//   FIX   (lin. interpolace): eq=185 → 0.39 %
+//   BROKEN(nearest-neighbor):  eq=759 → 1.61 %
+// Prah eq < nz/100 (1 %, tj. 470) obe varianty cleanly oddeli: FIX 185<470 pass,
+// BROKEN 759<470 FAIL. (Volnejsi nz/20=5% by NEdiskriminoval — BROKEN by prosel.)
+TEST_CASE("Streamed resonance @44.1k je hladka (lin. interpolace, ne schody)") {
+    constexpr int file_sr = 44100;   // pos_inc = 44100/48000 = 0.91875 (NEcele!)
+    constexpr int frames  = 44100;
+    constexpr int played  = 72;
+    constexpr int reso    = 60;
+
+    TempDir tmp{"sr44"};
+    writeRamp((tmp.path / ("m0" + std::to_string(reso)  + "-vel1-f44.wav")).string(), frames, file_sr);
+    writeRamp((tmp.path / ("m0" + std::to_string(played) + "-vel1-f44.wav")).string(), frames, file_sr);
+
+    Engine eng;
+    EngineConfig cfg;
+    cfg.sample_rate         = 48000;
+    cfg.block_size          = 256;
+    cfg.midi_from           = 59;
+    cfg.midi_to             = 73;
+    cfg.preload_ms          = 50;    // head ~2205 @44.1k → Streamed (44100 > 4410)
+    cfg.resonance_window_ms = 100;   // preload_resonance ~4410 → zbytek streamuje
+    cfg.resonance_strength  = 0.5f;
+    cfg.excite_decay_ms     = 1.0e9f;
+    REQUIRE(eng.init(cfg));
+    REQUIRE(eng.loadBank(tmp.path.string()));
+
+    eng.sustainPedal(127);
+    eng.noteOn(played, 127);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    constexpr int block      = 256;
+    constexpr int max_blocks = 1500;
+    std::vector<float> L(block), R(block);
+    std::vector<float> reso_out;  // per-sample L vystup (smoothness)
+
+    bool reso_started = false;
+    for (int b = 0; b < max_blocks; ++b) {
+        std::fill(L.begin(), L.end(), 0.f);
+        std::fill(R.begin(), R.end(), 0.f);
+        eng.processBlock(L.data(), R.data(), block);
+        for (int i = 0; i < block; ++i) reso_out.push_back(L[i]);
+
+        if (b == 0) REQUIRE(eng.resonanceVoices() >= 1);
+        if (eng.resonanceVoices() >= 1) reso_started = true;
+        if (reso_started && eng.resonanceVoices() == 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(reso_started);
+
+    // Pomer presne-stejnych sousednich dvojic mezi nenulovymi vzorky.
+    int eq = 0, nz = 0;
+    for (size_t i = 1; i < reso_out.size(); ++i) {
+        if (std::fabs(reso_out[i]) > 1e-4f && std::fabs(reso_out[i-1]) > 1e-4f) {
+            ++nz;
+            if (reso_out[i] == reso_out[i-1]) ++eq;
+        }
+    }
+    REQUIRE(nz > 200);
+    CHECK(eq < nz / 100);   // <1 % stejnych → interpolovano, ne schody
 
     eng.allNotesOff();
 }

@@ -103,15 +103,18 @@ private:
     float    underrun_gain_    = 1.f;
     float    underrun_step_    = 0.f;
 
-    // -- SR konverze ve streamovane (ring) casti --
-    // ring_cur_* = naposledy POPnuty frame z ringu (nearest-neighbor),
-    // ring_cur_idx_ = jeho FILE-GLOBAL index. Z ringu popujeme dokud nedosahneme
-    // floor(position_), tj. spotrebujeme ~pos_inc_ frames na vystupni frame.
-    // Tim funguje i sample_sr != engine_sr (driv se cetl 1 frame/vystup bez
-    // ohledu na pos_inc_ -> spatna vyska + position_ utikal pred ctenim -> predcasny EOF).
-    float    ring_cur_l_   = 0.f;
-    float    ring_cur_r_   = 0.f;
-    int64_t  ring_cur_idx_ = -1;   // -1 = neseedovano
+    // -- SR konverze ve streamovane (ring) casti: lo/hi sliding window --
+    // Pro lin. interpolaci drzime DVA sousedni framy: ring_lo_* na indexu
+    // floor(position_) a ring_hi_* na floor(position_)+1 (lookahead). Vystup =
+    // lo*(1-frac) + hi*frac. Okno se posouva popovanim z ringu dokud lo
+    // nedosahne floor(position_). Seed pri prvnim vstupu: lo = posledni head
+    // frame, hi = prvni ring pop (plynuly sev head->ring). Pri EOF clamp hi=lo
+    // (hold last sample). Na 48k (pos_inc=1) je frac=0 → vystup = puvodni vzorek.
+    float    ring_lo_l_   = 0.f;
+    float    ring_lo_r_   = 0.f;
+    float    ring_hi_l_   = 0.f;
+    float    ring_hi_r_   = 0.f;
+    int64_t  ring_lo_idx_ = -1;   // -1 = neseedovano
 };
 
 } // namespace ithaca
