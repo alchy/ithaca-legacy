@@ -36,10 +36,11 @@ void renderParamsPanel(AppContext& ctx, float x, float y, float w, float h) {
     // = audio thread preskoci formatovani ladicich RT zprav (vykon).
     {
         static const char* kLevels[] = { "debug", "info", "warn", "error", "fatal" };
+        constexpr int kNumLevels = IM_ARRAYSIZE(kLevels);
         int cur = 1;   // default info
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < kNumLevels; ++i)
             if (ctx.state.log_level == kLevels[i]) { cur = i; break; }
-        if (ImGui::Combo("Log level", &cur, kLevels, 5)) {
+        if (ImGui::Combo("Log level", &cur, kLevels, kNumLevels)) {
             ctx.state.log_level = kLevels[cur];
             log::Logger::default_().setMinSeverity(
                 log::severity_from_string(ctx.state.log_level.c_str(),
