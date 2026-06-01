@@ -5,8 +5,6 @@
 #include "theme.h"
 #include "imgui.h"
 #include <algorithm>
-#include <cmath>
-#include <cstdio>
 #include <string>
 
 namespace ithaca::gui::wdg {
