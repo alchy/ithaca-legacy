@@ -161,6 +161,7 @@ private:
 #define ITHACA_LOG_RT_(sev_, comp_, ...) \
     ::ithaca::log::Logger::default_().logRT((comp_), (sev_), __VA_ARGS__)
 
+#define LOG_RT_DEBUG(comp_, ...) ITHACA_LOG_RT_(::ithaca::log::Severity::Debug,   comp_, __VA_ARGS__)
 #define LOG_RT_INFO(comp_, ...)  ITHACA_LOG_RT_(::ithaca::log::Severity::Info,    comp_, __VA_ARGS__)
 #define LOG_RT_WARN(comp_, ...)  ITHACA_LOG_RT_(::ithaca::log::Severity::Warning, comp_, __VA_ARGS__)
 #define LOG_RT_ERROR(comp_, ...) ITHACA_LOG_RT_(::ithaca::log::Severity::Error,   comp_, __VA_ARGS__)
