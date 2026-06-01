@@ -99,7 +99,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         std::string sv = findValue(json, "schema_version");
         if (sv.empty()) return std::nullopt;
         s.schema_version = std::stoi(sv);
-        if (s.schema_version != 3) return std::nullopt;
+        if (s.schema_version != 3 && s.schema_version != 4) return std::nullopt;
         s.bank_search_dir       = findValue(json, "bank_search_dir");
         s.bank_path             = findValue(json, "bank_path");
         s.midi_port_name        = findValue(json, "midi_port_name");
@@ -116,6 +116,23 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.window_y = std::stoi(findValue(json, "window_y"));
         s.window_w = std::stoi(findValue(json, "window_w"));
         s.window_h = std::stoi(findValue(json, "window_h"));
+        // DSP pole (schema v4). Cteno obranne — chybejici klic (napr. v3 soubor)
+        // -> default ze struktury, takze stara konfigurace nacte cisty (DSP off).
+        auto readF = [&](const char* k, float dv){ std::string v = findValue(json, k); return v.empty() ? dv : std::stof(v); };
+        auto readB = [&](const char* k, bool dv){ std::string v = findValue(json, k); return v.empty() ? dv : (v == "true" || v == "1"); };
+        auto readI = [&](const char* k, int dv){ std::string v = findValue(json, k); return v.empty() ? dv : std::stoi(v); };
+        s.agc_enabled          = readB("agc_enabled", s.agc_enabled);
+        s.agc_target           = readF("agc_target", s.agc_target);
+        s.agc_release_ms       = readF("agc_release_ms", s.agc_release_ms);
+        s.agc_floor            = readF("agc_floor", s.agc_floor);
+        s.bbe_enabled          = readB("bbe_enabled", s.bbe_enabled);
+        s.bbe_definition       = readF("bbe_definition", s.bbe_definition);
+        s.bbe_bass             = readF("bbe_bass", s.bbe_bass);
+        s.limiter_enabled      = readB("limiter_enabled", s.limiter_enabled);
+        s.limiter_threshold_db = readF("limiter_threshold_db", s.limiter_threshold_db);
+        s.limiter_release_ms   = readF("limiter_release_ms", s.limiter_release_ms);
+        s.config_page          = readI("config_page", s.config_page);
+        s.schema_version = 4;   // po nacteni vzdy ulozime jako v4
     } catch (...) {
         return std::nullopt;
     }
@@ -146,7 +163,18 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"window_x\": " << s.window_x << ",\n";
         f << "  \"window_y\": " << s.window_y << ",\n";
         f << "  \"window_w\": " << s.window_w << ",\n";
-        f << "  \"window_h\": " << s.window_h << "\n";
+        f << "  \"window_h\": " << s.window_h << ",\n";
+        f << "  \"agc_enabled\": "        << (s.agc_enabled ? "true" : "false") << ",\n";
+        f << "  \"agc_target\": "         << s.agc_target          << ",\n";
+        f << "  \"agc_release_ms\": "     << s.agc_release_ms       << ",\n";
+        f << "  \"agc_floor\": "          << s.agc_floor            << ",\n";
+        f << "  \"bbe_enabled\": "        << (s.bbe_enabled ? "true" : "false") << ",\n";
+        f << "  \"bbe_definition\": "     << s.bbe_definition       << ",\n";
+        f << "  \"bbe_bass\": "           << s.bbe_bass             << ",\n";
+        f << "  \"limiter_enabled\": "    << (s.limiter_enabled ? "true" : "false") << ",\n";
+        f << "  \"limiter_threshold_db\": " << s.limiter_threshold_db << ",\n";
+        f << "  \"limiter_release_ms\": " << s.limiter_release_ms   << ",\n";
+        f << "  \"config_page\": "        << s.config_page          << "\n";
         f << "}\n";
     }
     std::filesystem::rename(tmp, path, ec);
