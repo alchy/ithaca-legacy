@@ -229,17 +229,10 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 float L, R;
                 if (ring_->popFrame(L, R)) {
                     ring_hi_l_ = L; ring_hi_r_ = R;
-                } else if (ring_->eof_.load(std::memory_order_acquire)) {
-                    // EOF: clamp hi=lo (hold last sample), prestan posouvat.
-                    ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_;
-                    ring_lo_idx_++;
-                    // pokud uz jsme za koncem souboru, ukonci cisto.
-                    if (ring_lo_idx_ >= (int64_t)total_frames - 1) {
-                        log_end("ring_eof_drained");
-                        active_ = false;
-                    }
-                    break;
                 } else {
+                    // Ring prazdny — bud cisty konec vzorku (cely soubor uz
+                    // vyzadan) nebo skutecny underrun. Rozlisi se nize v logu;
+                    // oba doznivaji stejnym 5ms fade.
                     underrun = true;
                     break;
                 }
@@ -249,11 +242,20 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
                     underrun_gain_   = 1.f;
-                    log::Logger::default_().log("voice_end", log::Severity::Warning,
-                        "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d "
-                        "ring_eof=%d", midi_, (long long)position_, total_frames,
-                        head_frames, ring_->available(),
-                        (int)ring_->eof_.load(std::memory_order_relaxed));
+                    // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
+                    // dosahl konce) a ring je prazdny → legitimni konec, Info.
+                    // Jinak worker nestihl dodat data → skutecny underrun, Warning.
+                    const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
+                    if (clean_end) {
+                        log::Logger::default_().log("voice_end", log::Severity::Info,
+                            "END-OF-SAMPLE midi=%d pos=%lld total=%d", midi_,
+                            (long long)position_, total_frames);
+                    } else {
+                        log::Logger::default_().log("voice_end", log::Severity::Warning,
+                            "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d",
+                            midi_, (long long)position_, total_frames,
+                            head_frames, ring_->available());
+                    }
                 }
                 sL = 0.f; sR = 0.f;
             } else {
@@ -269,15 +271,6 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             log_end("fullyloaded_past_head");
             active_ = false;
             break;
-        }
-
-        // Hard guard na konec souboru (kdyby pos jsel mimo file.frames i v ringu).
-        if ((int)position_ >= total_frames && ring_ &&
-            ring_->eof_.load(std::memory_order_acquire) &&
-            ring_->available() == 0) {
-            // Spotrebovan posledni vzorek; cisto vypneme po tomto frame.
-            log_end("hard_guard_file_end");
-            active_ = false;
         }
 
         // Onset ramp.
