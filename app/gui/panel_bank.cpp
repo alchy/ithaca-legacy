@@ -6,6 +6,7 @@
 #include "theme.h"
 #include "widgets.h"
 #include "imgui.h"
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -82,11 +83,13 @@ void renderBankPanel(AppContext& ctx) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0, 8});
 
-    // Fakta o bance. FUTURE: vytahnout realna cisla z engine (pocet samplu,
-    // RAM, SR) az bude API; zatim staticke + co lze (jen orientacni).
+    // Fakta o bance — realna cisla z engine. Pocet velocity vrstev se neuvadi
+    // (u dynamic-velocity je per nota promenny); staci pocet not a samplu.
+    char facts[48];
+    std::snprintf(facts, sizeof(facts), "%d not \xC2\xB7 %d samplu",
+                  ctx.engine.recordedNotes(), ctx.engine.loadedSamples());
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-    ImGui::TextUnformatted("8 velocity vrstev");
-    ImGui::TextUnformatted("88 not \xC2\xB7 48 kHz");
+    ImGui::TextUnformatted(facts);
     ImGui::PopStyleColor();
     ImGui::Dummy({0, 10});
 
