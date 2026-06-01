@@ -13,6 +13,7 @@
 #include "persistence.h"
 #include "theme.h"
 #include "widgets.h"
+#include "layout.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -123,12 +124,16 @@ int main(int argc, char* argv[]) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     {
+        float xs = 1.f, ys = 1.f;
+        glfwGetWindowContentScale(w, &xs, &ys);
+        ithaca::gui::layout::g_scale = (xs > 0.f) ? xs : 1.f;   // DPI scale (Retina ~2.0)
         ithaca::gui::theme::apply_theme();
         std::string ttf = ithaca::gui::theme::find_asset_path("cormorant/Cormorant-Medium.ttf");
         if (ttf.empty())
             std::fprintf(stderr, "WARN: Cormorant TTF nenalezen — default font.\n");
         ithaca::gui::theme::load_fonts(ttf);
         ImGuiIO& io = ImGui::GetIO();
+        io.FontGlobalScale = ithaca::gui::layout::g_scale;     // skaluj fonty na DPI
         if (ithaca::gui::theme::Fonts::body) io.FontDefault = ithaca::gui::theme::Fonts::body;
     }
     ImGui_ImplGlfw_InitForOpenGL(w, true);
@@ -179,41 +184,53 @@ int main(int argc, char* argv[]) {
 
         // Layout: TOP BAR (full) → INDICATOR STRIP (full) → MAIN ROW
         // (BANK 230 | VOICE flex | DSP 280) → KEYBOARD (full) → LOG (full).
+        namespace L = ithaca::gui::layout;
         const float W = (float)ctx.state.window_w;
         const float H = (float)ctx.state.window_h;
-        const float COL1 = 230.f, COL3 = 280.f;
-        const float topbar_h = 48.f, strip_h = 78.f, kbd_h = 70.f, log_h = 64.f;
+        const float COL1 = L::Dims::col_bank, COL3 = L::Dims::col_dsp;
+        const float PAD  = L::Dims::pad_outer;
+        const float topbar_h = L::Dims::topbar_h, strip_h = L::Dims::strip_h;
+        const float kbd_h = L::Dims::kbd_h, log_h = L::Dims::log_h;
 
         ImGui::SetNextWindowPos({0,0});
         ImGui::SetNextWindowSize({W,H});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(PAD, PAD));
         ImGui::Begin("##root", nullptr,
             ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
             ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|
             ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
 
-        ImGui::BeginChild("##topbar", {0, topbar_h}, false); renderTopBar(ctx); ImGui::EndChild();
-        renderIndicatorStrip(ctx, COL1, COL3);   // draws its own strip_h-tall content
-        ImGui::Dummy({0,2});
+        const float content_w = ImGui::GetContentRegionAvail().x;  // = W - 2*PAD
 
-        const float main_h = H - topbar_h - strip_h - kbd_h - log_h - 24.f;
+        ImGui::BeginChild("##topbar", {content_w, topbar_h}, false); renderTopBar(ctx); ImGui::EndChild();
+        ImGui::Dummy({0, L::Dims::row_gap});
+        ImGui::BeginChild("##strip", {content_w, strip_h}, false); renderIndicatorStrip(ctx, COL1, COL3); ImGui::EndChild();
+        ImGui::Dummy({0, L::Dims::row_gap});
+
+        const float main_h = H - 2.f*PAD - topbar_h - strip_h - kbd_h - log_h - 4.f*L::Dims::row_gap;
         ImGui::BeginChild("##bank",  {COL1, main_h}, false); renderBankPanel(ctx);   ImGui::EndChild();
         ImGui::SameLine(0,0);
-        ImGui::BeginChild("##voice", {W-COL1-COL3, main_h}, false); renderParamsPanel(ctx); ImGui::EndChild();
+        ImGui::BeginChild("##voice", {content_w-COL1-COL3, main_h}, false); renderParamsPanel(ctx); ImGui::EndChild();
         ImGui::SameLine(0,0);
         ImGui::BeginChild("##dsp",   {COL3, main_h}, false); renderDspRack(ctx);     ImGui::EndChild();
 
-        ImGui::BeginChild("##kbd", {0, kbd_h}, false); renderKeyboardPanel(ctx); ImGui::EndChild();
-        ImGui::BeginChild("##log", {0, log_h}, false); renderLogPanel(ctx);      ImGui::EndChild();
+        ImGui::Dummy({0, L::Dims::row_gap});
+        ImGui::BeginChild("##kbd", {content_w, kbd_h}, false); renderKeyboardPanel(ctx); ImGui::EndChild();
+        ImGui::Dummy({0, L::Dims::row_gap});
+        ImGui::BeginChild("##log", {content_w, log_h}, false); renderLogPanel(ctx);      ImGui::EndChild();
 
-        // grid rysky na krizeni sloupcove drahy (screen coords)
+        // grid rysky na krizeni sloupcove drahy (screen coords) — vyska main row
         {
             ImVec2 wp = ImGui::GetWindowPos();
-            wdg::GridTick(wp.x + COL1, wp.y + topbar_h);
-            wdg::GridTick(wp.x + W - COL3, wp.y + topbar_h);
-            wdg::GridTick(wp.x + COL1, wp.y + topbar_h + strip_h);
-            wdg::GridTick(wp.x + W - COL3, wp.y + topbar_h + strip_h);
+            float gx1 = wp.x + PAD + COL1;
+            float gx2 = wp.x + W - PAD - COL3;
+            float gy  = wp.y + PAD + topbar_h + L::Dims::row_gap;        // strip top
+            float gy2 = gy + strip_h + L::Dims::row_gap;                 // main top
+            wdg::GridTick(gx1, gy);  wdg::GridTick(gx2, gy);
+            wdg::GridTick(gx1, gy2); wdg::GridTick(gx2, gy2);
         }
         ImGui::End();
+        ImGui::PopStyleVar();
 
         // Persistence debounce: zaznamenat zmenu, ulozi az po 1s ticha. Pri
         // tahani slideru se nezbytecne neulozi kazdy frame; jen 1s po dokonceni.

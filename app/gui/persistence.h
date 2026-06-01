@@ -24,7 +24,7 @@ struct GuiState {
     float       excite_decay_ms     = 5000.f;
     int         max_resonance_voices = 32;
     int         window_x = 100, window_y = 100;
-    int         window_w = 1024, window_h = 768;
+    int         window_w = 1280, window_h = 820;
 };
 
 // Najit cestu k state.json podle OS:
