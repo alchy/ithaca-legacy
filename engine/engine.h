@@ -13,6 +13,7 @@
 #include "midi/midi_queue.h"
 #include "pedal/pedal_state.h"
 #include "resonance/resonance_engine.h"
+#include "dsp/dsp_chain.h"
 
 #include <atomic>
 #include <memory>
@@ -129,6 +130,9 @@ public:
     float masterPeakL() const noexcept { return master_peak_l_.load(std::memory_order_relaxed); }
     float masterPeakR() const noexcept { return master_peak_r_.load(std::memory_order_relaxed); }
 
+    // -- DSP chain (GUI ovlada stage; audio thread vola process v processBlock) --
+    dsp::DspChain& dspChain() noexcept { return dsp_; }
+
 private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;
@@ -146,6 +150,7 @@ private:
     PedalState                        pedal_;
     std::unique_ptr<ResonanceEngine>  resonance_;
     std::atomic<float>                master_gain_{1.0f};
+    dsp::DspChain                     dsp_;
     // Master peak meter — psano z audio threadu (processBlock), cteno z GUI.
     std::atomic<float>                master_peak_l_{0.f};
     std::atomic<float>                master_peak_r_{0.f};

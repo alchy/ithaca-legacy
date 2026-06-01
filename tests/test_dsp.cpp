@@ -7,6 +7,7 @@
 #include "dsp/bbe.h"
 #include "dsp/agc.h"
 #include "dsp/dsp_chain.h"
+#include "engine.h"
 #include <cmath>
 #include <string>
 
@@ -188,4 +189,15 @@ TEST_CASE("DspChain: enabled limiter omezi spicku") {
     for(int i=0;i<4800;++i){ L[i]=0.9f; R[i]=0.9f; }
     ch.process(L,R,4800);
     CHECK(std::abs(L[4799]) <= dsp::db_to_lin(-12.f) * 1.05f);
+}
+
+TEST_CASE("Engine vystavuje DSP chain se 3 stage") {
+    ithaca::EngineConfig cfg;          // default 48k / 256, zadna banka
+    ithaca::Engine eng;
+    REQUIRE(eng.init(cfg));
+    auto& ch = eng.dspChain();
+    CHECK(ch.stageCount() == 3);
+    CHECK(std::string(ch.stage(2).name()) == "LIMITER");
+    ch.stage(2).setEnabled(true);
+    CHECK(ch.stage(2).enabled());
 }
