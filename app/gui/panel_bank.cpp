@@ -45,8 +45,7 @@ void renderBankPanel(AppContext& ctx) {
            : std::filesystem::path(ctx.state.bank_path).parent_path().string());
     if (root != last_root) { cands = scanBanks(root); last_root = root; }
 
-    // SELECT dropdown
-    wdg::Eyebrow("SELECT");
+    // Bank dropdown
     std::string curr = ctx.state.bank_path.empty() ? std::string("(none)")
         : std::filesystem::path(ctx.state.bank_path).filename().string();
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - pad);
