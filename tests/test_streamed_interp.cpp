@@ -9,6 +9,7 @@
 
 #include "engine.h"
 #include "io/wav_writer.h"
+#include "util/log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -162,4 +163,44 @@ TEST_CASE("Streamed 48k regrese: vystup = vstup (frac=0)") {
     for (float v : out) peak = (std::max)(peak, v);
     CHECK(peak > 0.6f);
     CHECK(eng.activeVoices() == 0);
+}
+
+TEST_CASE("Streamed clean end loguje END-OF-SAMPLE (Info), ne UNDERRUN (Warning)") {
+    // Cisty konec streamovaneho vzorku: ring se vyprazdni az kdyz uz byl cely
+    // soubor vyzadan → ma se logovat jako Info "END-OF-SAMPLE", NE jako
+    // Warning "UNDERRUN" (to je matouci). Engine bezi single-thread v testu,
+    // takze subscriber fire je synchronni a deterministicky.
+    TempDir tmp{"cleanend"};
+    constexpr int frames = 20000;
+    writeRamp(tmp.path, frames, 48000, "48");
+
+    auto& lg = ithaca::log::Logger::default_();
+    lg.setOutputMode(false, false);   // ticho behem testu
+    lg.clearSubscribers();
+    bool saw_end_of_sample_info = false;
+    bool saw_underrun_warning   = false;
+    lg.addSubscriber([&](const ithaca::log::LogEntry& e) {
+        if (e.topic != "voice_end") return;
+        if (e.sev == ithaca::log::Severity::Info &&
+            e.message.find("END-OF-SAMPLE") != std::string::npos)
+            saw_end_of_sample_info = true;
+        if (e.sev == ithaca::log::Severity::Warning &&
+            e.message.find("UNDERRUN") != std::string::npos)
+            saw_underrun_warning = true;
+    });
+
+    Engine eng;
+    REQUIRE(eng.init(streamCfg(48000)));
+    REQUIRE(eng.loadBank(tmp.path.string()));
+    eng.noteOn(60, 127);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    (void)renderNote(eng, 1200);
+
+    lg.clearSubscribers();
+    lg.setOutputMode(true, false);    // restore
+
+    CHECK(eng.activeVoices() == 0);
+    CHECK(saw_end_of_sample_info);
+    CHECK_FALSE(saw_underrun_warning);
 }
