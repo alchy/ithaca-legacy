@@ -30,9 +30,11 @@ static void glfwErrorCb(int err, const char* desc) {
 
 static void printUsage(const char* argv0) {
     std::fprintf(stderr,
-        "Pouziti: %s [--bank-dir <path>] [--help]\n"
+        "Pouziti: %s [--bank-dir <path>] [--log-level <lvl>] [--help]\n"
         "  --bank-dir <path>  adresar s bankami (dropdown bude scanovat odtud);\n"
         "                     persistovano v state.json, staci zadat jednou.\n"
+        "  --log-level <lvl>  debug | info | warn | error | fatal (default info);\n"
+        "                     persistovano v state.json, menitelne i za behu v UI.\n"
         "  --help, -h         tato napoveda\n", argv0);
 }
 
@@ -41,11 +43,14 @@ int main(int argc, char* argv[]) {
 
     // 0. CLI parse: jen --bank-dir a --help.
     std::string cli_bank_dir;
+    std::string cli_log_level;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") { printUsage(argv[0]); return 0; }
         if (a == "--bank-dir" && i + 1 < argc) {
             cli_bank_dir = argv[++i];
+        } else if (a == "--log-level" && i + 1 < argc) {
+            cli_log_level = argv[++i];
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n", a.c_str());
             printUsage(argv[0]);
@@ -60,6 +65,9 @@ int main(int argc, char* argv[]) {
     }
     // CLI override: --bank-dir nahrad persistovany bank_search_dir.
     if (!cli_bank_dir.empty()) st.bank_search_dir = cli_bank_dir;
+    // CLI override: --log-level nahrad persistovany log_level (aplikuje se
+    // v AppContext::initFromState pres setMinSeverity).
+    if (!cli_log_level.empty()) st.log_level = cli_log_level;
 
     // 2. GLFW window. Pozice nastavime az po vytvoreni (GLFW nema
     //    GLFW_POSITION_X hint v 3.3; v 3.4+ ano, ale my vendorujeme starsi).
@@ -180,7 +188,8 @@ int main(int argc, char* argv[]) {
             last_saved.master_gain_db      != ctx.state.master_gain_db ||
             last_saved.resonance_strength  != ctx.state.resonance_strength ||
             last_saved.release_ms          != ctx.state.release_ms ||
-            last_saved.excite_decay_ms     != ctx.state.excite_decay_ms;
+            last_saved.excite_decay_ms     != ctx.state.excite_decay_ms ||
+            last_saved.log_level           != ctx.state.log_level;
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }

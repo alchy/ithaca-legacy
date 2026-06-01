@@ -2,6 +2,7 @@
 #include "panel_params.h"
 #include "app_context.h"
 #include "imgui.h"
+#include "util/log.h"
 #include <cmath>
 
 namespace ithaca::gui {
@@ -29,6 +30,22 @@ void renderParamsPanel(AppContext& ctx, float x, float y, float w, float h) {
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Vyzaduje restart aplikace");
+    }
+
+    // Log level (runtime) — meni min severity loggeru za behu. Vyssi nez Info
+    // = audio thread preskoci formatovani ladicich RT zprav (vykon).
+    {
+        static const char* kLevels[] = { "debug", "info", "warn", "error", "fatal" };
+        constexpr int kNumLevels = IM_ARRAYSIZE(kLevels);
+        int cur = 1;   // default info
+        for (int i = 0; i < kNumLevels; ++i)
+            if (ctx.state.log_level == kLevels[i]) { cur = i; break; }
+        if (ImGui::Combo("Log level", &cur, kLevels, kNumLevels)) {
+            ctx.state.log_level = kLevels[cur];
+            log::Logger::default_().setMinSeverity(
+                log::severity_from_string(ctx.state.log_level.c_str(),
+                                          log::Severity::Info));
+        }
     }
 
     ImGui::Separator();

@@ -1,6 +1,10 @@
 # build artifacts
 /build/
+/build-test/
 compile_commands.json
+
+# ImGui runtime layout (per-machine okno/panel stav, negeneruje se do repa)
+imgui.ini
 
 # vendored deps (stahuji se pres tools/fetch-third-party.sh, necommituji se)
 /third-party/doctest/

@@ -36,6 +36,11 @@ void audioCallback(void* userdata, float* output, uint32_t frames) {
 bool AppContext::initFromState(const GuiState& s) {
     state = s;
 
+    // Min severity z perzistovaneho/CLI-overridnuteho log_level. Nastavit PRED
+    // engine.init(), aby i bank-load logy ctily zvolenou uroven.
+    log::Logger::default_().setMinSeverity(
+        log::severity_from_string(state.log_level.c_str(), log::Severity::Info));
+
     // Subscriber loggeru → ring buffer. Pripojit PRED engine.init(), aby
     // GUI strip videla i init logy (bank load, stream threads spawn, atd.).
     // Pozn.: Logger drzi callback by-value; lambda zachycuje `this` — AppContext

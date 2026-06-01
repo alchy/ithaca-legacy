@@ -92,7 +92,7 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
     // tony vybudi rezonanci, s jakou silou a kdy. Pokud je init_gain >> 0 pri
     // cc64=0, je to bug eligibility filtru / damping mapping.
     // RT-safe (start bezi na audio threadu) — LOG_RT do lock-free ringu.
-    LOG_RT_INFO("resonance_voice",
+    LOG_RT_DEBUG("resonance_voice",
         "START midi=%d init_gain=%.4f mic_mode=%s pos=%d",
         midi, initial_gain,
         (mic_->mode == MicLayerMode::Streamed) ? "Streamed" : "FullyLoaded",
