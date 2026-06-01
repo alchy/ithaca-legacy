@@ -5,6 +5,7 @@
 #include "dsp/dsp_math.h"
 #include "dsp/limiter.h"
 #include "dsp/bbe.h"
+#include "dsp/agc.h"
 #include <cmath>
 #include <string>
 
@@ -113,4 +114,50 @@ TEST_CASE("BBE: param round-trip + clamp") {
     bbe.set(1, -5.f);  CHECK(bbe.get(1)==doctest::Approx(0.f));
     CHECK(std::string(bbe.name())=="BBE");
     float v; const char* l; CHECK(bbe.meter(v,l)==false);
+}
+
+TEST_CASE("AGC: hlasity vstup je utlumen k target RMS") {
+    dsp::AGC agc; agc.prepare(48000.f, 4800);
+    agc.setEnabled(true);
+    agc.set(0, 0.15f);    // TARGET RMS
+    agc.set(1, 50.f);     // RELEASE ms (rychlejsi ustaleni v testu)
+    float L[4800], R[4800];
+    for(int i=0;i<4800;++i){ L[i]=0.5f; R[i]=0.5f; }   // RMS 0.5 >> target
+    agc.process(L,R,4800);
+    CHECK(std::abs(L[4799]) < 0.5f);                   // utlumeno
+    CHECK(std::abs(L[4799]) == doctest::Approx(0.15f).epsilon(0.25)); // ~ target
+}
+
+TEST_CASE("AGC: tichy vstup neni zesilen (gain <= 1)") {
+    dsp::AGC agc; agc.prepare(48000.f, 1024);
+    agc.setEnabled(true);
+    agc.set(0, 0.15f);
+    float L[1024], R[1024];
+    for(int i=0;i<1024;++i){ L[i]=0.02f; R[i]=0.02f; } // RMS 0.02 < target
+    agc.process(L,R,1024);
+    CHECK(std::abs(L[1023]) <= 0.02f + 1e-4f);         // nikdy nezesili
+}
+
+TEST_CASE("AGC: gain neklesne pod floor") {
+    dsp::AGC agc; agc.prepare(48000.f, 4800);
+    agc.setEnabled(true);
+    agc.set(0, 0.15f);
+    agc.set(2, 0.1f);     // GAIN FLOOR 0.1
+    agc.set(1, 20.f);
+    float L[4800], R[4800];
+    for(int i=0;i<4800;++i){ L[i]=5.f; R[i]=5.f; }     // target_gain ~0.03 < floor
+    agc.process(L,R,4800);
+    CHECK(std::abs(L[4799]) >= 5.f * 0.1f * 0.9f);     // gain >= floor
+    float g; const char* l; CHECK(agc.meter(g,l)==true); CHECK(g <= 1.f);
+}
+
+TEST_CASE("AGC: disabled bypass + param round-trip") {
+    dsp::AGC agc; agc.prepare(48000.f, 64);
+    agc.setEnabled(false);
+    float L[2]={0.9f,-0.9f}, R[2]={0.9f,-0.9f};
+    agc.process(L,R,2);
+    CHECK(L[0]==0.9f); CHECK(L[1]==-0.9f);
+    CHECK(agc.paramCount()==3);
+    agc.set(0, 99.f); CHECK(agc.get(0)==doctest::Approx(0.5f));   // TARGET max 0.5
+    CHECK(std::string(agc.name())=="AGC");
 }

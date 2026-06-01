@@ -41,6 +41,7 @@ add_library(ithaca_core STATIC
     engine/engine.cpp
     engine/dsp/limiter.cpp
     engine/dsp/bbe.cpp
+    engine/dsp/agc.cpp
     engine/render/batch_renderer.cpp
     engine/miniaudio_impl.cpp
 )
