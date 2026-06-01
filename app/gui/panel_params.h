@@ -1,6 +1,7 @@
-// app/gui/panel_params.h - parametry panel (slidery + reset).
+// app/gui/panel_params.h - genericky renderer parametricke stranky (IParamPage).
 #pragma once
+#include "dsp/dsp_stage.h"
 namespace ithaca::gui {
 struct AppContext;
-void renderParamsPanel(AppContext& ctx);
+void renderParamPage(AppContext& ctx, ithaca::dsp::IParamPage& page);
 }

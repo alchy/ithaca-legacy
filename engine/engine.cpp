@@ -44,6 +44,7 @@ bool Engine::init(const EngineConfig& cfg) {
     resonance_->setExciteDecayTimeMs(cfg.excite_decay_ms, cfg.block_size,
                                      (float)cfg.sample_rate);
     master_gain_.store(cfg.master_gain, std::memory_order_relaxed);
+    dsp_.prepare((float)cfg.sample_rate, cfg.block_size);
     initialized_ = true;
     return true;
 }
@@ -211,6 +212,9 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     if (std::fabs(g - 1.f) > 0.001f)
         for (int i = 0; i < n_samples; ++i) { out_l[i] *= g; out_r[i] *= g; }
 
+    // 3b. DSP chain (AGC -> BBE -> Limiter). Disabled stage = no-op.
+    dsp_.process(out_l, out_r, n_samples);
+
     // 4. Master peak meter pro GUI (decay ~100 ms; non-blocking atomic).
     // Pocitame ABS peak per blok a kombinujeme s predchozim peak * decay.
     // Decay vzorec: exp(-n_samples / (tau_s * sample_rate)). Pro tau=0.1 s
@@ -243,6 +247,7 @@ int Engine::setBlockSize(int new_block_size) noexcept {
     if (resonance_)
         resonance_->setExciteDecayTimeMs(cfg_.excite_decay_ms, cfg_.block_size,
                                          (float)cfg_.sample_rate);
+    dsp_.prepare((float)cfg_.sample_rate, cfg_.block_size);
     return new_block_size;
 }
 

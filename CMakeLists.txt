@@ -39,6 +39,10 @@ add_library(ithaca_core STATIC
     engine/resonance/harmonic_proximity.cpp
     engine/resonance/resonance_engine.cpp
     engine/engine.cpp
+    engine/dsp/limiter.cpp
+    engine/dsp/bbe.cpp
+    engine/dsp/agc.cpp
+    engine/dsp/dsp_chain.cpp
     engine/render/batch_renderer.cpp
     engine/miniaudio_impl.cpp
 )
@@ -72,7 +76,7 @@ if(TARGET imgui AND TARGET glfw)
         app/gui/panel_keyboard.cpp
         app/gui/panel_bank.cpp
         app/gui/panel_indicators.cpp
-        app/gui/panel_dsp.cpp
+        app/gui/panel_config.cpp
         app/gui/panel_params.cpp
         app/gui/panel_log.cpp
         app/gui/persistence.cpp)
