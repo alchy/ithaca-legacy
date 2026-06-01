@@ -59,6 +59,22 @@ inline void Lamp(const char* label, bool on, ImU32 on_col = Colors::gold) {
     if (Fonts::eyebrow) ImGui::PopFont();
 }
 
+// ON/OFF prepinac (chip). Vraci true kdyz uzivatel kliknul (volajici prepne stav).
+inline bool ToggleChip(const char* id, bool on) {
+    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(on ? Colors::gold : Colors::muted));
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0,0,0,0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Colors::v(Colors::line_soft));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Colors::v(Colors::line));
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%s  %s##%s",
+                                on ? "\xE2\x97\x8F" : "\xE2\x97\x8B",
+                                on ? "ON" : "OFF", id);   // ● ON / ○ OFF
+    bool clicked = ImGui::Button(buf);
+    ImGui::PopStyleColor(4);
+    if (Fonts::eyebrow) ImGui::PopFont();
+    return clicked;
+}
+
 // ParamSlider: eyebrow label + plnosirkovy slider.
 inline bool ParamSliderF(const char* label, float* v, float lo, float hi,
                          const char* fmt = "%.2f") {

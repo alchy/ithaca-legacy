@@ -1,45 +1,47 @@
-// app/gui/panel_params.cpp - viz panel_params.h.
+// app/gui/panel_params.cpp - genericky renderer libovolne IParamPage (VOICE i DSP
+// stage). Nadpis = page.name(); volitelny ON/OFF toggle; smycka DecoSlideru pres
+// parametry (readonly -> disabled); volitelny metr na konci.
 #include "panel_params.h"
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
 #include "layout.h"
 #include "imgui.h"
-#include <cmath>
+#include <cstdio>
 
 namespace ithaca::gui {
 
-void renderParamsPanel(AppContext& ctx) {
+void renderParamPage(AppContext& ctx, ithaca::dsp::IParamPage& page) {
+    (void)ctx;
     using theme::Colors;
     namespace L = ithaca::gui::layout;
     ImGui::Dummy({0, 4}); ImGui::Indent(L::Dims::pad_panel);
-    wdg::Eyebrow("VOICE", Colors::silver2);
+    wdg::Eyebrow(page.name(), Colors::silver2);
     ImGui::Dummy({0, L::Dims::row_gap});
 
-    // MASTER — primarni vystupni uroven celeho nastroje (prvni, zlata zarazka).
-    if (wdg::DecoSlider("MASTER", &ctx.state.master_gain_db, -60.f, 6.f, "%.1f dB", Colors::gold))
-        ctx.engine.setMasterGain(std::pow(10.f, ctx.state.master_gain_db / 20.f));
-    ImGui::Dummy({0, L::Dims::row_gap});
+    if (page.hasEnable()) {
+        if (wdg::ToggleChip(page.name(), page.enabled()))
+            page.setEnabled(!page.enabled());
+        ImGui::Dummy({0, L::Dims::row_gap});
+    }
 
-    // RESONANCE — zlata zarazka (primarni).
-    if (wdg::DecoSlider("RESONANCE", &ctx.state.resonance_strength, 0.f, 1.f, "%.2f", Colors::gold))
-        ctx.engine.setResonanceStrength(ctx.state.resonance_strength);
-    ImGui::Dummy({0, L::Dims::row_gap});
+    for (int i = 0; i < page.paramCount(); ++i) {
+        const auto& p = page.param(i);
+        float v = page.get(i);
+        const ImU32 accent = (i == 0) ? Colors::gold : Colors::silver2;
+        if (wdg::DecoSlider(p.label, &v, p.min, p.max, p.fmt, accent, /*enabled=*/!p.readonly))
+            page.set(i, v);
+        ImGui::Dummy({0, L::Dims::row_gap});
+    }
 
-    if (wdg::DecoSlider("RELEASE", &ctx.state.release_ms, 50.f, 2000.f, "%.0f ms"))
-        ctx.engine.setReleaseMs(ctx.state.release_ms);
-    ImGui::Dummy({0, L::Dims::row_gap});
-
-    if (wdg::DecoSlider("EXCITE DECAY", &ctx.state.excite_decay_ms, 500.f, 30000.f, "%.0f ms"))
-        ctx.engine.setExciteDecayMs(ctx.state.excite_decay_ms);
-    ImGui::Dummy({0, L::Dims::row_gap});
-
-    // MAX RESONANCE — init-only, read-only DecoSlider (stejny vzhled jako skupina,
-    // jen ztlumeny + bez interakce). Zmena vyzaduje restart aplikace.
-    float maxres = (float)ctx.state.max_resonance_voices;
-    wdg::DecoSlider("MAX RESONANCE", &maxres, 1.f, 64.f, "%.0f", Colors::silver2, false);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vyzaduje restart aplikace");
-    // LOG LEVEL + RESET jsou presunute do topbaru (panel_topbar.cpp).
+    float mv; const char* ml;
+    if (page.meter(mv, ml)) {
+        char buf[32]; std::snprintf(buf, sizeof(buf), "%.2f", mv);
+        wdg::Eyebrow(ml);
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::ink));
+        ImGui::TextUnformatted(buf);
+        ImGui::PopStyleColor();
+    }
     ImGui::Unindent(L::Dims::pad_panel);
 }
 

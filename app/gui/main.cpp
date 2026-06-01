@@ -7,8 +7,9 @@
 #include "panel_keyboard.h"
 #include "panel_bank.h"
 #include "panel_indicators.h"
-#include "panel_dsp.h"
 #include "panel_params.h"
+#include "panel_config.h"
+#include "voice_page.h"
 #include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
@@ -174,6 +175,17 @@ int main(int argc, char* argv[]) {
     //    Persistence debounce: sleduj zmeny GuiState, ulozi po 1s idle (Task 12).
     std::optional<std::chrono::steady_clock::time_point> dirty_since;
     GuiState last_saved = ctx.state;
+
+    // CONFIG stranky: VOICE (engine voice params) + 3 DSP stage z chainu.
+    VoicePage voice_page(ctx);
+    ithaca::dsp::IParamPage* pages[4] = {
+        &voice_page,
+        &ctx.engine.dspChain().stage(0),   // AGC
+        &ctx.engine.dspChain().stage(1),   // BBE
+        &ctx.engine.dspChain().stage(2),   // LIMITER
+    };
+    if (ctx.state.config_page < 0 || ctx.state.config_page > 3) ctx.state.config_page = 0;
+
     while (!glfwWindowShouldClose(w)) {
         glfwPollEvents();
         // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
@@ -220,9 +232,24 @@ int main(int argc, char* argv[]) {
         const float log_h = body - main_h;
         ImGui::BeginChild("##bank",  {COL1, main_h}, false); renderBankPanel(ctx);   ImGui::EndChild();
         ImGui::SameLine(0,0);
-        ImGui::BeginChild("##voice", {content_w-COL1-COL3, main_h}, false); renderParamsPanel(ctx); ImGui::EndChild();
+        ImGui::BeginChild("##voice", {content_w-COL1-COL3, main_h}, false);
+            renderParamPage(ctx, *pages[ctx.state.config_page]);
+        ImGui::EndChild();
         ImGui::SameLine(0,0);
-        ImGui::BeginChild("##dsp",   {COL3, main_h}, false); renderDspRack(ctx);     ImGui::EndChild();
+        ImGui::BeginChild("##config", {COL3, main_h}, false);
+            renderConfigPanel(ctx, pages, 4, ctx.state.config_page);
+        ImGui::EndChild();
+        // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci).
+        {
+            auto& ch = ctx.engine.dspChain();
+            auto& agc = ch.stage(0); auto& bbe = ch.stage(1); auto& lim = ch.stage(2);
+            ctx.state.agc_enabled = agc.enabled();
+            ctx.state.agc_target = agc.get(0); ctx.state.agc_release_ms = agc.get(1); ctx.state.agc_floor = agc.get(2);
+            ctx.state.bbe_enabled = bbe.enabled();
+            ctx.state.bbe_definition = bbe.get(0); ctx.state.bbe_bass = bbe.get(1);
+            ctx.state.limiter_enabled = lim.enabled();
+            ctx.state.limiter_threshold_db = lim.get(0); ctx.state.limiter_release_ms = lim.get(1);
+        }
 
         ImGui::Dummy({0, L::Dims::row_gap});
         ImGui::BeginChild("##kbd", {content_w, kbd_h}, false); renderKeyboardPanel(ctx); ImGui::EndChild();
@@ -242,7 +269,18 @@ int main(int argc, char* argv[]) {
             last_saved.release_ms          != ctx.state.release_ms ||
             last_saved.excite_decay_ms     != ctx.state.excite_decay_ms ||
             last_saved.log_level           != ctx.state.log_level ||
-            last_saved.midi_channel        != ctx.state.midi_channel;
+            last_saved.midi_channel        != ctx.state.midi_channel ||
+            last_saved.agc_enabled         != ctx.state.agc_enabled ||
+            last_saved.agc_target          != ctx.state.agc_target ||
+            last_saved.agc_release_ms      != ctx.state.agc_release_ms ||
+            last_saved.agc_floor           != ctx.state.agc_floor ||
+            last_saved.bbe_enabled         != ctx.state.bbe_enabled ||
+            last_saved.bbe_definition      != ctx.state.bbe_definition ||
+            last_saved.bbe_bass            != ctx.state.bbe_bass ||
+            last_saved.limiter_enabled     != ctx.state.limiter_enabled ||
+            last_saved.limiter_threshold_db != ctx.state.limiter_threshold_db ||
+            last_saved.limiter_release_ms  != ctx.state.limiter_release_ms ||
+            last_saved.config_page         != ctx.state.config_page;
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }

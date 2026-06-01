@@ -63,6 +63,20 @@ bool AppContext::initFromState(const GuiState& s) {
         return false;
     }
 
+    // Aplikuj perzistovane DSP parametry na chain (poradi parametru = Param
+    // tabulky stage: AGC[target,release,floor], BBE[definition,bass],
+    // LIMITER[threshold_db,release_ms]).
+    {
+        auto& ch = engine.dspChain();
+        auto& agc = ch.stage(0); auto& bbe = ch.stage(1); auto& lim = ch.stage(2);
+        agc.set(0, state.agc_target); agc.set(1, state.agc_release_ms); agc.set(2, state.agc_floor);
+        agc.setEnabled(state.agc_enabled);
+        bbe.set(0, state.bbe_definition); bbe.set(1, state.bbe_bass);
+        bbe.setEnabled(state.bbe_enabled);
+        lim.set(0, state.limiter_threshold_db); lim.set(1, state.limiter_release_ms);
+        lim.setEnabled(state.limiter_enabled);
+    }
+
     // Bank: best-effort. Pokud cesta neni nebo nejde nacist, jen warning a
     // engine bezi prazdny (uzivatel muze banku vybrat pozdeji pres UI).
     if (!state.bank_path.empty()) {
