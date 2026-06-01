@@ -3,7 +3,9 @@
 #include "doctest.h"
 
 #include "dsp/dsp_math.h"
+#include "dsp/limiter.h"
 #include <cmath>
+#include <string>
 
 using namespace ithaca;
 
@@ -27,4 +29,49 @@ TEST_CASE("rbj shelf s 0 dB je temer pruhledny na DC") {
     float y = 0.f;
     for (int i = 0; i < 256; ++i) y = dsp::biquad_tick(1.f, c, s);  // DC vstup
     CHECK(y == doctest::Approx(1.f).epsilon(0.02));
+}
+
+TEST_CASE("Limiter: disabled = bit-identicky bypass") {
+    dsp::Limiter lim; lim.prepare(48000.f, 512);
+    lim.setEnabled(false);
+    float L[4] = {0.9f, -0.8f, 0.5f, -0.2f}, R[4] = {0.7f, 0.6f, -0.9f, 0.1f};
+    float L0[4]; for (int i=0;i<4;++i) L0[i]=L[i];
+    lim.process(L, R, 4);
+    for (int i=0;i<4;++i) CHECK(L[i] == L0[i]);
+}
+
+TEST_CASE("Limiter: signal nad prahem je omezen na ~threshold") {
+    dsp::Limiter lim; lim.prepare(48000.f, 4800);
+    lim.setEnabled(true);
+    lim.set(0, -12.f);   // THRESHOLD -12 dB  (lin ~0.251)
+    lim.set(1, 50.f);    // RELEASE 50 ms
+    const float thr = dsp::db_to_lin(-12.f);
+    float L[4800], R[4800];
+    for (int i=0;i<4800;++i){ L[i]=0.8f; R[i]=0.8f; }
+    lim.process(L, R, 4800);
+    CHECK(std::abs(L[4799]) <= thr * 1.05f);
+    float gr; const char* lbl;
+    CHECK(lim.meter(gr, lbl) == true);
+    CHECK(gr < 0.f);                 // limituje -> zaporna GR
+}
+
+TEST_CASE("Limiter: signal pod prahem projde beze zmeny") {
+    dsp::Limiter lim; lim.prepare(48000.f, 256);
+    lim.setEnabled(true);
+    lim.set(0, -6.f);    // prah ~0.501
+    float L[256], R[256];
+    for (int i=0;i<256;++i){ L[i]=0.1f; R[i]=0.1f; }
+    lim.process(L, R, 256);
+    for (int i=0;i<256;++i) CHECK(L[i] == doctest::Approx(0.1f));
+}
+
+TEST_CASE("Limiter: set klampuje, param round-trip, enable toggle") {
+    dsp::Limiter lim; lim.prepare(48000.f, 256);
+    CHECK(lim.paramCount() == 2);
+    lim.set(0, 999.f); CHECK(lim.get(0) == doctest::Approx(0.f));    // max 0 dB
+    lim.set(0, -999.f); CHECK(lim.get(0) == doctest::Approx(-40.f)); // min -40
+    lim.setEnabled(true);  CHECK(lim.enabled());
+    lim.setEnabled(false); CHECK(!lim.enabled());
+    CHECK(std::string(lim.name()) == "LIMITER");
+    CHECK(lim.hasEnable());
 }
