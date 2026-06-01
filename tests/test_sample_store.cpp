@@ -78,6 +78,42 @@ TEST_CASE("loadBank postavi NoteMap z fixture banky") {
     CHECK_FALSE(bank.notes[61].recorded);
 }
 
+TEST_CASE("loadBank: dynamic-velocity folder format + variabilni pocet vrstev") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_dynfixture_bank";
+    fs::remove_all(dir);
+    fs::create_directories(dir + "/m060");
+    fs::create_directories(dir + "/m072");
+    // Nota 60: 4 vrstvy s hash-nazvy, amplitudy ZAMERNE neserazene dle nazvu.
+    writeConstWav(dir + "/m060/aaaa1111aaaa1111.wav", 0.4f);
+    writeConstWav(dir + "/m060/bbbb2222bbbb2222.wav", 0.1f);
+    writeConstWav(dir + "/m060/cccc3333cccc3333.wav", 0.9f);
+    writeConstWav(dir + "/m060/dddd4444dddd4444.wav", 0.2f);
+    // Nota 72: jen 2 vrstvy → jiny pocet (overuje dynamicky pocet souboru).
+    writeConstWav(dir + "/m072/eeee5555eeee5555.wav", 0.3f);
+    writeConstWav(dir + "/m072/ffff6666ffff6666.wav", 0.7f);
+
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    Bank bank = loadBank(dir, L);
+    fs::remove_all(dir);
+
+    CHECK(bank.format == BankFormat::DynamicVelocity);
+    CHECK(bank.loaded_samples == 6);
+    // Variabilni pocet velocity vrstev per nota (= pocet souboru ve slozce).
+    REQUIRE(bank.notes[60].recorded);
+    CHECK(bank.notes[60].slots.size() == 4u);
+    REQUIRE(bank.notes[72].recorded);
+    CHECK(bank.notes[72].slots.size() == 2u);
+    // Sloty serazene VZESTUPNE dle mereneho RMS (nazev/poradi na disku ignorovano).
+    for (size_t i = 1; i < bank.notes[60].slots.size(); ++i)
+        CHECK(bank.notes[60].slots[i-1].rms_db < bank.notes[60].slots[i].rms_db);
+    // Jeden variant + stereo mic, stejne jako fixed-velocity.
+    REQUIRE(bank.notes[60].slots[0].variants.size() == 1u);
+    CHECK(bank.notes[60].slots[0].variants[0].mics[0].mic_name == "stereo");
+    CHECK_FALSE(bank.notes[61].recorded);
+}
+
 TEST_CASE("loadBank respektuje MIDI rozsah") {
     namespace fs = std::filesystem;
     std::string dir = "/tmp/ithaca_fixture_range";
