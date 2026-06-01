@@ -28,7 +28,9 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
     underrun_gain_    = 1.f;
     underrun_step_    = 0.f;
     file_request_off_ = 0;
-    ring_cur_l_ = 0.f; ring_cur_r_ = 0.f; ring_cur_idx_ = -1;
+    ring_lo_l_ = 0.f; ring_lo_r_ = 0.f;
+    ring_hi_l_ = 0.f; ring_hi_r_ = 0.f;
+    ring_lo_idx_ = -1;
 
     midi_       = midi;
     mic_        = mic;
@@ -144,7 +146,7 @@ void ResonanceVoice::hardStop() noexcept {
     is_fading_out_   = false;
     gain_ = 0.f; target_gain_ = 0.f; gain_step_ = 0.f;
     mic_  = nullptr;
-    ring_cur_idx_ = -1;
+    ring_lo_idx_ = -1;
 }
 
 void ResonanceVoice::recomputeGainStep() noexcept {
@@ -182,35 +184,49 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                 // primo na res_start). Defensive: tichy vzorek + posun.
                 sL = 0.f; sR = 0.f;
                 position_ += pos_inc_;
-            } else if (p0 < res_end && res_frames > 0) {
-                // V preload_resonance regionu. Nearest-neighbor (jako Voice
-                // ve streamed casti). TODO faze 6/7: linearni interpolace
-                // pres preload/ring boundary.
-                int local = p0 - res_start;
-                if (local >= res_frames) local = res_frames - 1;  // safety clamp
-                sL = res_data[local * 2];
-                sR = res_data[local * 2 + 1];
+            } else if (p0 < res_end - 1 && res_frames > 1) {
+                // V preload_resonance regionu (RAM): lin. interpolace mezi
+                // local a local+1. Posledni frame regionu spada do ring vetve
+                // (sev preload->ring).
+                int   local = p0 - res_start;
+                float frac  = (float)(position_ - (double)p0);
+                sL = res_data[local * 2]     * (1.f - frac) + res_data[(local + 1) * 2]     * frac;
+                sR = res_data[local * 2 + 1] * (1.f - frac) + res_data[(local + 1) * 2 + 1] * frac;
                 position_ += pos_inc_;
             } else if (ring_) {
-                if (ring_cur_idx_ < 0) {
-                    ring_cur_idx_ = res_end - 1;
+                // Streamed: lin. interpolace pres lo/hi okno. Seed lo = posledni
+                // preload_resonance frame, hi = prvni ring pop → plynuly sev.
+                if (ring_lo_idx_ < 0) {
+                    ring_lo_idx_ = res_end - 1;
                     if (res_frames > 0) {
-                        ring_cur_l_ = res_data[(size_t)(res_frames - 1) * 2];
-                        ring_cur_r_ = res_data[(size_t)(res_frames - 1) * 2 + 1];
+                        ring_lo_l_ = res_data[(size_t)(res_frames - 1) * 2];
+                        ring_lo_r_ = res_data[(size_t)(res_frames - 1) * 2 + 1];
                     }
+                    float L, R;
+                    if (ring_->popFrame(L, R)) { ring_hi_l_ = L; ring_hi_r_ = R; }
+                    else { ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_; }
                 }
                 const int64_t target = (int64_t)position_;
-                bool ok = true;
-                while (ring_cur_idx_ < target) {
+                bool underrun = false;
+                while (ring_lo_idx_ < target) {
+                    ring_lo_l_ = ring_hi_l_; ring_lo_r_ = ring_hi_r_;
                     float L, R;
-                    if (!ring_->popFrame(L, R)) { ok = false; break; }
-                    ring_cur_l_ = L; ring_cur_r_ = R; ring_cur_idx_++;
-                }
-                if (!ok) {
-                    if (ring_->eof_.load(std::memory_order_acquire)) {
-                        active_ = false;
+                    if (ring_->popFrame(L, R)) {
+                        ring_hi_l_ = L; ring_hi_r_ = R;
+                    } else if (ring_->eof_.load(std::memory_order_acquire)) {
+                        ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_;
+                        ring_lo_idx_++;
+                        if (ring_lo_idx_ >= (int64_t)total_frames - 1) {
+                            active_ = false;
+                        }
+                        break;
+                    } else {
+                        underrun = true;
                         break;
                     }
+                    ring_lo_idx_++;
+                }
+                if (underrun) {
                     if (!underrun_fading_) {
                         underrun_fading_ = true;
                         underrun_gain_   = 1.f;
@@ -218,7 +234,11 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                     }
                     sL = 0.f; sR = 0.f;
                 } else {
-                    sL = ring_cur_l_; sR = ring_cur_r_;
+                    float frac = (float)(position_ - (double)ring_lo_idx_);
+                    if (frac < 0.f) frac = 0.f;
+                    if (frac > 1.f) frac = 1.f;
+                    sL = ring_lo_l_ * (1.f - frac) + ring_hi_l_ * frac;
+                    sR = ring_lo_r_ * (1.f - frac) + ring_hi_r_ * frac;
                 }
                 position_ += pos_inc_;
             } else {
