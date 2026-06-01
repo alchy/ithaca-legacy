@@ -13,6 +13,7 @@
 // Engine API uz frontuje vse pres lock-free MidiQueue, takze callback z RtMidi
 // threadu nemusi resit thread-safety. listPorts() vraci dostupne porty.
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,16 @@ public:
 
     // Statika: vypsat dostupne MIDI vstupni porty (pro --midi-list).
     static std::vector<std::string> listPorts();
+
+    // Channel filtr: -1 = OMNI (vse), 0..15 = jen ten MIDI kanal (0-based).
+    void setChannel(int ch) { channel_ = (ch < 0 || ch > 15) ? -1 : ch; }
+    int  channel() const { return channel_; }
+    // Cista testovatelna logika: prijmout zpravu se status bytem `status`
+    // pri zvolenem `channel` (-1 OMNI)? Channel = status & 0x0F.
+    static bool channelAccepts(int channel, uint8_t status) {
+        if (channel < 0) return true;
+        return (int)(status & 0x0F) == channel;
+    }
 
     // Otevre port `index` a smeruje udalosti do `engine`. Vrati false pri chybe
     // (zadne porty / index mimo rozsah / RtMidi exception).
@@ -51,6 +62,7 @@ private:
     RtMidiIn*   midi_   = nullptr;
     Engine*     engine_ = nullptr;
     std::string port_name_;
+    int channel_ = -1;  // OMNI default
 };
 
 } // namespace ithaca

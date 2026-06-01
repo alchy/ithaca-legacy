@@ -98,6 +98,10 @@ target_include_directories(test_persistence PRIVATE
 target_link_libraries(test_persistence PRIVATE ithaca_core doctest)
 add_test(NAME test_persistence COMMAND test_persistence)
 
+add_executable(test_midi_channel test_midi_channel.cpp)
+target_link_libraries(test_midi_channel PRIVATE ithaca_core doctest)
+add_test(NAME test_midi_channel COMMAND test_midi_channel)
+
 add_executable(test_sample_rate_and_reload test_sample_rate_and_reload.cpp)
 target_link_libraries(test_sample_rate_and_reload PRIVATE ithaca_core doctest)
 add_test(NAME test_sample_rate_and_reload COMMAND test_sample_rate_and_reload)

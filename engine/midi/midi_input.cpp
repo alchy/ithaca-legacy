@@ -93,6 +93,7 @@ void MidiInput::callback(double /*ts*/,
     if (!self || !self->engine_) return;
 
     const uint8_t status = (*msg)[0];
+    if (!channelAccepts(self->channel_, status)) return;
     const uint8_t data1  = (*msg)[1];
     const uint8_t data2  = (msg->size() > 2) ? (*msg)[2] : 0;
     const uint8_t type   = status & 0xF0;
