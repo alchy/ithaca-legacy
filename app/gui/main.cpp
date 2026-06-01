@@ -188,7 +188,8 @@ int main(int argc, char* argv[]) {
             last_saved.master_gain_db      != ctx.state.master_gain_db ||
             last_saved.resonance_strength  != ctx.state.resonance_strength ||
             last_saved.release_ms          != ctx.state.release_ms ||
-            last_saved.excite_decay_ms     != ctx.state.excite_decay_ms;
+            last_saved.excite_decay_ms     != ctx.state.excite_decay_ms ||
+            last_saved.log_level           != ctx.state.log_level;
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }
