@@ -2,7 +2,7 @@
 // ---------------------------------
 // Integracni test fazi 4 streamingu:
 //   1. Vytvor 1 s ramp WAV (48000 frames @ 48 kHz).
-//   2. Nacti pres loadLegacyBank s preload_ms=50 (head=2400 frames; 48000 >
+//   2. Nacti pres loadFixedVelocityBank s preload_ms=50 (head=2400 frames; 48000 >
 //      2*head → Streamed).
 //   3. Spust Engine, posli noteOn, renderuj v 256-frame blocich pres 1.2 s.
 //   4. Over: (a) energie >0 v ramci celeho hraneho useku (ne jen prvnich 50 ms),
@@ -10,8 +10,8 @@
 //      "underrun"), (c) L hodnota videna pres stream pokryva celou rampu
 //      (videli jsme blizko 0 i blizko 1).
 //
-// Sample je nacteny rucne pres loadLegacyBank → musi se jmenovat dle legacy
-// konvence: <bank>/<midi>_<vel>.wav (sample_loader::parseLegacyName).
+// Sample je nacteny rucne pres loadFixedVelocityBank → musi se jmenovat dle legacy
+// konvence: <bank>/<midi>_<vel>.wav (sample_loader::parseFixedVelocityName).
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 

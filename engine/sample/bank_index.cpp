@@ -25,7 +25,7 @@ const std::regex& extendedRe() {
 }
 } // namespace
 
-ParsedName parseLegacyName(const std::string& filename) {
+ParsedName parseFixedVelocityName(const std::string& filename) {
     ParsedName p;
     std::smatch m;
     if (!std::regex_match(filename, m, legacyRe())) return p;
@@ -63,7 +63,7 @@ ParsedName parseExtendedName(const std::string& filename) {
 }
 
 BankFormat detectFormatFromName(const std::string& filename) {
-    if (parseLegacyName(filename).ok)   return BankFormat::Legacy;
+    if (parseFixedVelocityName(filename).ok)   return BankFormat::FixedVelocity;
     if (parseExtendedName(filename).ok) return BankFormat::Extended;
     return BankFormat::Unknown;
 }
@@ -81,7 +81,7 @@ BankScan scanBank(const std::string& dir) {
         if (!entry.is_regular_file()) continue;
         std::string fname = entry.path().filename().string();
 
-        ParsedName lg = parseLegacyName(fname);
+        ParsedName lg = parseFixedVelocityName(fname);
         if (lg.ok) {
             legacy_files.emplace_back(lg, entry.path().string());
             legacy_count++;
@@ -102,7 +102,7 @@ BankScan scanBank(const std::string& dir) {
         return scan;
     }
     if (legacy_count >= extended_count) {
-        scan.format = BankFormat::Legacy;
+        scan.format = BankFormat::FixedVelocity;
         for (auto& f : legacy_files)
             scan.files.push_back({f.first, f.second});
     } else {

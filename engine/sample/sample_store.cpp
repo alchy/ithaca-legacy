@@ -11,7 +11,7 @@
 
 namespace ithaca {
 
-Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
+Bank loadFixedVelocityBank(const std::string& dir, log::Logger& logger,
                     int cache_budget_mb,
                     int midi_from, int midi_to,
                     int preload_ms,
@@ -37,7 +37,7 @@ Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
     }
 
     logger.log("bank", log::Severity::Info,
-               "Banka '%s': legacy, %zu souboru",
+               "Banka '%s': fixed-velocity, %zu souboru",
                bank.name.c_str(), scan.files.size());
 
     // Nacti kazdy soubor, zmer, vloz jako jeden VelocitySlot do prislusne noty.

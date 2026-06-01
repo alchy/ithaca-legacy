@@ -20,7 +20,7 @@ namespace ithaca {
 // preload_ms: kolik ms zacatku kazdeho samplu drzet v RAM (head preload).
 // Kratky sampl (vejde se do 2 * preload_ms) zustava cely v RAM (FullyLoaded);
 // dlouhy je oznacen Streamed a zbytek se ve fazi 4 streamuje.
-Bank loadLegacyBank(const std::string& dir, log::Logger& logger,
+Bank loadFixedVelocityBank(const std::string& dir, log::Logger& logger,
                     int cache_budget_mb = 0,
                     int midi_from = 0, int midi_to = 127,
                     int preload_ms = 150,

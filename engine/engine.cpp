@@ -51,7 +51,7 @@ bool Engine::init(const EngineConfig& cfg) {
 
 bool Engine::loadBank(const std::string& dir) {
     auto& L = log::Logger::default_();
-    bank_ = loadLegacyBank(dir, L, /*cache_budget_mb=*/0,
+    bank_ = loadFixedVelocityBank(dir, L, /*cache_budget_mb=*/0,
                            cfg_.midi_from, cfg_.midi_to,
                            cfg_.preload_ms, cfg_.resonance_window_ms);
     return bank_.loaded_samples > 0;

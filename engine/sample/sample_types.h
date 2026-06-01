@@ -13,13 +13,14 @@
 
 namespace ithaca {
 
-enum class BankFormat { Unknown, Legacy, Extended };
+enum class BankFormat { Unknown, FixedVelocity, Extended, DynamicVelocity };
 
 inline const char* bankFormatName(BankFormat f) {
     switch (f) {
-        case BankFormat::Legacy:   return "legacy";
-        case BankFormat::Extended: return "extended";
-        case BankFormat::Unknown:  return "unknown";
+        case BankFormat::FixedVelocity:   return "fixed-velocity";
+        case BankFormat::Extended:        return "extended";
+        case BankFormat::DynamicVelocity: return "dynamic-velocity";
+        case BankFormat::Unknown:         return "unknown";
     }
     return "unknown";
 }

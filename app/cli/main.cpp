@@ -265,7 +265,7 @@ int main(int argc, char* argv[]) {
     if (!inspect_dir.empty()) {
         LOG_INFO("inspect", "Nacitam banku: %s", inspect_dir.c_str());
 
-        Bank bank = loadLegacyBank(inspect_dir, L);
+        Bank bank = loadFixedVelocityBank(inspect_dir, L);
         if (bank.loaded_samples == 0) {
             LOG_ERROR("inspect", "Zadne samply nenacteny z %s", inspect_dir.c_str());
             return 1;
