@@ -1,66 +1,46 @@
 // app/gui/panel_params.cpp - viz panel_params.h.
 #include "panel_params.h"
 #include "app_context.h"
+#include "theme.h"
+#include "widgets.h"
+#include "layout.h"
 #include "imgui.h"
-#include "util/log.h"
 #include <cmath>
 
 namespace ithaca::gui {
 
-void renderParamsPanel(AppContext& ctx, float x, float y, float w, float h) {
-    ImGui::SetNextWindowPos({x, y});
-    ImGui::SetNextWindowSize({w, h});
-    ImGui::Begin("Params", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+void renderParamsPanel(AppContext& ctx) {
+    using theme::Colors;
+    namespace L = ithaca::gui::layout;
+    ImGui::Dummy({0, 4}); ImGui::Indent(L::Dims::pad_panel);
+    wdg::Eyebrow("VOICE", Colors::silver2);
+    ImGui::Dummy({0, L::Dims::row_gap});
 
-    if (ImGui::SliderFloat("Resonance str", &ctx.state.resonance_strength, 0.f, 1.f, "%.2f")) {
+    // MASTER — primarni vystupni uroven celeho nastroje (prvni, zlata zarazka).
+    if (wdg::DecoSlider("MASTER", &ctx.state.master_gain_db, -60.f, 6.f, "%.1f dB", Colors::gold))
+        ctx.engine.setMasterGain(std::pow(10.f, ctx.state.master_gain_db / 20.f));
+    ImGui::Dummy({0, L::Dims::row_gap});
+
+    // RESONANCE — zlata zarazka (primarni).
+    if (wdg::DecoSlider("RESONANCE", &ctx.state.resonance_strength, 0.f, 1.f, "%.2f", Colors::gold))
         ctx.engine.setResonanceStrength(ctx.state.resonance_strength);
-    }
-    if (ImGui::SliderFloat("Release ms", &ctx.state.release_ms, 50.f, 2000.f, "%.0f")) {
+    ImGui::Dummy({0, L::Dims::row_gap});
+
+    if (wdg::DecoSlider("RELEASE", &ctx.state.release_ms, 50.f, 2000.f, "%.0f ms"))
         ctx.engine.setReleaseMs(ctx.state.release_ms);
-    }
-    if (ImGui::SliderFloat("Excite decay ms", &ctx.state.excite_decay_ms,
-                            500.f, 30000.f, "%.0f")) {
+    ImGui::Dummy({0, L::Dims::row_gap});
+
+    if (wdg::DecoSlider("EXCITE DECAY", &ctx.state.excite_decay_ms, 500.f, 30000.f, "%.0f ms"))
         ctx.engine.setExciteDecayMs(ctx.state.excite_decay_ms);
-    }
+    ImGui::Dummy({0, L::Dims::row_gap});
 
-    // max_resonance_voices je init-only - slider DISABLED s tooltipem.
-    ImGui::BeginDisabled();
-    ImGui::SliderInt("Max resonance", &ctx.state.max_resonance_voices, 1, 64);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Vyzaduje restart aplikace");
-    }
-
-    // Log level (runtime) — meni min severity loggeru za behu. Vyssi nez Info
-    // = audio thread preskoci formatovani ladicich RT zprav (vykon).
-    {
-        static const char* kLevels[] = { "debug", "info", "warn", "error", "fatal" };
-        constexpr int kNumLevels = IM_ARRAYSIZE(kLevels);
-        int cur = 1;   // default info
-        for (int i = 0; i < kNumLevels; ++i)
-            if (ctx.state.log_level == kLevels[i]) { cur = i; break; }
-        if (ImGui::Combo("Log level", &cur, kLevels, kNumLevels)) {
-            ctx.state.log_level = kLevels[cur];
-            log::Logger::default_().setMinSeverity(
-                log::severity_from_string(ctx.state.log_level.c_str(),
-                                          log::Severity::Info));
-        }
-    }
-
-    ImGui::Separator();
-    if (ImGui::Button("Reset to defaults")) {
-        ctx.state.resonance_strength = 0.5f;
-        ctx.state.release_ms         = 200.f;
-        ctx.state.excite_decay_ms    = 5000.f;
-        ctx.state.master_gain_db     = 0.f;
-        ctx.engine.setResonanceStrength(ctx.state.resonance_strength);
-        ctx.engine.setReleaseMs(ctx.state.release_ms);
-        ctx.engine.setExciteDecayMs(ctx.state.excite_decay_ms);
-        ctx.engine.setMasterGain(1.f);
-    }
-
-    ImGui::End();
+    // MAX RESONANCE — init-only, read-only DecoSlider (stejny vzhled jako skupina,
+    // jen ztlumeny + bez interakce). Zmena vyzaduje restart aplikace.
+    float maxres = (float)ctx.state.max_resonance_voices;
+    wdg::DecoSlider("MAX RESONANCE", &maxres, 1.f, 64.f, "%.0f", Colors::silver2, false);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vyzaduje restart aplikace");
+    // LOG LEVEL + RESET jsou presunute do topbaru (panel_topbar.cpp).
+    ImGui::Unindent(L::Dims::pad_panel);
 }
 
 } // namespace ithaca::gui

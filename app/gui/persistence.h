@@ -8,7 +8,7 @@
 namespace ithaca::gui {
 
 struct GuiState {
-    int         schema_version    = 2;
+    int         schema_version    = 3;
     // Adresar, ve kterem se hleda banky (dropdown ho scanu). Pri prazdnem
     // bank_path je tohle jediny zdroj kandidatu — bez ne by uzivatel nemel
     // jak vybrat banku z GUI. Settable pres --bank-dir CLI flag nebo
@@ -17,13 +17,14 @@ struct GuiState {
     std::string bank_path;
     std::string midi_port_name;
     std::string log_level         = "info";   // debug|info|warn|error|fatal
+    int         midi_channel      = -1;   // -1 = OMNI, 0..15 = MIDI kanal (0-based)
     float       master_gain_db      = 0.f;
     float       resonance_strength  = 0.5f;
     float       release_ms          = 200.f;
     float       excite_decay_ms     = 5000.f;
     int         max_resonance_voices = 32;
     int         window_x = 100, window_y = 100;
-    int         window_w = 1024, window_h = 768;
+    int         window_w = 1280, window_h = 820;
 };
 
 // Najit cestu k state.json podle OS:

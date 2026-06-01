@@ -6,37 +6,30 @@
 // konci — pri rucnim scrollovani nahoru se nesnaze "uchytit" nove zpravy.
 #include "panel_log.h"
 #include "app_context.h"
+#include "theme.h"
 #include "imgui.h"
 #include <array>
 
 namespace ithaca::gui {
 
-void renderLogPanel(AppContext& ctx, float x, float y, float w, float h) {
-    ImGui::SetNextWindowPos({x, y});
-    ImGui::SetNextWindowSize({w, h});
-    ImGui::Begin("Log", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-
-    // Snapshot poslednich 50 zaznamu (lokalni copy, GUI thread).
+void renderLogPanel(AppContext& ctx) {
+    using theme::Colors;
     static std::array<log::LogEntry, 50> tmp;
     const int n = ctx.log_buf.snapshot(tmp.data(), (int)tmp.size());
-
-    if (ImGui::BeginChild("##loglist", {0, 0}, false,
-            ImGuiWindowFlags_HorizontalScrollbar)) {
+    if (ImGui::BeginChild("##loglist", {0,0}, false, ImGuiWindowFlags_HorizontalScrollbar)) {
         for (int i = 0; i < n; ++i) {
             const auto& e = tmp[i];
-            ImVec4 col = ImVec4(0.7f, 0.7f, 0.7f, 1.f);
-            if (e.sev == log::Severity::Warning) col = ImVec4(1.f, 0.85f, 0.3f, 1.f);
-            if (e.sev == log::Severity::Error)   col = ImVec4(1.f, 0.4f, 0.4f, 1.f);
-            ImGui::TextColored(col, "[%s] %s", e.topic.c_str(), e.message.c_str());
+            ImU32 col = Colors::muted;
+            if (e.sev == log::Severity::Warning) col = Colors::gold;
+            if (e.sev == log::Severity::Error)   col = IM_COL32(0xd0,0x5a,0x4a,255);
+            ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(col));
+            ImGui::Text("[%s] %s", e.topic.c_str(), e.message.c_str());
+            ImGui::PopStyleColor();
         }
-        // Auto-scroll k novemu eventu kdyz uzivatel je na konci (jinak respektuj scroll).
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.f) {
-            ImGui::SetScrollHereY(1.f);
-        }
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.f) ImGui::SetScrollHereY(1.f);
     }
     ImGui::EndChild();
-    ImGui::End();
+    // (zadny ImGui::End() — kreslime do ##log childu z main.cpp)
 }
 
 } // namespace ithaca::gui

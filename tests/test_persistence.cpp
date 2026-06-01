@@ -19,6 +19,7 @@ TEST_CASE("Persistence round-trip") {
     s.max_resonance_voices = 16;
     s.window_x = 200; s.window_y = 300; s.window_w = 800; s.window_h = 600;
     s.log_level = "debug";
+    s.midi_channel = 4;   // 0-based; -1 = OMNI
 
     REQUIRE(saveState(p, s));
     auto loaded = loadState(p);
@@ -33,6 +34,7 @@ TEST_CASE("Persistence round-trip") {
     CHECK(loaded->window_w == 800);
     CHECK(loaded->window_h == 600);
     CHECK(loaded->log_level == "debug");
+    CHECK(loaded->midi_channel == 4);
 
     std::filesystem::remove(p);
 }
@@ -63,6 +65,14 @@ TEST_CASE("Persistence schema v1 odmitnuta (zadna zpetna kompatibilita)") {
         f << "{\"schema_version\":1,\"bank_path\":\"/old/bank\"}\n";
     }
     CHECK_FALSE(loadState(p).has_value());   // v1 se zahodi → GUI nastartuje s defaulty
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Persistence schema v2 odmitnuta (po bumpu na 3)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v2_schema.json";
+    { std::ofstream f(p); f << "{\"schema_version\":2,\"bank_path\":\"/x\"}\n"; }
+    CHECK_FALSE(loadState(p).has_value());
     std::filesystem::remove(p);
 }
 
