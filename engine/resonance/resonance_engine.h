@@ -62,6 +62,8 @@ public:
     // Pripoji StreamEngine (volat jednou pri init, pred prvni note-on).
     void setStreamEngine(StreamEngine* se);
 
+    void reset() noexcept;   // hard-stop vsech rezonancnich hlasu (reloadBank)
+
     // Sila rezonance (0..1). Realtime-safe; cte se v onPlayedNoteOn.
     void  setStrength(float s);
     float strength() const;

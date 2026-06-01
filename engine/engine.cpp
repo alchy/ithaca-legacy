@@ -71,9 +71,14 @@ bool Engine::reloadBank(const std::string& dir) {
     // 4) Pockej ~10 ms aby in-flight processBlock dobehl. Audio bloky maji
     //    typicky pod 6 ms (256 vz / 48k), 10 ms je bezpecna rezerva.
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    // 5) Slow disk I/O — bank_ se prepise, ale audio thread to nesahne.
+    // 5) TVRDE zastav vsechny hlasy DRIV nez uvolnime bank_ — jinak by Voice/
+    //    ResonanceVoice drzely const MicLayer*/SampleAsset* do uvolnene pameti
+    //    stare banky (release ~200 ms >> 60 ms pauza) => use-after-free.
+    if (pool_)      pool_->reset();
+    if (resonance_) resonance_->reset();
+    // 6) Slow disk I/O — bank_ se prepise, ale audio thread to nesahne.
     const bool ok = loadBank(dir);
-    // 6) Pust audio thread zpet.
+    // 7) Pust audio thread zpet.
     bank_loading_.store(false, std::memory_order_release);
     return ok;
 }

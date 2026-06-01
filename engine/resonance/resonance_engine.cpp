@@ -25,6 +25,7 @@
 #include "pedal/pedal_state.h"
 #include "resonance/harmonic_proximity.h"
 #include "sample/sample_types.h"
+#include "util/log.h"
 #include "voice/voice_pool.h"
 
 #include <algorithm>
@@ -44,6 +45,11 @@ void ResonanceEngine::setStreamEngine(StreamEngine* se) {
     for (auto& v : voices_) {
         if (v) v->setStreamEngine(se);
     }
+}
+
+void ResonanceEngine::reset() noexcept {
+    for (auto& slot : voices_) { if (slot) slot->hardStop(); }
+    for (auto& es : excite_state_) es.last_excite = 0.f;
 }
 
 void ResonanceEngine::setStrength(float s) {
@@ -112,6 +118,12 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
             excite_state_[N].last_excite =
                 std::max(excite_state_[N].last_excite, excite);
             slot->addExcitation(excite);
+            // DEBUG: existujici rezonance posilena. RT-safe (onPlayedNoteOn bezi
+            // na audio threadu pres processBlock) — LOG_RT do lock-free ringu.
+            LOG_RT_INFO("resonance",
+                "EXCITE+ played=%d N=%d harm=%.3f excite=%.4f cc64=%d damping[N]=%.3f",
+                played_midi, N, harm, excite, (int)pedal.sustainCC(),
+                pedal.dampingFor(N));
             continue;
         }
 
@@ -136,6 +148,14 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         // pri half-pedal = ~0.5 → rezonance startuje tise. processBlock pak
         // udrzuje target podle aktualniho dampingu.
         const float init_gain = excite * pedal.dampingFor(N);
+        // DEBUG: novy rezonancni hlas alokovan. Pokud init_gain > 0 pri cc64=0,
+        // damping[N] musi byt > 0 → buď N je drzene (main voice eligibility
+        // filter to ma blokovat), nebo damping nevynulovany pri lift.
+        // RT-safe (audio thread) — LOG_RT do lock-free ringu.
+        LOG_RT_INFO("resonance",
+            "SPAWN  played=%d N=%d harm=%.3f excite=%.4f init_gain=%.4f cc64=%d damping[N]=%.3f",
+            played_midi, N, harm, excite, init_gain, (int)pedal.sustainCC(),
+            pedal.dampingFor(N));
         slot->start(N, m, init_gain, pl, pr, engine_sr);
         excite_state_[N].last_excite = excite;
 

@@ -93,3 +93,11 @@ target_include_directories(test_persistence PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
 target_link_libraries(test_persistence PRIVATE ithaca_core doctest)
 add_test(NAME test_persistence COMMAND test_persistence)
+
+add_executable(test_sample_rate_and_reload test_sample_rate_and_reload.cpp)
+target_link_libraries(test_sample_rate_and_reload PRIVATE ithaca_core doctest)
+add_test(NAME test_sample_rate_and_reload COMMAND test_sample_rate_and_reload)
+
+add_executable(test_resonance_stream_sr test_resonance_stream_sr.cpp)
+target_link_libraries(test_resonance_stream_sr PRIVATE ithaca_core doctest)
+add_test(NAME test_resonance_stream_sr COMMAND test_resonance_stream_sr)

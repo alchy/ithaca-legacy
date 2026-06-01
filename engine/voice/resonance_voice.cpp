@@ -11,7 +11,6 @@
 #include "voice/voice.h"   // sdilime kUnderrunFadeMs (stejny fade pri ring underrunu)
 
 #include <algorithm>
-#include <cmath>
 
 namespace ithaca {
 
@@ -29,6 +28,7 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
     underrun_gain_    = 1.f;
     underrun_step_    = 0.f;
     file_request_off_ = 0;
+    ring_cur_l_ = 0.f; ring_cur_r_ = 0.f; ring_cur_idx_ = -1;
 
     midi_       = midi;
     mic_        = mic;
@@ -86,6 +86,17 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
         // Ring pool plny → ResonanceVoice doplyne preload_resonance a tise utichne
         // (zadny crash; rezonance je luxus, nikoliv must-have hlavnho hlasu).
     }
+
+    // DEBUG: kazdy resonance voice start logujeme s timestamp + midi + initial_gain.
+    // Pomaha izolovat bug "rezonance firi i bez pedalu" — sledujeme presne, ktere
+    // tony vybudi rezonanci, s jakou silou a kdy. Pokud je init_gain >> 0 pri
+    // cc64=0, je to bug eligibility filtru / damping mapping.
+    // RT-safe (start bezi na audio threadu) — LOG_RT do lock-free ringu.
+    LOG_RT_INFO("resonance_voice",
+        "START midi=%d init_gain=%.4f mic_mode=%s pos=%d",
+        midi, initial_gain,
+        (mic_->mode == MicLayerMode::Streamed) ? "Streamed" : "FullyLoaded",
+        mic_->resonance_start_frame);
 }
 
 void ResonanceVoice::addExcitation(float excitation_gain) {
@@ -123,6 +134,17 @@ void ResonanceVoice::fadeOut(float engine_sr) {
     const float fade_frames = (std::max)(1.f, kResonanceFadeOutMs * 0.001f * engine_sr);
     gain_step_ = -gain_ / fade_frames;
     if (gain_step_ > 0.f) gain_step_ = 0.f;  // bezpecnost: nikdy nesmi rostout pri fadeOut
+}
+
+void ResonanceVoice::hardStop() noexcept {
+    if (ring_ && stream_) { stream_->releaseRing(ring_); ring_ = nullptr; }
+    stream_pending_  = false;
+    underrun_fading_ = false;
+    active_          = false;
+    is_fading_out_   = false;
+    gain_ = 0.f; target_gain_ = 0.f; gain_step_ = 0.f;
+    mic_  = nullptr;
+    ring_cur_idx_ = -1;
 }
 
 void ResonanceVoice::recomputeGainStep() noexcept {
@@ -170,9 +192,21 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                 sR = res_data[local * 2 + 1];
                 position_ += pos_inc_;
             } else if (ring_) {
-                // Za preload_resonance: cti z ringu. Nearest-neighbor.
-                float L, R;
-                if (!ring_->popFrame(L, R)) {
+                if (ring_cur_idx_ < 0) {
+                    ring_cur_idx_ = res_end - 1;
+                    if (res_frames > 0) {
+                        ring_cur_l_ = res_data[(size_t)(res_frames - 1) * 2];
+                        ring_cur_r_ = res_data[(size_t)(res_frames - 1) * 2 + 1];
+                    }
+                }
+                const int64_t target = (int64_t)position_;
+                bool ok = true;
+                while (ring_cur_idx_ < target) {
+                    float L, R;
+                    if (!ring_->popFrame(L, R)) { ok = false; break; }
+                    ring_cur_l_ = L; ring_cur_r_ = R; ring_cur_idx_++;
+                }
+                if (!ok) {
                     if (ring_->eof_.load(std::memory_order_acquire)) {
                         active_ = false;
                         break;
@@ -184,7 +218,7 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                     }
                     sL = 0.f; sR = 0.f;
                 } else {
-                    sL = L; sR = R;
+                    sL = ring_cur_l_; sR = ring_cur_r_;
                 }
                 position_ += pos_inc_;
             } else {

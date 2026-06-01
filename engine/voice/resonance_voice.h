@@ -76,6 +76,9 @@ public:
     // Po dosazeni 0 → active_ = false.
     void fadeOut(float engine_sr);
 
+    // Tvrde zastav (reloadBank): uvolni ring, nesahej na mic_->preload_*.
+    void hardStop() noexcept;
+
     // Renderuj n_samples additivne do out_l/out_r. Vrati true kdyz stale aktivni.
     bool process(float* out_l, float* out_r, int n_samples) noexcept;
 
@@ -128,6 +131,11 @@ private:
     bool          underrun_fading_  = false;
     float         underrun_gain_    = 1.f;
     float         underrun_step_    = 0.f;
+
+    // -- SR konverze ve streamovane (ring) casti (viz Voice). --
+    float    ring_cur_l_   = 0.f;
+    float    ring_cur_r_   = 0.f;
+    int64_t  ring_cur_idx_ = -1;
 
     // Recompute `gain_step_` z (gain_, target_gain_, ramp_frames_).
     // Pri is_fading_out_ se nepocita znovu (uz nastaveny ostry step z fadeOut).

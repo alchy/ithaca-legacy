@@ -28,6 +28,8 @@ public:
     // po preload_head).
     void setStreamEngine(StreamEngine* se);
 
+    void reset() noexcept;   // hard-stop vsech hlasu (reloadBank)
+
     // Spusti (nebo retriggeruje) ton. keyboard_spread ovlivnuje pan dle noty.
     // pedal (volitelne, muze byt nullptr): kdyz je k dispozici, findSlot pri
     // kradezi PREFERUJE NE-DRZENE noty (uzivatel je uz pustil — pedal je drzi

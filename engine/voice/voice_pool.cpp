@@ -28,6 +28,8 @@ void VoicePool::setStreamEngine(StreamEngine* se) {
     for (auto& v : voices_) v.setStreamEngine(se);
 }
 
+void VoicePool::reset() noexcept { for (auto& v : voices_) v.hardStop(); }
+
 int VoicePool::findSlot(const PedalState* pedal) {
     // 1. Volny slot — vzdy preferovany.
     for (int i = 0; i < (int)voices_.size(); ++i)

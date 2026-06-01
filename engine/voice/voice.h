@@ -40,6 +40,10 @@ public:
     // Spusti release ramp (note-off).
     void release(float release_ms, float engine_sr);
 
+    // Tvrde zastav hlas BEZ cteni sample pameti (na rozdil od prepareDamp).
+    // Pouziti: reloadBank uvolnuje bank_, Voice nesmi sahnout na mic_->preload_*.
+    void hardStop() noexcept;
+
     // Note-off s pedalem v sustain pozici: NE-spustime release ramp ted, jen
     // si poznacime ze "klavesa pustena, ale pedal drzi strunu". Sample hraje
     // dal prirozene (jako kdyby nebyl note-off). Az pedal pustis, VoicePool
@@ -98,6 +102,16 @@ private:
     bool     underrun_fading_  = false;
     float    underrun_gain_    = 1.f;
     float    underrun_step_    = 0.f;
+
+    // -- SR konverze ve streamovane (ring) casti --
+    // ring_cur_* = naposledy POPnuty frame z ringu (nearest-neighbor),
+    // ring_cur_idx_ = jeho FILE-GLOBAL index. Z ringu popujeme dokud nedosahneme
+    // floor(position_), tj. spotrebujeme ~pos_inc_ frames na vystupni frame.
+    // Tim funguje i sample_sr != engine_sr (driv se cetl 1 frame/vystup bez
+    // ohledu na pos_inc_ -> spatna vyska + position_ utikal pred ctenim -> predcasny EOF).
+    float    ring_cur_l_   = 0.f;
+    float    ring_cur_r_   = 0.f;
+    int64_t  ring_cur_idx_ = -1;   // -1 = neseedovano
 };
 
 } // namespace ithaca
