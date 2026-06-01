@@ -5,7 +5,6 @@
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
-#include "layout.h"
 #include "imgui.h"
 #include <cmath>
 #include <cstdio>
@@ -19,7 +18,6 @@ float dbTo01(float db) { float t=(db+60.f)/60.f; return t<0?0:(t>1?1:t); }
 
 void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     using theme::Colors;
-    namespace L = ithaca::gui::layout;
     const float H = ImGui::GetContentRegionAvail().y;  // = strip_h z shellu
     const float pad = 14.f;
 
@@ -53,18 +51,18 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     std::snprintf(rbuf, sizeof(rbuf), "%d", ctx.engine.resonanceVoices());
     std::snprintf(gbuf, sizeof(gbuf), "%d", ctx.engine.numRingsUsed());
     float third = center_w / 3.f;
-    // Plna vyska dlazdice (H) — eyebrow(11) + value(26) se musi vejit.
+    // Tri dlazdice roztazene pres celou sirku: VOICES vlevo | RESONANCE na stred
+    // | RINGS vpravo (jako justified text). Zarovnani resi StatTile (align +
+    // margin); kazda dlazdice ma stejnou tretinovou bunku, ale obsah se v ni
+    // zarovna na svuj kraj/stred. Plna vyska (H) — eyebrow(11) + value(34) se vejde.
     ImGui::BeginChild("##t_v", {third, H}, false);
-        ImGui::Dummy({0,8}); ImGui::Indent(pad); wdg::StatTile("VOICES", vbuf, Colors::gold);
-        ImGui::Unindent(pad);
+        ImGui::Dummy({0,8}); wdg::StatTile("VOICES", vbuf, Colors::gold, 0.f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
     ImGui::BeginChild("##t_r", {third, H}, false);
-        ImGui::Dummy({0,8}); ImGui::Indent(pad); wdg::StatTile("RESONANCE", rbuf, Colors::silver);
-        ImGui::Unindent(pad);
+        ImGui::Dummy({0,8}); wdg::StatTile("RESONANCE", rbuf, Colors::silver, 0.5f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
     ImGui::BeginChild("##t_g", {third, H}, false);
-        ImGui::Dummy({0,8}); ImGui::Indent(pad); wdg::StatTile("RINGS", gbuf, Colors::silver);
-        ImGui::Unindent(pad);
+        ImGui::Dummy({0,8}); wdg::StatTile("RINGS", gbuf, Colors::silver, 1.f, pad);
     ImGui::EndChild();
     ImGui::EndChild();
 

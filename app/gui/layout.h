@@ -32,7 +32,10 @@ namespace Dims {
     inline constexpr float topbar_h = 44.f;    // 1 radek combo/tlacitka + vzduch
     inline constexpr float strip_h  = 100.f;   // stat dlazdice (vetsi cisla) + peak L/R
     inline constexpr float kbd_h    = 100.f;   // klaviatura + popisek
-    inline constexpr float log_h    = 80.f;
+    inline constexpr float log_h    = 80.f;    // LOG minimum (pohlcuje zbytek vysky)
+    // Hlavni rada (bank/voice/dsp) se drzi pri obsahu — strop, aby pod slidery
+    // nezustaval prazdny prostor a klaviatura sla nahoru. Zbytek pohlti LOG.
+    inline constexpr float main_h_max = 235.f;
 
     // Padding / mezery.
     inline constexpr float pad_outer = 20.f;   // vnejsi okraj okna

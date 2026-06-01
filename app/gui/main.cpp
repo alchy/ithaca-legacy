@@ -19,6 +19,7 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -192,7 +193,7 @@ int main(int argc, char* argv[]) {
         const float COL1 = L::Dims::col_bank, COL3 = L::Dims::col_dsp;
         const float PAD  = L::Dims::pad_outer;
         const float topbar_h = L::Dims::topbar_h, strip_h = L::Dims::strip_h;
-        const float kbd_h = L::Dims::kbd_h, log_h = L::Dims::log_h;
+        const float kbd_h = L::Dims::kbd_h;
 
         ImGui::SetNextWindowPos({0,0});
         ImGui::SetNextWindowSize({W,H});
@@ -209,7 +210,14 @@ int main(int argc, char* argv[]) {
         ImGui::BeginChild("##strip", {content_w, strip_h}, false); renderIndicatorStrip(ctx, COL1, COL3); ImGui::EndChild();
         ImGui::Dummy({0, L::Dims::row_gap});
 
-        const float main_h = H - 2.f*PAD - topbar_h - strip_h - kbd_h - log_h - 4.f*L::Dims::row_gap;
+        // Vertikalni rozpocet: hlavni rada se drzi pri obsahu (strop main_h_max),
+        // klaviatura nasleduje hned pod ni; LOG pohlti zbytek vysky. Tim se
+        // klaviatura priblizi ke sliderum a LOG ziska vic mista na zpravy.
+        const float vfixed = 2.f*PAD + topbar_h + 2.f + strip_h + kbd_h + 3.f*L::Dims::row_gap;
+        const float body   = H - vfixed;   // = main_h + log_h
+        float main_h = std::min(L::Dims::main_h_max, body - L::Dims::log_h);
+        if (main_h < 0.f) main_h = body * 0.5f;
+        const float log_h = body - main_h;
         ImGui::BeginChild("##bank",  {COL1, main_h}, false); renderBankPanel(ctx);   ImGui::EndChild();
         ImGui::SameLine(0,0);
         ImGui::BeginChild("##voice", {content_w-COL1-COL3, main_h}, false); renderParamsPanel(ctx); ImGui::EndChild();

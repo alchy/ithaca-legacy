@@ -23,9 +23,27 @@ inline void Eyebrow(const char* t, ImU32 col = Colors::muted) {
 }
 
 // StatTile: eyebrow popisek nad velkou hodnotou. value_col rozhoduje zlato/stribro.
-inline void StatTile(const char* label, const char* value, ImU32 value_col) {
-    Eyebrow(label);
+// align = 0 (vlevo) / 0.5 (na stred) / 1 (vpravo) — zarovnani OBOU radku v ramci
+// bunky (sirka = GetContentRegionAvail). margin = horizontalni odsazeni od kraju
+// (drzi krajni dlazdice u okraje, ale ne nalepene). Pri align=0.5 se margin rusi
+// (presny stred). Tim lze tri dlazdice roztahnout: vlevo | stred | vpravo.
+inline void StatTile(const char* label, const char* value, ImU32 value_col,
+                     float align = 0.f, float margin = 0.f) {
+    const float cell_w = ImGui::GetContentRegionAvail().x;
+    const float startx = ImGui::GetCursorPosX();
+    auto place = [&](float tw) {
+        ImGui::SetCursorPosX(startx + margin + (cell_w - 2.f*margin - tw) * align);
+    };
+    // Radek 1: eyebrow popisek (tlumeny).
+    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
+    place(ImGui::CalcTextSize(label).x);
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    if (Fonts::eyebrow) ImGui::PopFont();
+    // Radek 2: velka hodnota.
     if (Fonts::value) ImGui::PushFont(Fonts::value);
+    place(ImGui::CalcTextSize(value).x);
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(value_col));
     ImGui::TextUnformatted(value);
     ImGui::PopStyleColor();
@@ -153,19 +171,24 @@ inline void Keyboard(float width, float height, ActiveFn active, ResoFn resonati
     float kw = width / (float)n_white, bw = kw*0.6f, bh = height*0.62f;
     auto* dl = ImGui::GetWindowDrawList();
     int wi = 0;
+    // Rezonujici noty: jen lehce svetlejsi nez podklad klavesy (decentni "zar",
+    // ne druhy vyrazny highlight) — aby nekonkurovaly aktivnim (zlatym) hlasum.
+    constexpr ImU32 kWhiteBase = IM_COL32(0x1c,0x20,0x24,255);
+    constexpr ImU32 kWhiteReso = IM_COL32(0x2a,0x30,0x36,255);  // o malo svetlejsi
     for (int m=FIRST;m<=LAST;++m){ if(is_black(m)) continue;
         float kx=p.x+wi*kw;
         ImU32 col = active(m)     ? Colors::gold
-                  : resonating(m) ? Colors::silver2
-                                  : IM_COL32(0x1c,0x20,0x24,255);
+                  : resonating(m) ? kWhiteReso
+                                  : kWhiteBase;
         dl->AddRectFilled({kx,p.y},{kx+kw-1.f,p.y+height},col);
         dl->AddLine({kx+kw-1.f,p.y},{kx+kw-1.f,p.y+height},Colors::line,0.5f);
         ++wi; }
     wi = 0;
+    constexpr ImU32 kBlackReso = IM_COL32(0x1c,0x20,0x24,255);  // o malo svetlejsi nez bg
     for (int m=FIRST;m<=LAST;++m){ if(!is_black(m)){++wi;continue;}
         float kx=p.x+(wi-1)*kw+kw-bw*0.5f;
         ImU32 col = active(m)     ? IM_COL32(0x8a,0x73,0x30,255)  // zlata-tmava
-                  : resonating(m) ? IM_COL32(0x6a,0x70,0x76,255)  // stribrna-tmava
+                  : resonating(m) ? kBlackReso
                                   : Colors::bg;
         dl->AddRectFilled({kx,p.y},{kx+bw,p.y+bh},col); }
 }
