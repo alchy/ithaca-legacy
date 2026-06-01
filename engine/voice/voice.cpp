@@ -17,25 +17,27 @@ void Voice::prepareDamp(float engine_sr) {
     // ring pool (32) vycerpa a nove hlasy dostanou ring=no → hraji jen
     // preload-head a umiraji fullyloaded_past_head.
     //
-    // Damping crossfade (fade-out kopie z hlavy samplu) zustava best-effort —
-    // funguje jen kdyz hlas je jeste v head regionu. Pro streamovane voicy
-    // past head je damp_buf_ prazdny (1ms click pri retriggeru, akceptovatelne;
-    // FUTURE: damping z ring bufferu).
-
-    // 1) Best-effort fade-out kopie z hlavy samplu do damp_buf_.
+    // Damping crossfade = fade-out z NEPREHRANYCH (nadchazejicich) vzorku, NE z
+    // historie — aby damp_buf_[0] navazoval na posledni prehrany vzorek (zadna
+    // nespojitost = zadny click). V head regionu kopirujeme dopredu z
+    // preload_head; za head vyctema dalsi framy z RINGU (jiz prefetchnute), takze
+    // doběh funguje i pro streamovane hlasy (drive zde byl click pri retriggeru).
     damping_  = false;
     damp_len_ = 0;
     damp_pos_ = 0;
     if (active_ && mic_) {
+        const int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
+                                           kDampMaxFrames);
+        float env = vel_gain_;
+        if (releasing_)       env *= rel_gain_;
+        if (underrun_fading_) env *= underrun_gain_;
         const int pos = (int)position_;
+
         if (pos < mic_->head_frames) {
-            int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
-                                         kDampMaxFrames);
+            // a) Hlavni region: dopredna kopie nadchazejicich vzorku z preload_head.
             int avail = (std::min)(damp_frames, mic_->head_frames - pos);
             if (avail > 0) {
                 const float* src = mic_->preload_head.data() + (size_t)pos * 2;
-                float env = vel_gain_;
-                if (releasing_) env *= rel_gain_;
                 float step = 1.f / (float)avail;
                 for (int i = 0; i < avail; ++i) {
                     float fade = 1.f - (float)i * step;
@@ -43,6 +45,27 @@ void Voice::prepareDamp(float engine_sr) {
                     damp_buf_[i * 2 + 1] = src[i * 2 + 1] * env * fade * pan_r_;
                 }
                 damp_len_ = avail;
+                damping_  = true;
+            }
+        } else if (ring_) {
+            // b) Streamed region: nadchazejici vzorky uz lezi v ringu — vypopuj
+            //    je (ring stejne hned uvolnime) a zafaduj. Pravy doběh waveformy
+            //    → bez nespojitosti i mimo head. Kratsi kdyz ring nestaci.
+            int n = 0;
+            for (; n < damp_frames; ++n) {
+                float L, R;
+                if (!ring_->popFrame(L, R)) break;
+                damp_buf_[n * 2]     = L;          // raw; env+fade+pan v druhem pruchodu
+                damp_buf_[n * 2 + 1] = R;
+            }
+            if (n > 0) {
+                float step = 1.f / (float)n;
+                for (int i = 0; i < n; ++i) {
+                    float fade = 1.f - (float)i * step;
+                    damp_buf_[i * 2]     = damp_buf_[i * 2]     * env * fade * pan_l_;
+                    damp_buf_[i * 2 + 1] = damp_buf_[i * 2 + 1] * env * fade * pan_r_;
+                }
+                damp_len_ = n;
                 damping_  = true;
             }
         }
