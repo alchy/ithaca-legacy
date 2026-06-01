@@ -210,20 +210,29 @@ float ResonanceEngine::currentLevelFor(int midi) const noexcept {
 }
 
 void ResonanceEngine::enforceVoiceBudget(float engine_sr) {
-    // Spocti aktivni (NE-fadingOut, NE-fadingOut hlasy do limitu nepocitame jen
-    // do "kdo by sel ukoncit" — ale do total activeCount() pocitame). Kdyz
-    // total > max, najdi nejtissi NE-fadingOut hlas a posli fadeOut().
-    while (activeCount() > max_voices_) {
+    // Krad pri prekroceni rozpoctu: najdi nejtissi NE-fadingOut hlas a fadeOut.
+    // KRITICKE: do limitu pocitame jen NE-fadingOut hlasy. Fade-out hlasy uz
+    // sami umiraji (active() zustava true dokud gain nedohaje), takze kdyby se
+    // pocitaly do limitu, jedno prekroceni by spustilo fadeOut na VSECHNY hlasy
+    // (activeCount se po fadeOut nezmensi → smycka fade-uje dal, dokud nezbude
+    // jen fading → counter spadne na ~0, rezonance jen problikne). Pocitame
+    // tedy "kolik hlasu jeste plnohodnotne zni" a fade-ujeme jen pres ten limit.
+    auto liveCount = [this]() {
+        int n = 0;
+        for (const auto& slot : voices_)
+            if (slot && slot->active() && !slot->fadingOut()) ++n;
+        return n;
+    };
+    while (liveCount() > max_voices_) {
         int   victim_idx   = -1;
         float victim_level = 1e30f;
         for (int N = 0; N < 128; ++N) {
             const auto& slot = voices_[(size_t)N];
-            if (!slot || !slot->active()) continue;
-            if (slot->fadingOut()) continue;  // uz fade-uje, neopakovat
+            if (!slot || !slot->active() || slot->fadingOut()) continue;
             const float lvl = slot->currentLevel();
             if (lvl < victim_level) { victim_level = lvl; victim_idx = N; }
         }
-        if (victim_idx < 0) break;  // vse uz fade-uje, nic vic neudelame
+        if (victim_idx < 0) break;  // nic ne-fadujiciho — nic vic neudelame
         voices_[(size_t)victim_idx]->fadeOut(engine_sr);
         excite_state_[victim_idx].last_excite = 0.f;
     }
