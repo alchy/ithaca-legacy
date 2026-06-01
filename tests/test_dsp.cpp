@@ -4,6 +4,7 @@
 
 #include "dsp/dsp_math.h"
 #include "dsp/limiter.h"
+#include "dsp/bbe.h"
 #include <cmath>
 #include <string>
 
@@ -74,4 +75,42 @@ TEST_CASE("Limiter: set klampuje, param round-trip, enable toggle") {
     lim.setEnabled(false); CHECK(!lim.enabled());
     CHECK(std::string(lim.name()) == "LIMITER");
     CHECK(lim.hasEnable());
+}
+
+TEST_CASE("BBE: disabled = bit-identicky bypass") {
+    dsp::BBE bbe; bbe.prepare(48000.f, 256);
+    bbe.setEnabled(false);
+    bbe.set(0, 12.f); bbe.set(1, 10.f);
+    float L[3]={0.4f,-0.5f,0.6f}, R[3]={0.1f,0.2f,-0.3f};
+    float L0[3]; for(int i=0;i<3;++i) L0[i]=L[i];
+    bbe.process(L,R,3);
+    for(int i=0;i<3;++i) CHECK(L[i]==L0[i]);
+}
+
+TEST_CASE("BBE: oba parametry 0 dB = temer pruhledny na DC") {
+    dsp::BBE bbe; bbe.prepare(48000.f, 256);
+    bbe.setEnabled(true);                 // definition=0, bass=0 (default)
+    float L[256], R[256];
+    for(int i=0;i<256;++i){ L[i]=0.5f; R[i]=0.5f; }
+    bbe.process(L,R,256);
+    CHECK(L[255]==doctest::Approx(0.5f).epsilon(0.03));
+}
+
+TEST_CASE("BBE: bass boost zmeni DC uroven") {
+    dsp::BBE bbe; bbe.prepare(48000.f, 256);
+    bbe.setEnabled(true);
+    bbe.set(1, 10.f);                     // BASS +10 dB (low shelf -> boost DC)
+    float L[2048], R[2048];
+    for(int i=0;i<2048;++i){ L[i]=0.2f; R[i]=0.2f; }
+    bbe.process(L,R,2048);
+    CHECK(std::abs(L[2047]) > 0.2f * 1.5f);   // DC zesilen low-shelfem
+}
+
+TEST_CASE("BBE: param round-trip + clamp") {
+    dsp::BBE bbe; bbe.prepare(48000.f, 256);
+    CHECK(bbe.paramCount()==2);
+    bbe.set(0, 99.f);  CHECK(bbe.get(0)==doctest::Approx(12.f));
+    bbe.set(1, -5.f);  CHECK(bbe.get(1)==doctest::Approx(0.f));
+    CHECK(std::string(bbe.name())=="BBE");
+    float v; const char* l; CHECK(bbe.meter(v,l)==false);
 }

@@ -17,6 +17,7 @@ void Limiter::applyParams_(bool force) {
 }
 
 void Limiter::process(float* L, float* R, int n) {
+    if (!enabled_.load(std::memory_order_relaxed)) { gr_db_.store(0.f, std::memory_order_relaxed); return; }
     applyParams_(/*force=*/false);
     for (int i = 0; i < n; ++i) {
         float peak = std::max(std::abs(L[i]), std::abs(R[i]));

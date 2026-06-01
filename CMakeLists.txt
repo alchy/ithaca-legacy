@@ -40,6 +40,7 @@ add_library(ithaca_core STATIC
     engine/resonance/resonance_engine.cpp
     engine/engine.cpp
     engine/dsp/limiter.cpp
+    engine/dsp/bbe.cpp
     engine/render/batch_renderer.cpp
     engine/miniaudio_impl.cpp
 )
