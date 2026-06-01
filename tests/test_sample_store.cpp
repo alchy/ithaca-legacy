@@ -38,7 +38,7 @@ void writeConstWav(const std::string& path, float amp,
 }
 } // namespace
 
-TEST_CASE("loadFixedVelocityBank postavi NoteMap z fixture banky") {
+TEST_CASE("loadBank postavi NoteMap z fixture banky") {
     namespace fs = std::filesystem;
     std::string dir = "/tmp/ithaca_fixture_bank";
     fs::remove_all(dir);
@@ -51,7 +51,7 @@ TEST_CASE("loadFixedVelocityBank postavi NoteMap z fixture banky") {
 
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);                   // tichy pro test
-    Bank bank = loadFixedVelocityBank(dir, L);
+    Bank bank = loadBank(dir, L);
     fs::remove_all(dir);
 
     CHECK(bank.format == BankFormat::FixedVelocity);
@@ -78,7 +78,7 @@ TEST_CASE("loadFixedVelocityBank postavi NoteMap z fixture banky") {
     CHECK_FALSE(bank.notes[61].recorded);
 }
 
-TEST_CASE("loadFixedVelocityBank respektuje MIDI rozsah") {
+TEST_CASE("loadBank respektuje MIDI rozsah") {
     namespace fs = std::filesystem;
     std::string dir = "/tmp/ithaca_fixture_range";
     fs::remove_all(dir);
@@ -88,14 +88,14 @@ TEST_CASE("loadFixedVelocityBank respektuje MIDI rozsah") {
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);
     // Nacti jen notu 60 (rozsah 60..60).
-    Bank bank = loadFixedVelocityBank(dir, L, /*cache_budget_mb=*/0, /*midi_from=*/60, /*midi_to=*/60);
+    Bank bank = loadBank(dir, L, /*cache_budget_mb=*/0, /*midi_from=*/60, /*midi_to=*/60);
     fs::remove_all(dir);
     CHECK(bank.loaded_samples == 1);
     CHECK(bank.notes[60].recorded);
     CHECK_FALSE(bank.notes[72].recorded);
 }
 
-TEST_CASE("loadFixedVelocityBank: dlouhy sampl je Streamed, nacita jen preload head") {
+TEST_CASE("loadBank: dlouhy sampl je Streamed, nacita jen preload head") {
     namespace fs = std::filesystem;
     std::string dir = "/tmp/ithaca_fixture_streamed";
     fs::remove_all(dir);
@@ -107,7 +107,7 @@ TEST_CASE("loadFixedVelocityBank: dlouhy sampl je Streamed, nacita jen preload h
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);
     // resonance_window_ms=0 -> preload_resonance zustane prazdny (faze 4 semantika).
-    Bank bank = loadFixedVelocityBank(dir, L, /*cache_budget_mb=*/0,
+    Bank bank = loadBank(dir, L, /*cache_budget_mb=*/0,
                                /*midi_from=*/0, /*midi_to=*/127,
                                /*preload_ms=*/150,
                                /*resonance_window_ms=*/0);
@@ -127,7 +127,7 @@ TEST_CASE("loadFixedVelocityBank: dlouhy sampl je Streamed, nacita jen preload h
     CHECK(bank.total_bytes == 7200u * 2u * sizeof(float));
 }
 
-TEST_CASE("loadFixedVelocityBank: Streamed sampl nacita i preload_resonance") {
+TEST_CASE("loadBank: Streamed sampl nacita i preload_resonance") {
     namespace fs = std::filesystem;
     std::string dir = "/tmp/ithaca_fixture_resonance";
     fs::remove_all(dir); fs::create_directories(dir);
@@ -136,7 +136,7 @@ TEST_CASE("loadFixedVelocityBank: Streamed sampl nacita i preload_resonance") {
 
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);
-    Bank bank = loadFixedVelocityBank(dir, L, /*cache_budget_mb=*/0,
+    Bank bank = loadBank(dir, L, /*cache_budget_mb=*/0,
                                /*midi_from=*/0, /*midi_to=*/127,
                                /*preload_ms=*/150,
                                /*resonance_window_ms=*/200);
@@ -155,10 +155,10 @@ TEST_CASE("loadFixedVelocityBank: Streamed sampl nacita i preload_resonance") {
     CHECK(mic.resonance_start_frame < mic.file.frames);
 }
 
-TEST_CASE("loadFixedVelocityBank vrati prazdnou banku pro neexistujici adresar") {
+TEST_CASE("loadBank vrati prazdnou banku pro neexistujici adresar") {
     auto& L = log::Logger::default_();
     L.setOutputMode(false, false);
-    Bank bank = loadFixedVelocityBank("/tmp/ithaca_neexistuje_zzz", L);
+    Bank bank = loadBank("/tmp/ithaca_neexistuje_zzz", L);
     CHECK(bank.loaded_samples == 0);
     CHECK_FALSE(bank.notes[60].recorded);
 }

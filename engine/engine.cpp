@@ -51,7 +51,9 @@ bool Engine::init(const EngineConfig& cfg) {
 
 bool Engine::loadBank(const std::string& dir) {
     auto& L = log::Logger::default_();
-    bank_ = loadFixedVelocityBank(dir, L, /*cache_budget_mb=*/0,
+    // ::ithaca::loadBank (volna funkce) — kvalifikovat, jinak by se nasel
+    // clen Engine::loadBank (skryva volnou funkci ve scope metody).
+    bank_ = ithaca::loadBank(dir, L, /*cache_budget_mb=*/0,
                            cfg_.midi_from, cfg_.midi_to,
                            cfg_.preload_ms, cfg_.resonance_window_ms);
     return bank_.loaded_samples > 0;

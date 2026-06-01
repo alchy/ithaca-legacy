@@ -147,16 +147,16 @@ void logBankSummary(const Bank& bank, log::Logger& logger, int cache_budget_mb) 
 
 } // namespace
 
-Bank loadFixedVelocityBank(const std::string& dir, log::Logger& logger,
-                    int cache_budget_mb,
-                    int midi_from, int midi_to,
-                    int preload_ms,
-                    int resonance_window_ms) {
+Bank loadBank(const std::string& dir, log::Logger& logger,
+              int cache_budget_mb,
+              int midi_from, int midi_to,
+              int preload_ms,
+              int resonance_window_ms) {
     Bank bank;
     bank.path = dir;
     bank.name = std::filesystem::path(dir).filename().string();
 
-    BankScan scan = scanBank(dir);
+    BankScan scan = scanBank(dir);   // detekuje fixed-velocity / dynamic-velocity
     bank.format = scan.format;
 
     if (scan.format == BankFormat::Unknown) {
@@ -173,10 +173,11 @@ Bank loadFixedVelocityBank(const std::string& dir, log::Logger& logger,
     }
 
     logger.log("bank", log::Severity::Info,
-               "Banka '%s': fixed-velocity, %zu souboru",
-               bank.name.c_str(), scan.files.size());
+               "Banka '%s': %s, %zu souboru",
+               bank.name.c_str(), bankFormatName(scan.format), scan.files.size());
 
-    // Discovery = ploche soubory s parsovanymi (midi, vel); ingesce je spolecna.
+    // Discovery se lisi dle formatu (ploche soubory vs mNNN/ slozky), ale
+    // scanBank uz vratil jednotny seznam (midi, cesta) — ingesce je spolecna.
     for (const auto& entry : scan.files) {
         const ParsedName& p = entry.parsed;
         if (p.midi < 0 || p.midi > 127) continue;
