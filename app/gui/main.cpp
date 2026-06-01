@@ -12,7 +12,6 @@
 #include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
-#include "widgets.h"
 #include "layout.h"
 
 #include "imgui.h"
@@ -131,9 +130,12 @@ int main(int argc, char* argv[]) {
         std::string ttf = ithaca::gui::theme::find_asset_path("cormorant/Cormorant-Medium.ttf");
         if (ttf.empty())
             std::fprintf(stderr, "WARN: Cormorant TTF nenalezen — default font.\n");
-        ithaca::gui::theme::load_fonts(ttf);
+        const float s = ithaca::gui::layout::g_scale;
+        ithaca::gui::theme::load_fonts(ttf, s);   // raster ve fyzickem rozliseni
         ImGuiIO& io = ImGui::GetIO();
-        io.FontGlobalScale = ithaca::gui::layout::g_scale;     // skaluj fonty na DPI
+        // Font rasterizovan na size*scale → zobraz v logicke velikosti (1/scale)
+        // = ostre, spravna velikost. Viz load_fonts.
+        io.FontGlobalScale = (s > 0.f) ? 1.f / s : 1.f;
         if (ithaca::gui::theme::Fonts::body) io.FontDefault = ithaca::gui::theme::Fonts::body;
     }
     ImGui_ImplGlfw_InitForOpenGL(w, true);
@@ -203,7 +205,7 @@ int main(int argc, char* argv[]) {
         const float content_w = ImGui::GetContentRegionAvail().x;  // = W - 2*PAD
 
         ImGui::BeginChild("##topbar", {content_w, topbar_h}, false); renderTopBar(ctx); ImGui::EndChild();
-        ImGui::Dummy({0, L::Dims::row_gap});
+        ImGui::Dummy({0, 2.f});   // topbar↔strip tesne (zbytek mezery = item spacing)
         ImGui::BeginChild("##strip", {content_w, strip_h}, false); renderIndicatorStrip(ctx, COL1, COL3); ImGui::EndChild();
         ImGui::Dummy({0, L::Dims::row_gap});
 
@@ -219,16 +221,6 @@ int main(int argc, char* argv[]) {
         ImGui::Dummy({0, L::Dims::row_gap});
         ImGui::BeginChild("##log", {content_w, log_h}, false); renderLogPanel(ctx);      ImGui::EndChild();
 
-        // grid rysky na krizeni sloupcove drahy (screen coords) — vyska main row
-        {
-            ImVec2 wp = ImGui::GetWindowPos();
-            float gx1 = wp.x + PAD + COL1;
-            float gx2 = wp.x + W - PAD - COL3;
-            float gy  = wp.y + PAD + topbar_h + L::Dims::row_gap;        // strip top
-            float gy2 = gy + strip_h + L::Dims::row_gap;                 // main top
-            wdg::GridTick(gx1, gy);  wdg::GridTick(gx2, gy);
-            wdg::GridTick(gx1, gy2); wdg::GridTick(gx2, gy2);
-        }
         ImGui::End();
         ImGui::PopStyleVar();
 

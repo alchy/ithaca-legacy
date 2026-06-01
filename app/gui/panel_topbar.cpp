@@ -1,14 +1,13 @@
 // app/gui/panel_topbar.cpp - viz panel_topbar.h. Art Deco top bar:
-// logo ITHACA (zlate, brand font) | MIDI IN dropdown + ⟳ rescan | CHANNEL
-// (OMNI/1-16) | MASTER slider (vpravo). BANK selektor je presunut do
-// panel_bank (levy sloupec). Kresli inline do aktualniho ##topbar childu.
+// logo ITHACA (zlate, brand font) | MIDI IN dropdown + RESCAN | CHANNEL
+// (OMNI/1-16) | LOG level + RESET (vpravo). BANK selektor je v panel_bank,
+// MASTER slider v panel_params (VOICE). Kresli inline do ##topbar childu.
 #include "panel_topbar.h"
 #include "app_context.h"
 #include "theme.h"
-#include "widgets.h"
 #include "midi/midi_input.h"
+#include "util/log.h"
 #include "imgui.h"
-#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -28,8 +27,14 @@ void renderTopBar(AppContext& ctx) {
 
     // MIDI IN dropdown + ⟳ rescan.
     auto ports = ithaca::MidiInput::listPorts();
-    wdg::Eyebrow("MIDI IN"); ImGui::SameLine();
-    ImGui::SetNextItemWidth(150);
+    // Popisek v body fontu (stejna velikost jako tlacitko RESCAN), tlumena barva.
+    // AlignTextToFramePadding → vertikalni stred s combo/tlacitkem na radku.
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("MIDI IN");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(300);   // delsi nazvy portu (IAC Driver Bus 1 ...)
     const char* cur = ctx.state.midi_port_name.empty() ? "(none)"
                     : ctx.state.midi_port_name.c_str();
     if (ImGui::BeginCombo("##midi", cur)) {
@@ -57,8 +62,12 @@ void renderTopBar(AppContext& ctx) {
     ImGui::Button("RESCAN##reload");
     ImGui::SameLine(0, 18);
 
-    // CHANNEL dropdown: OMNI + 1..16.
-    wdg::Eyebrow("CH"); ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+    // CHANNEL dropdown: OMNI + 1..16. Popisek v body fontu (jako RESCAN).
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("CH");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(); ImGui::SetNextItemWidth(90);
     char chlbl[8];
     if (ctx.state.midi_channel < 0) std::snprintf(chlbl, sizeof(chlbl), "OMNI");
     else std::snprintf(chlbl, sizeof(chlbl), "%d", ctx.state.midi_channel + 1);
@@ -75,13 +84,37 @@ void renderTopBar(AppContext& ctx) {
         ImGui::EndCombo();
     }
 
-    // MASTER slider — vpravo.
-    const float right_margin = 240.f;
+    // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako
+    // primarni slider.) RESET vraci vsechny VOICE/master parametry na default.
+    const float right_margin = 290.f;
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetWindowWidth() - right_margin);
-    wdg::Eyebrow("MASTER"); ImGui::SameLine(); ImGui::SetNextItemWidth(150);
-    if (ImGui::SliderFloat("##master", &ctx.state.master_gain_db, -60.f, 6.f, "%.1f dB")) {
-        ctx.engine.setMasterGain(std::pow(10.f, ctx.state.master_gain_db / 20.f));
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("LOG");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(); ImGui::SetNextItemWidth(120);
+    {
+        static const char* kLevels[] = { "debug","info","warn","error","fatal" };
+        constexpr int kNum = IM_ARRAYSIZE(kLevels);
+        int cur = 1;
+        for (int i=0;i<kNum;++i) if (ctx.state.log_level==kLevels[i]){cur=i;break;}
+        if (ImGui::Combo("##log", &cur, kLevels, kNum)) {
+            ctx.state.log_level = kLevels[cur];
+            log::Logger::default_().setMinSeverity(
+                log::severity_from_string(ctx.state.log_level.c_str(), log::Severity::Info));
+        }
+    }
+    ImGui::SameLine(0, 16);
+    if (ImGui::Button("RESET")) {
+        ctx.state.resonance_strength = 0.5f;
+        ctx.state.release_ms         = 200.f;
+        ctx.state.excite_decay_ms    = 5000.f;
+        ctx.state.master_gain_db     = 0.f;
+        ctx.engine.setResonanceStrength(0.5f);
+        ctx.engine.setReleaseMs(200.f);
+        ctx.engine.setExciteDecayMs(5000.f);
+        ctx.engine.setMasterGain(1.f);
     }
 }
 

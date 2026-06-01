@@ -14,10 +14,13 @@ namespace ithaca::gui {
 void renderKeyboardPanel(AppContext& ctx) {
     using theme::Colors;
     namespace L = ithaca::gui::layout;
-    bool active[128]; ctx.engine.activeMidiNotes(active);
+    bool active[128];  ctx.engine.activeMidiNotes(active);
+    bool reso[128];    ctx.engine.resonatingMidiNotes(reso);
     const float w = ImGui::GetContentRegionAvail().x;
     ImGui::Dummy({0,4});
-    wdg::Keyboard(w, L::Dims::kbd_keys_h, [&](int m){ return m>=0 && m<128 && active[m]; });
+    wdg::Keyboard(w, L::Dims::kbd_keys_h,
+                  [&](int m){ return m>=0 && m<128 && active[m]; },   // primarni (zlate)
+                  [&](int m){ return m>=0 && m<128 && reso[m]; });    // rezonujici (stribrne)
     // popisek pod klaviaturou
     const int cc = (int)ctx.engine.pedalCC();
     char cap[48];

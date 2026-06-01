@@ -83,12 +83,34 @@ bool Engine::reloadBank(const std::string& dir) {
     return ok;
 }
 
+namespace {
+// Monotonni cas v mikrosekundach (pro note-on/off blikani indikatoru).
+uint64_t nowMicros() {
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<microseconds>(
+        steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
 void Engine::noteOn(int midi, int velocity) {
     if (velocity <= 0) { noteOff(midi); return; }
+    last_note_on_us_.store(nowMicros(), std::memory_order_relaxed);
     midi_q_.push({MidiEvent::NoteOn, (uint8_t)midi, (uint8_t)velocity});
 }
 void Engine::noteOff(int midi) {
+    last_note_off_us_.store(nowMicros(), std::memory_order_relaxed);
     midi_q_.push({MidiEvent::NoteOff, (uint8_t)midi, 0});
+}
+
+bool Engine::noteOnRecent(float ms) const noexcept {
+    const uint64_t t = last_note_on_us_.load(std::memory_order_relaxed);
+    if (t == 0) return false;
+    return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
+}
+bool Engine::noteOffRecent(float ms) const noexcept {
+    const uint64_t t = last_note_off_us_.load(std::memory_order_relaxed);
+    if (t == 0) return false;
+    return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
 }
 void Engine::allNotesOff() {
     midi_q_.push({MidiEvent::AllNotesOff, 0, 0});
@@ -271,6 +293,13 @@ void Engine::activeMidiNotes(bool out[128]) const noexcept {
             out[v.midi()] = true;
         }
     }
+}
+
+void Engine::resonatingMidiNotes(bool out[128]) const noexcept {
+    std::memset(out, 0, 128 * sizeof(bool));
+    if (!resonance_) return;
+    for (int n = 0; n < 128; ++n)
+        if (resonance_->isResonating(n)) out[n] = true;
 }
 
 float Engine::currentGainFor(int midi) const noexcept {

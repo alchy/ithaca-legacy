@@ -125,17 +125,11 @@ inline void HBar(float frac01, float width, float h,
     }
 }
 
-// Kratka zlata grid ryska na krizeni (absolutni screen coords).
-inline void GridTick(float screen_x, float screen_y, float len = 9.f) {
-    ImGui::GetForegroundDrawList()->AddLine(
-        ImVec2(screen_x, screen_y), ImVec2(screen_x, screen_y + len),
-        Colors::gold, 1.f);
-}
-
-// 88-key klaviatura (MIDI 21..108). active(midi)->bool urcuje rozsviceni.
-// Aktivni klavesa zlata. Kresli do (width x height) na aktualni cursor.
-template <typename ActiveFn>
-inline void Keyboard(float width, float height, ActiveFn active) {
+// 88-key klaviatura (MIDI 21..108). active(midi)=primarni hlas (ZLATA),
+// resonating(midi)=sympaticka rezonance (STRIBRNA, sekundarni). active ma
+// prednost (kdyz nota hraje i rezonuje, je zlata). Kresli do (width x height).
+template <typename ActiveFn, typename ResoFn>
+inline void Keyboard(float width, float height, ActiveFn active, ResoFn resonating) {
     constexpr int FIRST = 21, LAST = 108;
     auto is_black = [](int m){ int n=m%12; return n==1||n==3||n==6||n==8||n==10; };
     int n_white = 0; for (int m=FIRST;m<=LAST;++m) if(!is_black(m)) ++n_white;
@@ -146,14 +140,19 @@ inline void Keyboard(float width, float height, ActiveFn active) {
     auto* dl = ImGui::GetWindowDrawList();
     int wi = 0;
     for (int m=FIRST;m<=LAST;++m){ if(is_black(m)) continue;
-        float kx=p.x+wi*kw; ImU32 col = active(m) ? Colors::gold : IM_COL32(0x1c,0x20,0x24,255);
+        float kx=p.x+wi*kw;
+        ImU32 col = active(m)     ? Colors::gold
+                  : resonating(m) ? Colors::silver2
+                                  : IM_COL32(0x1c,0x20,0x24,255);
         dl->AddRectFilled({kx,p.y},{kx+kw-1.f,p.y+height},col);
         dl->AddLine({kx+kw-1.f,p.y},{kx+kw-1.f,p.y+height},Colors::line,0.5f);
         ++wi; }
     wi = 0;
     for (int m=FIRST;m<=LAST;++m){ if(!is_black(m)){++wi;continue;}
         float kx=p.x+(wi-1)*kw+kw-bw*0.5f;
-        ImU32 col = active(m) ? IM_COL32(0x8a,0x73,0x30,255) : Colors::bg;
+        ImU32 col = active(m)     ? IM_COL32(0x8a,0x73,0x30,255)  // zlata-tmava
+                  : resonating(m) ? IM_COL32(0x6a,0x70,0x76,255)  // stribrna-tmava
+                                  : Colors::bg;
         dl->AddRectFilled({kx,p.y},{kx+bw,p.y+bh},col); }
 }
 

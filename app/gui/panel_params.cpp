@@ -5,7 +5,7 @@
 #include "widgets.h"
 #include "layout.h"
 #include "imgui.h"
-#include "util/log.h"
+#include <cmath>
 
 namespace ithaca::gui {
 
@@ -14,6 +14,11 @@ void renderParamsPanel(AppContext& ctx) {
     namespace L = ithaca::gui::layout;
     ImGui::Dummy({0, 4}); ImGui::Indent(L::Dims::pad_panel);
     wdg::Eyebrow("VOICE", Colors::silver2);
+    ImGui::Dummy({0, L::Dims::row_gap});
+
+    // MASTER — primarni vystupni uroven celeho nastroje (prvni, zlata zarazka).
+    if (wdg::DecoSlider("MASTER", &ctx.state.master_gain_db, -60.f, 6.f, "%.1f dB", Colors::gold))
+        ctx.engine.setMasterGain(std::pow(10.f, ctx.state.master_gain_db / 20.f));
     ImGui::Dummy({0, L::Dims::row_gap});
 
     // RESONANCE — zlata zarazka (primarni).
@@ -36,33 +41,7 @@ void renderParamsPanel(AppContext& ctx) {
     ImGui::SliderInt("##maxres", &ctx.state.max_resonance_voices, 1, 64);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vyzaduje restart aplikace");
-    ImGui::Dummy({0, L::Dims::row_gap});
-
-    // LOG LEVEL combo.
-    {
-        static const char* kLevels[] = { "debug","info","warn","error","fatal" };
-        constexpr int kNum = IM_ARRAYSIZE(kLevels);
-        int cur = 1;
-        for (int i=0;i<kNum;++i) if (ctx.state.log_level==kLevels[i]){cur=i;break;}
-        wdg::Eyebrow("LOG LEVEL");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - L::Dims::pad_panel);
-        if (ImGui::Combo("##log", &cur, kLevels, kNum)) {
-            ctx.state.log_level = kLevels[cur];
-            log::Logger::default_().setMinSeverity(
-                log::severity_from_string(ctx.state.log_level.c_str(), log::Severity::Info));
-        }
-    }
-    ImGui::Dummy({0, L::Dims::row_gap});
-    if (ImGui::Button("RESET")) {
-        ctx.state.resonance_strength = 0.5f;
-        ctx.state.release_ms = 200.f;
-        ctx.state.excite_decay_ms = 5000.f;
-        ctx.state.master_gain_db = 0.f;
-        ctx.engine.setResonanceStrength(0.5f);
-        ctx.engine.setReleaseMs(200.f);
-        ctx.engine.setExciteDecayMs(5000.f);
-        ctx.engine.setMasterGain(1.f);
-    }
+    // LOG LEVEL + RESET jsou presunute do topbaru (panel_topbar.cpp).
     ImGui::Unindent(L::Dims::pad_panel);
 }
 

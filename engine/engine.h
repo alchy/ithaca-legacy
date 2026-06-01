@@ -104,9 +104,16 @@ public:
     int     numRingsUsed()    const noexcept;
     // Aktualni hodnota sustain pedalu (CC64, 0..127).
     uint8_t pedalCC()         const noexcept;
+    // Blikani indikatoru: true kdyz posledni note-on / note-off event nastal
+    // pred mene nez `ms` ms (GUI lampy NOTE/OFF). Cas drzi engine (steady_clock).
+    bool    noteOnRecent(float ms)  const noexcept;
+    bool    noteOffRecent(float ms) const noexcept;
     // Maska aktivnich main voice midi cisel; vyplni 128 bool out.
     // out[i] = true kdyz aspon jeden hlas s midi=i je active() (vc. releasing).
     void    activeMidiNotes(bool out[128]) const noexcept;
+    // Maska sympaticky rezonujicich strun; out[i] = true kdyz nota i prave
+    // rezonuje (sekundarni hlas). Pro odliseni na klaviature od primarnich.
+    void    resonatingMidiNotes(bool out[128]) const noexcept;
     // Max currentLevel pres vsechny voicy te midi (pro keyboard viz alpha).
     // midi mimo rozsah <0,127> → 0.f. Nezohlednuje releasing samostatne.
     float   currentGainFor(int midi) const noexcept;
@@ -145,6 +152,10 @@ private:
     // Bank reload guard. Pokud true, processBlock vraci ticho a preskoci
     // veskery render / drain — chrani pred race s loadBank na non-RT threadu.
     std::atomic<bool>                 bank_loading_{false};
+    // Indikator note-on/off blikani: timestamp (steady_clock micros) posledniho
+    // eventu. Psano z MIDI/GUI threadu pri noteOn/noteOff, cteno z GUI.
+    std::atomic<uint64_t>             last_note_on_us_{0};
+    std::atomic<uint64_t>             last_note_off_us_{0};
     bool                              initialized_ = false;
 };
 

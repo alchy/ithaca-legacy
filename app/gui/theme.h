@@ -53,7 +53,7 @@ struct Fonts {
     static inline ImFont* brand   = nullptr; // 20px logo, +6 tracking
 };
 
-inline void load_fonts(const std::string& ttf_path) {
+inline void load_fonts(const std::string& ttf_path, float scale = 1.f) {
     if (Fonts::body) return;
     ImGuiIO& io = ImGui::GetIO();
     if (ttf_path.empty()) {
@@ -72,16 +72,21 @@ inline void load_fonts(const std::string& ttf_path) {
     ImFontConfig cfg;
     cfg.OversampleH = 2; cfg.OversampleV = 2; cfg.PixelSnapH = true;
 
+    // HiDPI ostrost: rasterizuj font ve FYZICKEM rozliseni (size * g_scale),
+    // caller pak nastavi io.FontGlobalScale = 1/g_scale → zobrazi se v logicke
+    // velikosti, ale ostre. (Drive: raster v logicke velikosti + FontGlobalScale
+    // = roztazeny bitmap = velky + rozmazany.) Letterspacing taky * g_scale.
+    const float sc = (scale > 0.f) ? scale : 1.f;
     // Letterspacing: ImGui 1.91 ma GlyphExtraSpacing (ImVec2, jen X osa).
     // (Novejsi ImGui to prejmenovalo na GlyphExtraAdvanceX — my mame 1.91.)
     cfg.GlyphExtraSpacing.x = 0.f;
-    Fonts::body = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 18.f, &cfg, ranges);
-    cfg.GlyphExtraSpacing.x = 1.5f;   // prostrkane eyebrow popisky
-    Fonts::eyebrow = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 11.f, &cfg, ranges);
+    Fonts::body = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 18.f * sc, &cfg, ranges);
+    cfg.GlyphExtraSpacing.x = 1.5f * sc;   // prostrkane eyebrow popisky
+    Fonts::eyebrow = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 11.f * sc, &cfg, ranges);
     cfg.GlyphExtraSpacing.x = 0.f;
-    Fonts::value = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 26.f, &cfg, ranges);
-    cfg.GlyphExtraSpacing.x = 6.f;    // prostrkane logo ITHACA
-    Fonts::brand = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 20.f, &cfg, ranges);
+    Fonts::value = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 34.f * sc, &cfg, ranges);
+    cfg.GlyphExtraSpacing.x = 6.f * sc;    // prostrkane logo ITHACA
+    Fonts::brand = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 20.f * sc, &cfg, ranges);
 
     if (!Fonts::body) { // load failed → default
         Fonts::body = io.Fonts->AddFontDefault();
@@ -99,7 +104,7 @@ inline void apply_theme() {
     s.GrabRounding = s.PopupRounding = s.ScrollbarRounding = s.TabRounding = 0.f;
     s.WindowPadding    = ImVec2(0, 0);   // panely si delaji vlastni padding
     s.FramePadding     = ImVec2(8, 4);
-    s.ItemSpacing      = ImVec2(10, 8);
+    s.ItemSpacing      = ImVec2(10, 4);   // mensi vertikalni mezera mezi prvky/pasmy
     s.ItemInnerSpacing = ImVec2(6, 4);
     s.ScrollbarSize    = 8.f;
     s.WindowBorderSize = s.ChildBorderSize = s.FrameBorderSize = 0.f;

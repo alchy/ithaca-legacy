@@ -28,17 +28,17 @@ namespace Dims {
     inline constexpr float col_bank = 250.f;
     inline constexpr float col_dsp  = 290.f;
 
-    // Vysky vodorovnych pasem.
-    inline constexpr float topbar_h = 54.f;
-    inline constexpr float strip_h  = 96.f;   // indicator strip
-    inline constexpr float kbd_h    = 104.f;  // klaviatura + popisek
-    inline constexpr float log_h    = 84.f;
+    // Vysky vodorovnych pasem. (Tesne kolem obsahu — zadne prazdne misto dole.)
+    inline constexpr float topbar_h = 44.f;    // 1 radek combo/tlacitka + vzduch
+    inline constexpr float strip_h  = 100.f;   // stat dlazdice (vetsi cisla) + peak L/R
+    inline constexpr float kbd_h    = 100.f;   // klaviatura + popisek
+    inline constexpr float log_h    = 80.f;
 
     // Padding / mezery.
-    inline constexpr float pad_outer = 24.f;   // vnejsi okraj okna
+    inline constexpr float pad_outer = 20.f;   // vnejsi okraj okna
     inline constexpr float pad_panel = 20.f;   // vnitrni padding panelu
     inline constexpr float gap_col   = 0.f;    // mezi sloupci (delic je hairline/tick)
-    inline constexpr float row_gap   = 16.f;   // vertikalni mezera mezi prvky
+    inline constexpr float row_gap   = 10.f;   // vertikalni mezera mezi pasmy/prvky
     inline constexpr float row_gap_s = 8.f;    // mala vertikalni mezera (label↔control)
 
     // Widgety.
