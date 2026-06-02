@@ -21,9 +21,10 @@
 
 **GUI (`panel_topbar.cpp`)** — vedle BUFFER selektoru (viz B): `DSP <peak%>`; číslo **červené** když `overloadRecent(4000)` (load ≥ 1.0 = minul deadline), jinak `muted`. **Jen červená, žádná žlutá.**
 
-## B) Runtime buffer selektor
+## B) Runtime buffer selektor + read-only SAMPLE RATE
 
 **GUI topbar (`panel_topbar.cpp`)** — mezi `CH []` a (vpravo) `LOG []`:
+- **`SR`** read-only label — `engine.sampleRate()` zformátovaný (např. „48 kHz"). NENÍ editovatelný v GUI; mění se POUZE v `state.json` (`audio_sample_rate`) a aplikuje se při startu. Engine SR je naše/device volba (request do miniaudio, které dorovná na nativní HW rate), NE bank-derived — samply se sladí per-voice resamplingem (`pos_inc_ = pitch_ratio·sample_sr/engine_sr`, voice.cpp:129), takže banka SR nediktuje. Protože se SR za běhu nemění, NEPOTŘEBUJEME `engine.setSampleRate()` ani re-prepare na SR.
 - Label **`BUFFER`** + combo s hodnotami `{32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}` framů; vedle latence v ms.
 - **ms vždy z aktuální SR:** `frames * 1000.0f / engine.sampleRate()` (live getter `cfg_.sample_rate`, engine.h:84) — NIKDY ne z literálu 48000. Stejný zdroj pravdy jako DSP LOAD perioda (`n_samples/cfg_.sample_rate`). Pozn.: dnes SR za běhu nikdo nemění (standalone fixně 48000); až host (JUCE `prepareToPlay`) změní SR, engine bude potřebovat `setSampleRate`/`prepare(sr,...)` entrypoint aktualizující `cfg_.sample_rate` (analogicky `setBlockSize`) — getter to do GUI propíše sám, topbar se nemění. To je FUTURE, mimo rozsah.
 - Na změnu (GUI vlákno, v `AppContext` helper `setAudioBlockSize(int)`):
@@ -33,7 +34,7 @@
   4. `state.audio_block_size = n` (persist).
   - Krátký audio gap při přepnutí je OK (uživatelská akce).
 
-**Persistence (`persistence.{h,cpp}`)** — nové pole `int audio_block_size = 256;` (save + obranné load, jako DSP pole; schema zůstává v4). `AppContext::initFromState` použije `state.audio_block_size` pro `cfg.block_size` i pro `audio->start`. Debounce/uložení po změně (přidat do change-detektoru v `main.cpp`).
+**Persistence (`persistence.{h,cpp}`)** — nová pole `int audio_block_size = 256;` a `int audio_sample_rate = 48000;` (save + obranné load, jako DSP pole; schema zůstává v4). `AppContext::initFromState` použije `state.audio_block_size` + `state.audio_sample_rate` pro `cfg.block_size`/`cfg.sample_rate` i pro `audio->start`. `audio_block_size` se mění z GUI (debounce/uložení po změně v `main.cpp`); `audio_sample_rate` se mění jen ručně v JSONu (GUI ho jen zobrazuje read-only).
 
 **Vztah k host/JUCE:** `Engine::processBlock(out_l,out_r,n)` už bere `n` per-call → v plugin buildu řídí buffer host (až 8192) a metr (perioda z `n`) funguje i tam. Selektor je jen pro standalone `AudioDevice`. `ring_capacity_frames` (8192) ≥ max blok (8192) → konzistentní; větší buffer streamování ulehčí (víc času na refill).
 
