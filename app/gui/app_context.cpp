@@ -50,8 +50,13 @@ bool AppContext::initFromState(const GuiState& s) {
 
     // Engine config z GuiState. master_gain je v dB v GUI, prevod na linear.
     ithaca::EngineConfig cfg;
-    cfg.sample_rate          = 48000;
-    cfg.block_size           = 256;
+    // Validace perzistovanych audio hodnot (JSON muze byt rucne editovany).
+    // SR <= 0 → fallback 48000 (jinak deleni nulou v load metru / pos_inc).
+    // block_size clamp na [32, 8192] (stejne meze jako Engine::setBlockSize).
+    cfg.sample_rate          = state.audio_sample_rate > 0 ? state.audio_sample_rate : 48000;
+    cfg.block_size           = std::clamp(state.audio_block_size, 32, 8192);
+    state.audio_sample_rate  = cfg.sample_rate;   // promitni validovane zpet do state
+    state.audio_block_size   = cfg.block_size;
     cfg.master_gain          = std::pow(10.f, state.master_gain_db / 20.f);
     cfg.resonance_strength   = state.resonance_strength;
     cfg.release_ms           = state.release_ms;
@@ -130,6 +135,25 @@ void AppContext::shutdown() {
     if (midi.isOpen()) midi.close();
     if (audio) audio->stop();
     log::Logger::default_().clearSubscribers();
+}
+
+void AppContext::setAudioBlockSize(int n) {
+    // Poradi je kriticke: stop() PRVNI (joinne miniaudio callback), teprve pak
+    // setBlockSize() mutuje engine stav (cfg, DSP koeficienty, rezonance decay,
+    // refill prah). Jinak by re-prepare bezel souběžne s in-flight processBlock
+    // na audio threadu = data race.
+    if (audio) audio->stop();
+    const int applied = engine.setBlockSize(n);   // clamp 32..8192 + re-prepare
+    state.audio_block_size = applied;
+    if (audio) {
+        if (!audio->start(&audioCallback, &engine, engine.sampleRate(), applied)) {
+            log::Logger::default_().log("gui", log::Severity::Warning,
+                "Restart audio device s block=%d selhal", applied);
+        } else {
+            log::Logger::default_().log("gui", log::Severity::Info,
+                "Audio buffer zmenen na %d framu", applied);
+        }
+    }
 }
 
 } // namespace ithaca::gui

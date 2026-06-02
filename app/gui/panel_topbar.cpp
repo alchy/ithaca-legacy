@@ -34,7 +34,7 @@ void renderTopBar(AppContext& ctx) {
     ImGui::TextUnformatted("MIDI IN");
     ImGui::PopStyleColor();
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(300);   // delsi nazvy portu (IAC Driver Bus 1 ...)
+    ImGui::SetNextItemWidth(210);   // zkraceno o 30% (z 300) — misto pro SR/BUFFER/DSP skupinu
     const char* cur = ctx.state.midi_port_name.empty() ? "(none)"
                     : ctx.state.midi_port_name.c_str();
     if (ImGui::BeginCombo("##midi", cur)) {
@@ -82,6 +82,42 @@ void renderTopBar(AppContext& ctx) {
             }
         }
         ImGui::EndCombo();
+    }
+
+    // -- SAMPLE RATE (read-only) | BUFFER (runtime combo + ms) --
+    // DSP LOAD metr je v indicator stripu (panel_indicators.cpp) vedle ostatnich
+    // mericu (VOICES/RINGS), ne zde.
+    const int   sr   = ctx.engine.sampleRate();
+    const float sr_f = (float)(sr > 0 ? sr : 48000);
+
+    ImGui::SameLine(0, 18);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("SR");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    { char b[16]; std::snprintf(b, sizeof(b), "%g kHz", sr_f / 1000.0);
+      ImGui::TextUnformatted(b); }
+
+    ImGui::SameLine(0, 18);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("BUFFER");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(72);
+    {
+        static const int kBufs[] = { 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192 };
+        const int cur_bs = ctx.engine.blockSize();
+        char curlbl[8]; std::snprintf(curlbl, sizeof(curlbl), "%d", cur_bs);
+        if (ImGui::BeginCombo("##buffer", curlbl)) {
+            for (int v : kBufs) {
+                char b[8]; std::snprintf(b, sizeof(b), "%d", v);
+                if (ImGui::Selectable(b, v == cur_bs) && v != cur_bs)
+                    ctx.setAudioBlockSize(v);
+            }
+            ImGui::EndCombo();
+        }
     }
 
     // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako

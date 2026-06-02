@@ -145,6 +145,14 @@ public:
     float masterPeakL() const noexcept { return master_peak_l_.load(std::memory_order_relaxed); }
     float masterPeakR() const noexcept { return master_peak_r_.load(std::memory_order_relaxed); }
 
+    // -- DSP load meter (GUI; atomic) --
+    // Peak-hold zatizeni audio threadu = cas renderu / perioda bloku. 1.0 = na
+    // hranici deadline, > 1.0 = blok se nestihl (dropout riziko). Decay ~0.5 s.
+    float dspLoadPeak() const noexcept { return dsp_load_peak_.load(std::memory_order_relaxed); }
+    // True kdyz overload (load >= 1.0) nastal pred mene nez `ms` ms. Vzor
+    // noteOnRecent — GUI cervena dlazba.
+    bool  overloadRecent(float ms) const noexcept;
+
     // -- DSP chain (GUI ovlada stage; audio thread vola process v processBlock) --
     dsp::DspChain& dspChain() noexcept { return dsp_; }
 
@@ -170,6 +178,9 @@ private:
     // Master peak meter — psano z audio threadu (processBlock), cteno z GUI.
     std::atomic<float>                master_peak_l_{0.f};
     std::atomic<float>                master_peak_r_{0.f};
+    // DSP load meter — psano z audio threadu (processBlock), cteno z GUI.
+    std::atomic<float>                dsp_load_peak_{0.f};
+    std::atomic<uint64_t>             last_overload_us_{0};
     // Bank reload guard. Pokud true, processBlock vraci ticho a preskoci
     // veskery render / drain — chrani pred race s loadBank na non-RT threadu.
     std::atomic<bool>                 bank_loading_{false};

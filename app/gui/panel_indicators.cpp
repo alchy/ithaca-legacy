@@ -43,37 +43,45 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
 
     ImGui::SameLine(0,0);
 
-    // --- center: 4 ciselne dlazdice roztazene pres celou sirku ---
-    // VOICES (vlevo) | RESONANCE | MAIN RINGS | RESO RINGS (vpravo). Ring
-    // dlazdice ukazuji used/total a CISLO ZCERVENA na 4 s po underrunu daneho
-    // poolu (engine drzi timestamp) — uzivatel taha MAX RESONANCE dolu dokud
-    // RESO RINGS neprestane cervenat. Zarovnani resi StatTile (align+margin).
+    // --- center: 5 ciselnych dlazdic roztazenych pres celou sirku ---
+    // VOICES (vlevo) | RESONANCE | MAIN RINGS | RESO RINGS | DSP LOAD (vpravo).
+    // Ring dlazdice ukazuji used/total a CISLO ZCERVENA na 4 s po underrunu
+    // daneho poolu (engine drzi timestamp) — uzivatel taha MAX RESONANCE dolu
+    // dokud RESO RINGS neprestane cervenat. DSP LOAD = peak-hold zatizeni audio
+    // threadu (cas renderu / perioda bloku); ZCERVENA na 4 s po overloadu
+    // (load >= 1.0 = blok minul deadline). Zarovnani resi StatTile (align+margin).
     float center_w = ImGui::GetContentRegionAvail().x - col3_w;
     ImGui::BeginChild("##ind_diag", {center_w, H}, false);
-    const bool main_ur = ctx.engine.mainStreamUnderrunRecent(4000.f);
-    const bool res_ur  = ctx.engine.resonanceStreamUnderrunRecent(4000.f);
+    const bool main_ur  = ctx.engine.mainStreamUnderrunRecent(4000.f);
+    const bool res_ur   = ctx.engine.resonanceStreamUnderrunRecent(4000.f);
+    const bool overload = ctx.engine.overloadRecent(4000.f);
     const ImU32 ring_red = IM_COL32(0xd0, 0x5a, 0x4a, 255);
-    char vbuf[8], rbuf[8], mbuf[16], gbuf[16];
+    char vbuf[8], rbuf[8], mbuf[16], gbuf[16], dbuf[8];
     std::snprintf(vbuf, sizeof(vbuf), "%d", ctx.engine.activeVoices());
     std::snprintf(rbuf, sizeof(rbuf), "%d", ctx.engine.resonanceVoices());
     std::snprintf(mbuf, sizeof(mbuf), "%d/%d",
                   ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal());
     std::snprintf(gbuf, sizeof(gbuf), "%d/%d",
                   ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
-    float quarter = center_w / 4.f;
-    ImGui::BeginChild("##t_v", {quarter, H}, false);
+    std::snprintf(dbuf, sizeof(dbuf), "%.0f%%", ctx.engine.dspLoadPeak() * 100.f);
+    float fifth = center_w / 5.f;
+    ImGui::BeginChild("##t_v", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("VOICES", vbuf, Colors::gold, 0.f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
-    ImGui::BeginChild("##t_r", {quarter, H}, false);
+    ImGui::BeginChild("##t_r", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("RESONANCE", rbuf, Colors::silver, 0.5f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
-    ImGui::BeginChild("##t_m", {quarter, H}, false);
+    ImGui::BeginChild("##t_m", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("MAIN RINGS", mbuf,
                                            main_ur ? ring_red : Colors::silver, 0.5f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
-    ImGui::BeginChild("##t_g", {quarter, H}, false);
+    ImGui::BeginChild("##t_g", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("RESO RINGS", gbuf,
-                                           res_ur ? ring_red : Colors::silver, 1.f, pad);
+                                           res_ur ? ring_red : Colors::silver, 0.5f, pad);
+    ImGui::EndChild(); ImGui::SameLine(0,0);
+    ImGui::BeginChild("##t_d", {fifth, H}, false);
+        ImGui::Dummy({0,8}); wdg::StatTile("DSP LOAD", dbuf,
+                                           overload ? ring_red : Colors::silver, 1.f, pad);
     ImGui::EndChild();
     ImGui::EndChild();
 

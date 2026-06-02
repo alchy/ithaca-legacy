@@ -9,6 +9,9 @@
 
 #include "engine.h"
 
+#include <cmath>
+#include <vector>
+
 TEST_CASE("Engine diagnostic getters - fresh engine no bank") {
     using namespace ithaca;
     Engine e;
@@ -61,4 +64,25 @@ TEST_CASE("Engine runtime setters") {
 
     // setExciteDecayMs musi pretrpet sub-ms hodnoty (ResonanceEngine si poradi).
     CHECK_NOTHROW(e.setExciteDecayMs(0.1f));
+}
+
+TEST_CASE("Engine DSP load meter - fresh + after block") {
+    using namespace ithaca;
+    Engine e;
+    EngineConfig cfg;
+    cfg.sample_rate = 48000;
+    cfg.block_size  = 256;
+    REQUIRE(e.init(cfg));
+
+    CHECK(e.dspLoadPeak() == 0.f);
+    CHECK_FALSE(e.overloadRecent(1e9f));
+
+    std::vector<float> l(256, 0.f), r(256, 0.f);
+    e.processBlock(l.data(), r.data(), 256);
+    const float load = e.dspLoadPeak();
+    CHECK(load >= 0.f);
+    CHECK(std::isfinite(load));
+    CHECK_FALSE(e.overloadRecent(1e9f));
+
+    CHECK_FALSE(e.overloadRecent(0.f));
 }
