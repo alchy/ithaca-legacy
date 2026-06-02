@@ -175,6 +175,8 @@ int main(int argc, char* argv[]) {
     // 6. Render loop. Panely top bar + keyboard + diag + params + log strip.
     //    Persistence debounce: sleduj zmeny GuiState, ulozi po 1s idle (Task 12).
     std::optional<std::chrono::steady_clock::time_point> dirty_since;
+    float prev_layer_db = ctx.state.resonance_layer_db;
+    std::optional<std::chrono::steady_clock::time_point> layer_dirty_since;
     GuiState last_saved = ctx.state;
 
     // CONFIG stranky: VOICE (engine voice params) + 3 DSP stage z chainu.
@@ -303,6 +305,19 @@ int main(int argc, char* argv[]) {
                 saveState(defaultStatePath(), ctx.state);
                 last_saved = ctx.state;
                 dirty_since.reset();
+            }
+        }
+
+        // Resonance Layer debounce: po 400ms ticha prestavet RAM cache na pozadi.
+        if (ctx.state.resonance_layer_db != prev_layer_db) {
+            prev_layer_db = ctx.state.resonance_layer_db;
+            layer_dirty_since = std::chrono::steady_clock::now();
+        }
+        if (layer_dirty_since) {
+            auto now = std::chrono::steady_clock::now();
+            if (now - *layer_dirty_since > std::chrono::milliseconds(400)) {
+                ctx.engine.rebuildResonanceCache(ctx.state.resonance_layer_db);
+                layer_dirty_since.reset();
             }
         }
 
