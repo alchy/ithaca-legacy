@@ -132,6 +132,8 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.limiter_threshold_db = readF("limiter_threshold_db", s.limiter_threshold_db);
         s.limiter_release_ms   = readF("limiter_release_ms", s.limiter_release_ms);
         s.config_page          = readI("config_page", s.config_page);
+        s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
+        s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
         s.schema_version = 4;   // po nacteni vzdy ulozime jako v4
     } catch (...) {
         return std::nullopt;
@@ -174,7 +176,9 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"limiter_enabled\": "    << (s.limiter_enabled ? "true" : "false") << ",\n";
         f << "  \"limiter_threshold_db\": " << s.limiter_threshold_db << ",\n";
         f << "  \"limiter_release_ms\": " << s.limiter_release_ms   << ",\n";
-        f << "  \"config_page\": "        << s.config_page          << "\n";
+        f << "  \"config_page\": "        << s.config_page          << ",\n";
+        f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
+        f << "  \"audio_sample_rate\": "  << s.audio_sample_rate    << "\n";
         f << "}\n";
     }
     std::filesystem::rename(tmp, path, ec);

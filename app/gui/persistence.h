@@ -28,6 +28,9 @@ struct GuiState {
     bool  bbe_enabled = false;     float bbe_definition = 0.f; float bbe_bass = 0.f;
     bool  limiter_enabled = false; float limiter_threshold_db = 0.f; float limiter_release_ms = 200.f;
     int   config_page = 0;         // 0 = VOICE, 1 = AGC, 2 = BBE, 3 = LIMITER
+    // -- Audio (Faze 8) --
+    int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
+    int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only
     int         window_x = 100, window_y = 100;
     int         window_w = 1280, window_h = 820;
 };
