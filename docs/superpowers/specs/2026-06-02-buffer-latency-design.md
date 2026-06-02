@@ -24,7 +24,8 @@
 ## B) Runtime buffer selektor
 
 **GUI topbar (`panel_topbar.cpp`)** — mezi `CH []` a (vpravo) `LOG []`:
-- Label **`BUFFER`** + combo s hodnotami `{32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}` framů; vedle latence v ms (`frames*1000/sr`, např. „256 · 5.3 ms").
+- Label **`BUFFER`** + combo s hodnotami `{32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}` framů; vedle latence v ms.
+- **ms vždy z aktuální SR:** `frames * 1000.0f / engine.sampleRate()` (live getter `cfg_.sample_rate`, engine.h:84) — NIKDY ne z literálu 48000. Stejný zdroj pravdy jako DSP LOAD perioda (`n_samples/cfg_.sample_rate`). Pozn.: dnes SR za běhu nikdo nemění (standalone fixně 48000); až host (JUCE `prepareToPlay`) změní SR, engine bude potřebovat `setSampleRate`/`prepare(sr,...)` entrypoint aktualizující `cfg_.sample_rate` (analogicky `setBlockSize`) — getter to do GUI propíše sám, topbar se nemění. To je FUTURE, mimo rozsah.
 - Na změnu (GUI vlákno, v `AppContext` helper `setAudioBlockSize(int)`):
   1. `audio->stop()` (joinne audio callback),
   2. `engine.setBlockSize(n)` (clamp 32..8192, přepočet refill prahu, re-prepare DSP + rezonance),
