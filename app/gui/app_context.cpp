@@ -50,8 +50,8 @@ bool AppContext::initFromState(const GuiState& s) {
 
     // Engine config z GuiState. master_gain je v dB v GUI, prevod na linear.
     ithaca::EngineConfig cfg;
-    cfg.sample_rate          = 48000;
-    cfg.block_size           = 256;
+    cfg.sample_rate          = state.audio_sample_rate;
+    cfg.block_size           = state.audio_block_size;
     cfg.master_gain          = std::pow(10.f, state.master_gain_db / 20.f);
     cfg.resonance_strength   = state.resonance_strength;
     cfg.release_ms           = state.release_ms;
@@ -130,6 +130,21 @@ void AppContext::shutdown() {
     if (midi.isOpen()) midi.close();
     if (audio) audio->stop();
     log::Logger::default_().clearSubscribers();
+}
+
+void AppContext::setAudioBlockSize(int n) {
+    const int applied = engine.setBlockSize(n);   // clamp 32..8192 + re-prepare
+    state.audio_block_size = applied;
+    if (audio) {
+        audio->stop();   // joinne miniaudio callback → zadny RT race s restart
+        if (!audio->start(&audioCallback, &engine, engine.sampleRate(), applied)) {
+            log::Logger::default_().log("gui", log::Severity::Warning,
+                "Restart audio device s block=%d selhal", applied);
+        } else {
+            log::Logger::default_().log("gui", log::Severity::Info,
+                "Audio buffer zmenen na %d framu", applied);
+        }
+    }
 }
 
 } // namespace ithaca::gui

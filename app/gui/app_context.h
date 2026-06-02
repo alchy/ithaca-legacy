@@ -30,6 +30,11 @@ struct AppContext {
     // bank/MIDI failures jsou jen warning).
     bool initFromState(const GuiState& s);
 
+    // Runtime zmena audio bufferu (BUFFER combo). Zastavi audio device, prenastavi
+    // engine block size, znovu nastartuje device a aktualizuje state.audio_block_size.
+    // Kratky audio gap je ocekavany (uzivatelska akce). Volat z GUI threadu.
+    void setAudioBlockSize(int n);
+
     // Cisty shutdown: midi close, audio stop, subscriber clear. Volat pred
     // destrukci ImGui/GLFW. Engine destruktor sam uvolni voice/stream/resonance.
     void shutdown();
