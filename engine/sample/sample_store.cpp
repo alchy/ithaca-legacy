@@ -23,6 +23,7 @@ namespace {
 bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
                       const std::string& filename, log::Logger& logger,
                       int preload_ms, int resonance_window_ms) {
+    (void)resonance_window_ms;   // ingest uz neplni preload_resonance — dela to buildResonanceCache
     WavInfo info = peekWavInfo(full_path);
     if (!info.valid) {
         logger.log("bank", log::Severity::Warning,
