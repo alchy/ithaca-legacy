@@ -1,7 +1,7 @@
 #pragma once
 // app/gui/voice_page.h — "VOICE" stranka pro CONFIG prepinac. Neni soucasti
 // audio chainu; je to IParamPage adapter nad existujicimi engine settery +
-// GuiState. hasEnable()=false (vzdy on). MAX RESONANCE je readonly (init-only).
+// GuiState. hasEnable()=false (vzdy on). MAX RESONANCE je zive (Task 5).
 #include "dsp/dsp_stage.h"
 #include "app_context.h"
 #include <cmath>
@@ -37,7 +37,10 @@ public:
                     ctx_.engine.setReleaseMs(v); break;
             case 3: ctx_.state.excite_decay_ms = v;
                     ctx_.engine.setExciteDecayMs(v); break;
-            default: break;   // MAX RESONANCE readonly
+            default:  // MAX RESONANCE — zivy strop soucasne znejicich rezonanci
+                ctx_.state.max_resonance_voices = (int)v;
+                ctx_.engine.setMaxResonanceVoices((int)v);
+                break;
         }
     }
     bool hasEnable() const override { return false; }
@@ -52,7 +55,7 @@ private:
         {"resonance",  "RESONANCE",       0.f, 1.f,    0.5f,   "%.2f",    false},
         {"release_ms", "RELEASE",        50.f, 2000.f, 200.f,  "%.0f ms", false},
         {"excite_ms",  "EXCITE DECAY",  500.f, 30000.f,5000.f, "%.0f ms", false},
-        {"max_res",    "MAX RESONANCE",   1.f, 64.f,   32.f,   "%.0f",    true},
+        {"max_res",    "MAX RESONANCE",   1.f, 64.f,   32.f,   "%.0f",    false},
     };
 };
 

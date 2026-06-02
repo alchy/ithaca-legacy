@@ -286,7 +286,8 @@ int main(int argc, char* argv[]) {
             last_saved.limiter_enabled     != ctx.state.limiter_enabled ||
             last_saved.limiter_threshold_db != ctx.state.limiter_threshold_db ||
             last_saved.limiter_release_ms  != ctx.state.limiter_release_ms ||
-            last_saved.config_page         != ctx.state.config_page;
+            last_saved.config_page         != ctx.state.config_page ||
+            last_saved.max_resonance_voices != ctx.state.max_resonance_voices;
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }
