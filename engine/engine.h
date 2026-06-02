@@ -205,7 +205,7 @@ private:
     std::atomic<uint64_t>             last_note_off_us_{0};
     std::thread          recache_thread_;
     std::atomic<bool>    recache_running_{false};
-    std::atomic<float>   recache_pending_target_{-30.f};
+    std::atomic<float>   recache_target_{-30.f};   // zadany cil (cte bg thread; bez torn readu cfg_)
     std::atomic<bool>    recache_has_pending_{false};
     bool                              initialized_ = false;
 };

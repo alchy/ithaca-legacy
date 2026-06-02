@@ -398,30 +398,31 @@ void Engine::setResonanceEnabled(bool on) noexcept {
 
 void Engine::rebuildResonanceCache(float target_db) noexcept {
     if (!resonance_) return;
-    cfg_.resonance_layer_db = target_db;          // engine si pamatuje aktualni cil
-    resonance_->setLayerTargetDb(target_db);      // nove spawny vyberou novou vrstvu hned
-    // Pokud uz rebuild bezi, jen uloz pending cil (coalescing).
+    cfg_.resonance_layer_db = target_db;            // GUI-thread zapis (pamet aktualniho cile)
+    recache_target_.store(target_db, std::memory_order_release);  // cil pro bg thread (bez torn read)
+    resonance_->setLayerTargetDb(target_db);        // nove spawny vyberou novou vrstvu hned
+    // VZDY (i pri coalesce) sraz ready flagy → nove hlasy stream mod, a fadene aktivni
+    // cache-mod hlasy. Tim odpada okno, kdy by ready=true ukazoval na jeste nepostavenou
+    // novou cilovou vrstvu (jinak benigni — hlas by degradoval na ring stream — ale takhle
+    // je stav konzistentni). RT-safety: ResonanceVoice re-fetchuje preload_resonance kazdy
+    // blok; fade + 120ms sleep zaruci, ze cache-mod hlas je !active driv, nez bg realokuje.
+    resonance_->clearCacheReady();
+    resonance_->requestRecacheFade();
+    // Pokud uz rebuild bezi, jen oznac pending (bezici thread znovu prebuduje na novy cil).
     if (recache_running_.exchange(true, std::memory_order_acq_rel)) {
-        recache_pending_target_.store(target_db, std::memory_order_relaxed);
         recache_has_pending_.store(true, std::memory_order_release);
         return;
     }
-    resonance_->clearCacheReady();      // nove hlasy → stream mod
-    resonance_->requestRecacheFade();   // audio thread fadene aktivni cache-mod hlasy
     if (recache_thread_.joinable()) recache_thread_.join();   // predchozi uz dobehl
     recache_thread_ = std::thread([this]() {
         for (;;) {
-            const float t = cfg_.resonance_layer_db;
+            const float t = recache_target_.load(std::memory_order_acquire);
             std::this_thread::sleep_for(std::chrono::milliseconds(120));  // dobeh fade
             auto ready = ithaca::buildResonanceCache(
                 bank_, t, cfg_.resonance_window_ms, log::Logger::default_());
             if (resonance_) resonance_->setCacheReady(ready);
-            if (recache_has_pending_.exchange(false, std::memory_order_acquire)) {
-                const float nt = recache_pending_target_.load(std::memory_order_relaxed);
-                cfg_.resonance_layer_db = nt;
-                if (resonance_) { resonance_->clearCacheReady(); resonance_->requestRecacheFade(); }
-                continue;
-            }
+            // Prisel mezitim novy cil? (GUI uz srazil ready + fade) → prebuduj znovu.
+            if (recache_has_pending_.exchange(false, std::memory_order_acquire)) continue;
             break;
         }
         recache_running_.store(false, std::memory_order_release);
