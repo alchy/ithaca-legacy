@@ -227,7 +227,7 @@ Obsah zleva doprava:
 3. **CH dropdown** (`ImGui::BeginCombo("##ch")`) — OMNI nebo 1–16. Při změně: `state.midi_channel = c`, `midi.setChannel(c)`.
 4. **SR | BUFFER skupina** (Fáze 8, mezi CH a LOG) — viz oblast C (Buffery):
    - **`SR`** read-only label = `engine.sampleRate()` formátovaný (`%g kHz`). Konfiguruje se jen v `state.json` (`audio_sample_rate`), GUI ho jen zobrazuje.
-   - **`BUFFER`** combo `{32…8192}` framů (`##buffer`) — při výběru `ctx.setAudioBlockSize(v)` (stop→setBlockSize→start, persist). Vedle latence v ms = `frames*1000/engine.sampleRate()`.
+   - **`BUFFER`** combo `{32…8192}` framů (`##buffer`) — při výběru `ctx.setAudioBlockSize(v)` (stop→setBlockSize→start, persist). Jen počet framů (ms latence vynechána kvůli místu na liště).
    - (DSP load metr je v indicator stripu jako 5. dlaždice, ne zde. MIDI IN combo zkráceno na 210 px.)
 4. **LOG level combo** (vpravo, pevný right margin 290 px) — 6 úrovní `debug/info/warn/error/fatal/off`. Při změně: `state.log_level = kLevels[cur]`, `Logger::setMinSeverity(…)`.
 5. **RESET tlačítko** — resetuje `state.resonance_strength = 0.5`, `release_ms = 200`, `excite_decay_ms = 5000`, `master_gain_db = 0` a volá příslušné engine settery (`setResonanceStrength`, `setReleaseMs`, `setExciteDecayMs`, `setMasterGain(1.f)`).

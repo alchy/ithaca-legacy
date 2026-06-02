@@ -119,12 +119,6 @@ void renderTopBar(AppContext& ctx) {
             ImGui::EndCombo();
         }
     }
-    ImGui::SameLine();
-    { char b[16]; std::snprintf(b, sizeof(b), "%.1f ms",
-                                (float)ctx.engine.blockSize() * 1000.0f / sr_f);
-      ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-      ImGui::TextUnformatted(b);
-      ImGui::PopStyleColor(); }
 
     // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako
     // primarni slider.) RESET vraci vsechny VOICE/master parametry na default.
