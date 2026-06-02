@@ -71,6 +71,16 @@ void ResonanceEngine::setEnabled(bool on) {
 bool ResonanceEngine::enabled() const {
     return enabled_.load(std::memory_order_relaxed);
 }
+void ResonanceEngine::setCacheReady(const std::array<bool, 128>& ready) noexcept {
+    for (int n = 0; n < 128; ++n)
+        reso_cache_ready_[(size_t)n].store(ready[(size_t)n], std::memory_order_release);
+}
+void ResonanceEngine::clearCacheReady() noexcept {
+    for (auto& f : reso_cache_ready_) f.store(false, std::memory_order_release);
+}
+void ResonanceEngine::requestRecacheFade() noexcept {
+    recache_fade_request_.store(true, std::memory_order_relaxed);
+}
 
 void ResonanceEngine::setExciteDecayTimeMs(float tau_ms, int block_size, float engine_sr) {
     if (tau_ms <= 0.f || block_size <= 0 || engine_sr <= 0.f) return;
@@ -100,6 +110,7 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
     const float gain = gain_lin_.load(std::memory_order_relaxed);
     const float vel_norm = (float)velocity / 127.f;
     if (vel_norm <= 0.f) return;
+    last_engine_sr_ = engine_sr;
 
     for (int N = 0; N < 128; ++N) {
         if (N == played_midi) continue;              // play-on-self
@@ -191,7 +202,8 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
             "SPAWN  played=%d N=%d harm=%.3f excite=%.4f init_gain=%.4f cc64=%d damping[N]=%.3f",
             played_midi, N, harm, excite, init_gain, (int)pedal.sustainCC(),
             pedal.dampingFor(N));
-        slot->start(N, m, init_gain, pl, pr, engine_sr);
+        const bool use_cache = reso_cache_ready_[(size_t)N].load(std::memory_order_acquire);
+        slot->start(N, m, init_gain, pl, pr, engine_sr, use_cache);
         excite_state_[N].last_excite = excite;
     }
     // Po smycce: dorovnej budget (resi i ZIVE snizeni MAX RESONANCE sliderem —
@@ -202,6 +214,11 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
 
 bool ResonanceEngine::processBlock(float* out_l, float* out_r, int n_samples,
                                    const PedalState& pedal) noexcept {
+    if (recache_fade_request_.exchange(false, std::memory_order_relaxed)) {
+        for (auto& slot : voices_)
+            if (slot && slot->active() && !slot->fadingOut())
+                slot->fadeOut(last_engine_sr_);
+    }
     // 1) Per-blok decay last_excite + update target_gain podle pedalu.
     //    Aplikujeme jen na hlasy, ktere NEJSOU ve fade-out (rule B / target=0)
     //    — ty si rampu drzi po cele dobe fade-out.

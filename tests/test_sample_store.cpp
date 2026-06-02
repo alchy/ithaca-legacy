@@ -163,7 +163,7 @@ TEST_CASE("loadBank: dlouhy sampl je Streamed, nacita jen preload head") {
     CHECK(bank.total_bytes == 7200u * 2u * sizeof(float));
 }
 
-TEST_CASE("loadBank: Streamed sampl nacita i preload_resonance") {
+TEST_CASE("buildResonanceCache: Streamed cilova vrstva nacte preload_resonance") {
     namespace fs = std::filesystem;
     std::string dir = "/tmp/ithaca_fixture_resonance";
     fs::remove_all(dir); fs::create_directories(dir);
@@ -176,6 +176,9 @@ TEST_CASE("loadBank: Streamed sampl nacita i preload_resonance") {
                                /*midi_from=*/0, /*midi_to=*/127,
                                /*preload_ms=*/150,
                                /*resonance_window_ms=*/200);
+    // loadBank uz resonance NEplni eagerne — buffer naplni az buildResonanceCache
+    // pro cilovou vrstvu (jediny slot noty 60 = cil pro libovolny target_db).
+    buildResonanceCache(bank, /*target_db=*/-20.f, /*window_ms=*/200, L);
     fs::remove_all(dir);
 
     REQUIRE(bank.notes[60].recorded);

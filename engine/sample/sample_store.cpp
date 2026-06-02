@@ -2,10 +2,12 @@
 #include "sample/sample_store.h"
 
 #include "io/wav_reader.h"
+#include "resonance/resonance_layer_select.h"
 #include "sample/bank_index.h"
 #include "sample/sample_loader.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 
@@ -21,6 +23,7 @@ namespace {
 bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
                       const std::string& filename, log::Logger& logger,
                       int preload_ms, int resonance_window_ms) {
+    (void)resonance_window_ms;   // ingest uz neplni preload_resonance — dela to buildResonanceCache
     WavInfo info = peekWavInfo(full_path);
     if (!info.valid) {
         logger.log("bank", log::Severity::Warning,
@@ -74,26 +77,10 @@ bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
     int   ae  = findAttackEnd  (mic.preload_head.data(),
                                  mic.head_frames, info.sample_rate);
 
-    // Nacti preload_resonance pro Streamed mic (faze 5: zdroj rezonancnich hlasu
-    // — preskoceny attack, drzeny sustain). Pro FullyLoaded je cely sampl v
-    // preload_head, takze separatni resonance buffer netreba.
-    if (mic.mode == MicLayerMode::Streamed && resonance_window_ms > 0) {
-        mic.resonance_start_frame = ae;          // = attack_end_frame
-        int rwin = (int)((int64_t)resonance_window_ms * info.sample_rate / 1000);
-        // Orizni window na to, co soubor jeste obsahuje.
-        int avail = info.frames - mic.resonance_start_frame;
-        if (avail < 0) avail = 0;
-        if (rwin > avail) rwin = avail;
-        if (rwin > 0) {
-            WavData rd = readWavRange(full_path, mic.resonance_start_frame, rwin);
-            if (rd.valid && rd.frames > 0) {
-                mic.resonance_frames  = rd.frames;
-                mic.preload_resonance = std::move(rd.samples);
-            } else {
-                logger.log("bank", log::Severity::Warning,
-                           "Nelze nacist preload_resonance: %s", filename.c_str());
-            }
-        }
+    // Resonance buffer plni az buildResonanceCache (po sortBankSlotsByRms), a to
+    // JEN pro per-notu cilovou velocity vrstvu. Ingest jen ulozi start frame.
+    if (mic.mode == MicLayerMode::Streamed) {
+        mic.resonance_start_frame = ae;          // = attack_end_frame (buffer plni buildResonanceCache)
     }
 
     SampleAsset asset;
@@ -189,6 +176,45 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
     sortBankSlotsByRms(bank);
     logBankSummary(bank, logger, cache_budget_mb);
     return bank;
+}
+
+std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
+                                          int window_ms, log::Logger& logger) {
+    std::array<bool, 128> ready{};   // vse false
+    for (int n = 0; n < 128; ++n) {
+        auto& note = bank.notes[(size_t)n];
+        if (!note.recorded || note.slots.empty()) continue;
+        const int si = nearestSlotByRms(note, target_db);
+        if (si < 0) continue;
+        for (int s = 0; s < (int)note.slots.size(); ++s) {
+            auto& vslot = note.slots[(size_t)s];
+            if (vslot.variants.empty() || vslot.variants[0].mics.empty()) continue;
+            MicLayer& m = vslot.variants[0].mics[0];
+            if (s != si) {
+                m.preload_resonance.clear();
+                m.preload_resonance.shrink_to_fit();
+                m.resonance_frames = 0;
+                continue;
+            }
+            // cilovy slot
+            if (m.mode == MicLayerMode::FullyLoaded) { ready[(size_t)n] = true; continue; }
+            int rwin  = (int)((int64_t)window_ms * m.file.sample_rate / 1000);
+            int avail = m.file.frames - m.resonance_start_frame;
+            if (avail < 0) avail = 0;
+            if (rwin > avail) rwin = avail;
+            if (rwin <= 0) { m.preload_resonance.clear(); m.resonance_frames = 0; ready[(size_t)n] = true; continue; }
+            WavData rd = readWavRange(m.file.path, m.resonance_start_frame, rwin);
+            if (rd.valid && rd.frames > 0) {
+                m.resonance_frames  = rd.frames;
+                m.preload_resonance = std::move(rd.samples);
+                ready[(size_t)n] = true;
+            } else {
+                logger.log("bank", log::Severity::Warning,
+                           "buildResonanceCache: read failed note %d", n);
+            }
+        }
+    }
+    return ready;
 }
 
 } // namespace ithaca

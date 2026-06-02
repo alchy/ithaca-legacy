@@ -16,6 +16,7 @@
 #include "pedal/pedal_state.h"
 #include "sample/sample_types.h"
 
+#include <array>
 #include <vector>
 
 using namespace ithaca;
@@ -246,4 +247,13 @@ TEST_CASE("ResonanceEngine: setMaxVoices / maxVoices round-trip + clamp") {
     CHECK(re.maxVoices() == 1);
     re.setMaxVoices(999);          // clamp na <= 64
     CHECK(re.maxVoices() == 64);
+}
+
+TEST_CASE("ResonanceEngine cache-ready API") {
+    using namespace ithaca;
+    ResonanceEngine res(8);
+    std::array<bool,128> ready{}; ready[60] = true;
+    CHECK_NOTHROW(res.setCacheReady(ready));
+    CHECK_NOTHROW(res.clearCacheReady());
+    CHECK_NOTHROW(res.requestRecacheFade());
 }

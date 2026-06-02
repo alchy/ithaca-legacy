@@ -52,6 +52,8 @@ Funkce iteruje všech 128 MIDI not N a pro každou provádí třívrstvý filtr:
 2. *Rule B in-progress:* pokud `slot->active() && slot->fadingOut()`, přeskočí — nová excitace by přerušila probíhající fade-out z rule B.
 3. *Harmonický práh:* `harmonicProximity(N, M) < kResonanceHarmonicMin` (0.05) → vynechá (sekunda, tritonus — téměř nulová hodnota).
 
+**RAM cache mód (fáze 8):** `ResonanceEngine` drží per-notě `reso_cache_ready_[128]` (atomic; mimo movable `MicLayer`). `onPlayedNoteOn` přečte `reso_cache_ready_[N]` (acquire) a předá `use_cache` do `slot->start(...)`: `true` → hraj z RAM `preload_resonance` (6 s cílové vrstvy); `false` → **stream mód** (ignoruj cache, streamuj z `resonance_start_frame` přes ring). Při změně „Resonance Layer" slideru `Engine::rebuildResonanceCache` zavolá `clearCacheReady()` (nové hlasy → stream) + `requestRecacheFade()` → `processBlock` na začátku fadene aktivní cache-mód hlasy; background vlákno pak přestaví cache a `setCacheReady()`. Realloc `preload_resonance` je bezpečný — faded hlasy ho nečtou, stream-mód ho ignoruje.
+
 Před iterací: `if (!enabled_) return;`. Excitace se počítá jako `excite = vel_norm * harm * gain_lin` (kde `gain_lin = 10^(resonance_gain_db/20)`) bez dampingového multiplikátoru — ten se aplikuje až v `processBlock` per-blok přes `setTargetGain`, aby se změny pedálu plynule promítaly do hlasitosti existující rezonance. Sample pro N se vybere `nearestSlotByRms(ns, layer_target_db_)` (nejbližší peak RMS k cíli), pak `variants[0]`, `mics[0]`.
 
 Pokud slot pro N již existuje a je aktivní (per-nota uniqueness 5.5.1(2)), volá `slot->addExcitation(excite)` a aktualizuje `excite_state_[N].last_excite = max(...)`. Nealokuje druhý hlas.
