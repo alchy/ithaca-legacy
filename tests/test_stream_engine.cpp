@@ -109,6 +109,18 @@ TEST_CASE("StreamEngine eof_when_done nastavi ring->eof_ po konci souboru") {
     se.stop();
 }
 
+TEST_CASE("StreamEngine: underrunRecent je false dokud nenastal underrun") {
+    StreamEngine se(4, 1024, 1);
+    CHECK(se.underrunRecent(1000.f) == false);
+}
+
+TEST_CASE("StreamEngine: noteUnderrun orazitkuje a underrunRecent to vidi") {
+    StreamEngine se(4, 1024, 1);
+    se.noteUnderrun();
+    CHECK(se.underrunRecent(1000.f) == true);   // prave ted
+    CHECK(se.underrunRecent(0.f)    == false);  // nulove okno → nic neni "recent"
+}
+
 TEST_CASE("RingHandle push/pop wrap pres konec bufferu") {
     // Direct test ringu bez workeru.
     RingHandle r;

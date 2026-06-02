@@ -76,6 +76,9 @@ bool AppContext::initFromState(const GuiState& s) {
         lim.set(0, state.limiter_threshold_db); lim.set(1, state.limiter_release_ms);
         lim.setEnabled(state.limiter_enabled);
     }
+    // Zivý strop rezonancni polyfonie (uz predano pres cfg, ale explicitne
+    // volame setter aby cesta setMaxResonanceVoices byla vzdy exercisovana).
+    engine.setMaxResonanceVoices(state.max_resonance_voices);
 
     // Bank: best-effort. Pokud cesta neni nebo nejde nacist, jen warning a
     // engine bezi prazdny (uzivatel muze banku vybrat pozdeji pres UI).

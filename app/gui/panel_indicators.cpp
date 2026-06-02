@@ -43,26 +43,37 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
 
     ImGui::SameLine(0,0);
 
-    // --- center: diag dlazdice (VOICES zlate / RESONANCE,RINGS stribro) ---
+    // --- center: 4 ciselne dlazdice roztazene pres celou sirku ---
+    // VOICES (vlevo) | RESONANCE | MAIN RINGS | RESO RINGS (vpravo). Ring
+    // dlazdice ukazuji used/total a CISLO ZCERVENA na 4 s po underrunu daneho
+    // poolu (engine drzi timestamp) — uzivatel taha MAX RESONANCE dolu dokud
+    // RESO RINGS neprestane cervenat. Zarovnani resi StatTile (align+margin).
     float center_w = ImGui::GetContentRegionAvail().x - col3_w;
     ImGui::BeginChild("##ind_diag", {center_w, H}, false);
-    char vbuf[8], rbuf[8], gbuf[16];
+    const bool main_ur = ctx.engine.mainStreamUnderrunRecent(4000.f);
+    const bool res_ur  = ctx.engine.resonanceStreamUnderrunRecent(4000.f);
+    const ImU32 ring_red = IM_COL32(0xd0, 0x5a, 0x4a, 255);
+    char vbuf[8], rbuf[8], mbuf[16], gbuf[16];
     std::snprintf(vbuf, sizeof(vbuf), "%d", ctx.engine.activeVoices());
     std::snprintf(rbuf, sizeof(rbuf), "%d", ctx.engine.resonanceVoices());
-    std::snprintf(gbuf, sizeof(gbuf), "%d", ctx.engine.numRingsUsed());
-    float third = center_w / 3.f;
-    // Tri dlazdice roztazene pres celou sirku: VOICES vlevo | RESONANCE na stred
-    // | RINGS vpravo (jako justified text). Zarovnani resi StatTile (align +
-    // margin); kazda dlazdice ma stejnou tretinovou bunku, ale obsah se v ni
-    // zarovna na svuj kraj/stred. Plna vyska (H) — eyebrow(11) + value(34) se vejde.
-    ImGui::BeginChild("##t_v", {third, H}, false);
+    std::snprintf(mbuf, sizeof(mbuf), "%d/%d",
+                  ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal());
+    std::snprintf(gbuf, sizeof(gbuf), "%d/%d",
+                  ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
+    float quarter = center_w / 4.f;
+    ImGui::BeginChild("##t_v", {quarter, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("VOICES", vbuf, Colors::gold, 0.f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
-    ImGui::BeginChild("##t_r", {third, H}, false);
+    ImGui::BeginChild("##t_r", {quarter, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("RESONANCE", rbuf, Colors::silver, 0.5f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
-    ImGui::BeginChild("##t_g", {third, H}, false);
-        ImGui::Dummy({0,8}); wdg::StatTile("RINGS", gbuf, Colors::silver, 1.f, pad);
+    ImGui::BeginChild("##t_m", {quarter, H}, false);
+        ImGui::Dummy({0,8}); wdg::StatTile("MAIN RINGS", mbuf,
+                                           main_ur ? ring_red : Colors::silver, 0.5f, pad);
+    ImGui::EndChild(); ImGui::SameLine(0,0);
+    ImGui::BeginChild("##t_g", {quarter, H}, false);
+        ImGui::Dummy({0,8}); wdg::StatTile("RESO RINGS", gbuf,
+                                           res_ur ? ring_red : Colors::silver, 1.f, pad);
     ImGui::EndChild();
     ImGui::EndChild();
 

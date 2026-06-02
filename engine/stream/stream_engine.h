@@ -158,6 +158,11 @@ public:
     // Pocet ringu, ktere jsou aktualne in_use (diagnostika).
     int  numRingsUsed()   const noexcept;
 
+    // -- Underrun diagnostika (per-pool). Hlas pri underrunu vola noteUnderrun();
+    //    GUI cte underrunRecent (vzor jako Engine::noteOnRecent). --
+    void noteUnderrun() noexcept;                 // orazitkuje steady_clock micros
+    bool underrunRecent(float ms) const noexcept; // true kdyz posledni underrun < ms
+
     // Refill threshold v stereo frames. Voice si pravidlo "kdyz je v ringu
     // mene nez refill_threshold a soubor nedohran → posli refill" cte odsud.
     // Skalovani s block_size (vetsi block → vetsi spotreba na audio tick →
@@ -186,6 +191,7 @@ private:
 
     std::atomic<bool>   run_{false};
     std::atomic<int>    refill_threshold_{4096};
+    std::atomic<uint64_t> last_underrun_us_{0};
     std::vector<std::thread> workers_;
 };
 

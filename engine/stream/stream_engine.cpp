@@ -229,4 +229,22 @@ void StreamEngine::workerLoop() {
     }
 }
 
+namespace {
+uint64_t nowMicrosSE() {
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<microseconds>(
+        steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
+void StreamEngine::noteUnderrun() noexcept {
+    last_underrun_us_.store(nowMicrosSE(), std::memory_order_relaxed);
+}
+
+bool StreamEngine::underrunRecent(float ms) const noexcept {
+    const uint64_t t = last_underrun_us_.load(std::memory_order_relaxed);
+    if (t == 0) return false;
+    return (nowMicrosSE() - t) < (uint64_t)(ms * 1000.f);
+}
+
 } // namespace ithaca

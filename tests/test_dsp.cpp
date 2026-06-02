@@ -201,3 +201,14 @@ TEST_CASE("Engine vystavuje DSP chain se 3 stage") {
     ch.stage(2).setEnabled(true);
     CHECK(ch.stage(2).enabled());
 }
+
+TEST_CASE("Engine ma oddelene main + resonance stream pooly") {
+    ithaca::EngineConfig cfg;
+    ithaca::Engine eng;
+    REQUIRE(eng.init(cfg));
+    CHECK(eng.mainRingsTotal()      == cfg.num_rings);
+    CHECK(eng.resonanceRingsTotal() == cfg.resonance_num_rings);
+    CHECK(eng.mainRingsTotal() != eng.resonanceRingsTotal());   // dva ruzne pooly
+    CHECK(eng.mainStreamUnderrunRecent(1000.f) == false);
+    CHECK(eng.resonanceStreamUnderrunRecent(1000.f) == false);
+}

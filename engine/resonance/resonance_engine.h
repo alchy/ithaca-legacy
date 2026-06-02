@@ -68,6 +68,15 @@ public:
     void  setStrength(float s);
     float strength() const;
 
+    // Zivy strop poctu soucasne znejicich rezonancnich hlasu (GUI slider, dle HW).
+    // Meni jen kolik hlasu smi znit (enforceVoiceBudget) — bez resize poli/ringu.
+    void setMaxVoices(int n) noexcept {
+        if (n < 1)  n = 1;
+        if (n > 64) n = 64;
+        max_voices_.store(n, std::memory_order_relaxed);
+    }
+    int  maxVoices() const noexcept { return max_voices_.load(std::memory_order_relaxed); }
+
     // Aktualni decay koeficient (vystaven kvuli testum + diagnostice).
     float exciteDecayPerBlock() const { return decay_per_block_; }
     // Spocti decay tak, aby `last_excite` mel pozadovany tau v ms za audio blok.
@@ -115,7 +124,7 @@ private:
     ExciteState         excite_state_[128];
     std::atomic<float>  strength_{0.5f};
     float               decay_per_block_ = 0.998f;  // ~5 s @ 256 samples/48k
-    int                 max_voices_      = kDefaultMaxResonanceVoices;
+    std::atomic<int>    max_voices_{kDefaultMaxResonanceVoices};
     StreamEngine*       stream_          = nullptr;
 };
 
