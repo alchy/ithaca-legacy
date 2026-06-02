@@ -1,45 +1,76 @@
 // engine/resonance/harmonic_proximity.cpp — viz .h
+// Partial-coincidence model z idealni harmonicke rady (12-TET zakladni
+// frekvence). Strunu N budi parcialy hrane noty P, ktere padnou na parcialy N.
+// Sila = Σ_{k,m} drive(k)·recv(m)·overlap(detuning) pres pary parcialu.
+// Predpocitano do normalizovane 128×128 matice pri prvnim volani (octave-up≈1.0).
+// b > a → fyzikalni up/down asymetrie (oktava nahoru budi ZAKLAD partnera,
+// oktava dolu jen jeho 2. parcial → tissi). Viz spec 2026-06-02.
 #include "resonance/harmonic_proximity.h"
 
+#include <array>
 #include <cmath>
-#include <cstdlib>
 
 namespace ithaca {
 
 namespace {
 
-// Vahy intervalu modulo 12 (semiton 0..11). Hodnoty vychazi z harmonicke
-// rady: kazdy obsazeny term v overtone serii dostane vahu cca podle sve
-// energetiky.
-constexpr float kIntervalWeight[12] = {
-    1.00f,  // 0:  unison (vraci se 0 pres self-check, ale vaha pro oktavu)
-    0.03f,  // 1:  m2  (same magnitude as tritonus; harmonicky zanedbatelne)
-    0.03f,  // 2:  M2
-    0.10f,  // 3:  m3
-    0.20f,  // 4:  M3
-    0.30f,  // 5:  P4
-    0.03f,  // 6:  tritonus
-    0.60f,  // 7:  P5
-    0.10f,  // 8:  m6
-    0.15f,  // 9:  M6
-    0.10f,  // 10: m7
-    0.20f,  // 11: M7
-};
+constexpr int   kPartials       = 16;     // K — pocet uvazovanych parcialu
+constexpr float kDriveExp       = 1.0f;   // A(k) = 1/k^a (energie parcialu P)
+constexpr float kRecvExp        = 2.0f;   // R(m) = 1/m^b (receptivita N; b>a → asymetrie)
+constexpr float kBandwidthCents = 12.0f;  // sigma rezonancni sirky [centy]
 
-// Oktavovy pokles: kazda oktava vzdalenost x0.7
-constexpr float kOctaveDecay = 0.7f;
+inline float midiHz(int n) {
+    return 440.f * std::pow(2.f, (float)(n - 69) / 12.f);
+}
+
+// Raw coupling prox(target N, source P): Σ A(k)·R(m)·exp(-(Δc/σ)^2).
+float rawProx(int target, int source) {
+    if (target == source) return 0.f;
+    const float fP = midiHz(source);
+    const float fN = midiHz(target);
+    float sum = 0.f;
+    for (int k = 1; k <= kPartials; ++k) {
+        const float fk = (float)k * fP;
+        const float A  = 1.f / std::pow((float)k, kDriveExp);
+        for (int m = 1; m <= kPartials; ++m) {
+            const float fm = (float)m * fN;
+            const float dc = 1200.f * std::fabs(std::log2(fk / fm));   // detuning [centy]
+            const float x  = dc / kBandwidthCents;
+            const float g  = std::exp(-x * x);
+            if (g < 1e-4f) continue;   // zanedbatelny prispevek
+            const float R  = 1.f / std::pow((float)m, kRecvExp);
+            sum += A * R * g;
+        }
+    }
+    return sum;
+}
+
+// Predpocitana normalizovana matice (lazy function-local static → thread-safe
+// jednorazova inicializace). Build: 128×128×K² ≈ 4M flops jednou pri startu.
+const std::array<std::array<float, 128>, 128>& couplingMatrix() {
+    static const std::array<std::array<float, 128>, 128> M = [] {
+        std::array<std::array<float, 128>, 128> mat{};
+        float maxv = 0.f;
+        for (int t = 0; t < 128; ++t)
+            for (int s = 0; s < 128; ++s) {
+                const float v = rawProx(t, s);
+                mat[(size_t)t][(size_t)s] = v;
+                if (v > maxv) maxv = v;
+            }
+        if (maxv > 0.f)
+            for (auto& row : mat)
+                for (auto& v : row) v /= maxv;   // octave-up → 1.0
+        return mat;
+    }();
+    return M;
+}
 
 } // namespace
 
 float harmonicProximity(int target_midi, int source_midi) {
-    if (target_midi == source_midi) return 0.f;
-    int diff = std::abs(target_midi - source_midi);
-    int octaves = diff / 12;
-    int semis   = diff % 12;
-    float w = kIntervalWeight[semis];
-    // Pokles s oktavovou vzdalenosti.
-    for (int i = 0; i < octaves; ++i) w *= kOctaveDecay;
-    return w;
+    if (target_midi < 0 || target_midi > 127 ||
+        source_midi < 0 || source_midi > 127) return 0.f;
+    return couplingMatrix()[(size_t)target_midi][(size_t)source_midi];
 }
 
 } // namespace ithaca
