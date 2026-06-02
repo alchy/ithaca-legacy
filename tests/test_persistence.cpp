@@ -13,7 +13,9 @@ TEST_CASE("Persistence round-trip") {
     s.bank_path           = "/foo/bar/bank";
     s.midi_port_name      = "IAC Driver";
     s.master_gain_db      = -6.0f;
-    s.resonance_strength  = 0.7f;
+    s.resonance_enabled  = false;
+    s.resonance_gain_db  = -9.5f;
+    s.resonance_layer_db = -22.f;
     s.release_ms          = 250.f;
     s.excite_decay_ms     = 4000.f;
     s.max_resonance_voices = 16;
@@ -27,7 +29,9 @@ TEST_CASE("Persistence round-trip") {
     CHECK(loaded->bank_path == s.bank_path);
     CHECK(loaded->midi_port_name == s.midi_port_name);
     CHECK(loaded->master_gain_db == doctest::Approx(s.master_gain_db));
-    CHECK(loaded->resonance_strength == doctest::Approx(s.resonance_strength));
+    CHECK(loaded->resonance_enabled  == s.resonance_enabled);
+    CHECK(loaded->resonance_gain_db  == doctest::Approx(s.resonance_gain_db));
+    CHECK(loaded->resonance_layer_db == doctest::Approx(s.resonance_layer_db));
     CHECK(loaded->release_ms == doctest::Approx(s.release_ms));
     CHECK(loaded->excite_decay_ms == doctest::Approx(s.excite_decay_ms));
     CHECK(loaded->max_resonance_voices == 16);

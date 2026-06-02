@@ -108,7 +108,6 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         { std::string mc = findValue(json, "midi_channel");
           s.midi_channel = mc.empty() ? -1 : std::stoi(mc); }
         s.master_gain_db        = std::stof(findValue(json, "master_gain_db"));
-        s.resonance_strength    = std::stof(findValue(json, "resonance_strength"));
         s.release_ms            = std::stof(findValue(json, "release_ms"));
         s.excite_decay_ms       = std::stof(findValue(json, "excite_decay_ms"));
         s.max_resonance_voices  = std::stoi(findValue(json, "max_resonance_voices"));
@@ -132,6 +131,9 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.limiter_threshold_db = readF("limiter_threshold_db", s.limiter_threshold_db);
         s.limiter_release_ms   = readF("limiter_release_ms", s.limiter_release_ms);
         s.config_page          = readI("config_page", s.config_page);
+        s.resonance_enabled  = readB("resonance_enabled", s.resonance_enabled);
+        s.resonance_gain_db  = readF("resonance_gain_db", s.resonance_gain_db);
+        s.resonance_layer_db = readF("resonance_layer_db", s.resonance_layer_db);
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
         s.schema_version = 4;   // po nacteni vzdy ulozime jako v4
@@ -158,7 +160,9 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"log_level\": \""       << jsonEscape(s.log_level)      << "\",\n";
         f << "  \"midi_channel\": " << s.midi_channel << ",\n";
         f << "  \"master_gain_db\": "     << s.master_gain_db             << ",\n";
-        f << "  \"resonance_strength\": " << s.resonance_strength         << ",\n";
+        f << "  \"resonance_enabled\": "  << (s.resonance_enabled ? "true" : "false") << ",\n";
+        f << "  \"resonance_gain_db\": "  << s.resonance_gain_db  << ",\n";
+        f << "  \"resonance_layer_db\": " << s.resonance_layer_db << ",\n";
         f << "  \"release_ms\": "         << s.release_ms                 << ",\n";
         f << "  \"excite_decay_ms\": "    << s.excite_decay_ms            << ",\n";
         f << "  \"max_resonance_voices\": " << s.max_resonance_voices     << ",\n";
