@@ -10,6 +10,7 @@
 #include "sample/sample_types.h"
 #include "util/log.h"
 
+#include <array>
 #include <string>
 
 namespace ithaca {
@@ -27,5 +28,14 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
               int midi_from = 0, int midi_to = 127,
               int preload_ms = 150,
               int resonance_window_ms = 500);
+
+// Naplni preload_resonance JEN pro per-notu cilovou velocity vrstvu
+// (nearestSlotByRms(target_db)), oknem window_ms od resonance_start_frame
+// (Streamed mics; cte z disku). Drive cilove sloty, ktere uz cilove nejsou, vycisti.
+// FullyLoaded cilove nepotrebuji buffer (hraji z preload_head). Vraci pole
+// 128 bool: true = nota ma platnou cilovou vrstvu (cache pouzitelna).
+// Off-RT (disk I/O). Volat AZ po sortBankSlotsByRms.
+std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
+                                          int window_ms, log::Logger& logger);
 
 } // namespace ithaca
