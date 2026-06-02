@@ -106,6 +106,13 @@ public:
     bool processBlock(float* out_l, float* out_r, int n_samples,
                       const PedalState& pedal) noexcept;
 
+    // RAM cache rezonance: per-nota true = cilova vrstva ma naplneny preload_resonance
+    // (cache mod). false = stream mod (ring). Psano off-RT (loadBank/rebuild), cteno
+    // audio threadem v onPlayedNoteOn.
+    void setCacheReady(const std::array<bool, 128>& ready) noexcept;
+    void clearCacheReady() noexcept;                 // vse false (start rebuildu)
+    void requestRecacheFade() noexcept;              // audio thread fadene aktivni pri pristim processBlock
+
     // -- Diagnostika a test helpery --
 
     int  activeCount() const noexcept;
@@ -134,6 +141,10 @@ private:
     float               decay_per_block_ = 0.998f;  // ~5 s @ 256 samples/48k
     std::atomic<int>    max_voices_{kDefaultMaxResonanceVoices};
     StreamEngine*       stream_          = nullptr;
+
+    std::array<std::atomic<bool>, 128> reso_cache_ready_{};   // default vse false
+    std::atomic<bool>                  recache_fade_request_{false};
+    float                              last_engine_sr_ = 48000.f;  // pro fade v processBlock
 };
 
 } // namespace ithaca
