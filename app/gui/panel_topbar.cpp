@@ -84,6 +84,62 @@ void renderTopBar(AppContext& ctx) {
         ImGui::EndCombo();
     }
 
+    // -- SAMPLE RATE (read-only) | BUFFER (runtime combo + ms) | DSP LOAD --
+    const int   sr   = ctx.engine.sampleRate();
+    const float sr_f = (float)(sr > 0 ? sr : 48000);
+
+    ImGui::SameLine(0, 18);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("SR");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    { char b[16]; std::snprintf(b, sizeof(b), "%g kHz", sr_f / 1000.0);
+      ImGui::TextUnformatted(b); }
+
+    ImGui::SameLine(0, 18);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("BUFFER");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(72);
+    {
+        static const int kBufs[] = { 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192 };
+        const int cur_bs = ctx.engine.blockSize();
+        char curlbl[8]; std::snprintf(curlbl, sizeof(curlbl), "%d", cur_bs);
+        if (ImGui::BeginCombo("##buffer", curlbl)) {
+            for (int v : kBufs) {
+                char b[8]; std::snprintf(b, sizeof(b), "%d", v);
+                if (ImGui::Selectable(b, v == cur_bs) && v != cur_bs)
+                    ctx.setAudioBlockSize(v);
+            }
+            ImGui::EndCombo();
+        }
+    }
+    ImGui::SameLine();
+    { char b[16]; std::snprintf(b, sizeof(b), "%.1f ms",
+                                (float)ctx.engine.blockSize() * 1000.0f / sr_f);
+      ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+      ImGui::TextUnformatted(b);
+      ImGui::PopStyleColor(); }
+
+    ImGui::SameLine(0, 18);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+    ImGui::TextUnformatted("DSP");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    {
+        const bool  overload = ctx.engine.overloadRecent(4000.f);
+        const ImVec4 col = overload ? Colors::v(IM_COL32(0xd0, 0x5a, 0x4a, 255))
+                                    : Colors::v(Colors::muted);
+        char b[8]; std::snprintf(b, sizeof(b), "%.0f%%", ctx.engine.dspLoadPeak() * 100.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        ImGui::TextUnformatted(b);
+        ImGui::PopStyleColor();
+    }
+
     // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako
     // primarni slider.) RESET vraci vsechny VOICE/master parametry na default.
     const float right_margin = 290.f;
