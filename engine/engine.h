@@ -136,6 +136,8 @@ public:
     void setReleaseMs(float ms) noexcept;
     void setResonanceStrength(float s) noexcept;   // wrap resonance_->setStrength
     void setExciteDecayMs(float ms) noexcept;      // wrap resonance_->setExciteDecayTimeMs
+    void setMaxResonanceVoices(int n) noexcept { if (resonance_) resonance_->setMaxVoices(n); }
+    int  maxResonanceVoices()    const noexcept { return resonance_ ? resonance_->maxVoices() : 0; }
 
     // -- Master peak meter (GUI; atomic) --
     // Vraci aktualni peak |out| po master_gain, s decay ~100ms mezi bloky.

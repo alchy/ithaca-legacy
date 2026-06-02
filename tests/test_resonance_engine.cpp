@@ -238,3 +238,14 @@ TEST_CASE("ResonanceEngine: pedal UP -> rezonance ne-drzenych not fade") {
     CHECK_FALSE(res.isResonating(67));
     CHECK_FALSE(res.isResonating(72));
 }
+
+TEST_CASE("ResonanceEngine: setMaxVoices / maxVoices round-trip + clamp") {
+    ithaca::ResonanceEngine re(32);
+    CHECK(re.maxVoices() == 32);
+    re.setMaxVoices(8);
+    CHECK(re.maxVoices() == 8);
+    re.setMaxVoices(0);            // clamp na >= 1
+    CHECK(re.maxVoices() == 1);
+    re.setMaxVoices(999);          // clamp na <= 64
+    CHECK(re.maxVoices() == 64);
+}

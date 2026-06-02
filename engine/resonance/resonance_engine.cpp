@@ -33,10 +33,10 @@
 
 namespace ithaca {
 
-ResonanceEngine::ResonanceEngine(int max_resonance_voices)
-    : max_voices_(std::max(1, max_resonance_voices)) {
+ResonanceEngine::ResonanceEngine(int max_resonance_voices) {
     // voices_ default initialized — vsechny unique_ptr null (lazy konstrukce
     // pri prvni rezonanci dane noty).
+    setMaxVoices(max_resonance_voices);
 }
 
 void ResonanceEngine::setStreamEngine(StreamEngine* se) {
@@ -223,7 +223,8 @@ void ResonanceEngine::enforceVoiceBudget(float engine_sr) {
             if (slot && slot->active() && !slot->fadingOut()) ++n;
         return n;
     };
-    while (liveCount() > max_voices_) {
+    const int cap = max_voices_.load(std::memory_order_relaxed);
+    while (liveCount() > cap) {
         int   victim_idx   = -1;
         float victim_level = 1e30f;
         for (int N = 0; N < 128; ++N) {
