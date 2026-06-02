@@ -264,17 +264,20 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             if (underrun) {
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
-                    if (stream_) stream_->noteUnderrun();
                     underrun_gain_   = 1.f;
                     // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
                     // dosahl konce) a ring je prazdny → legitimni konec, Info.
                     // Jinak worker nestihl dodat data → skutecny underrun, Warning.
+                    // noteUnderrun() razitkujeme JEN pri skutecnem underrunu (ne
+                    // pri cistem konci samplu) — jinak by MAIN ring indikator
+                    // blikal cervene po kazde normalne dohraje dlouhe note.
                     const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
                     if (clean_end) {
                         log::Logger::default_().log("voice_end", log::Severity::Info,
                             "END-OF-SAMPLE midi=%d pos=%lld total=%d", midi_,
                             (long long)position_, total_frames);
                     } else {
+                        if (stream_) stream_->noteUnderrun();
                         log::Logger::default_().log("voice_end", log::Severity::Warning,
                             "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d",
                             midi_, (long long)position_, total_frames,
