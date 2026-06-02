@@ -229,6 +229,7 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                 if (underrun) {
                     if (!underrun_fading_) {
                         underrun_fading_ = true;
+                        if (stream_) stream_->noteUnderrun();
                         underrun_gain_   = 1.f;
                         LOG_RT_WARN("resonance_voice", "underrun midi=%d", midi_);
                     }

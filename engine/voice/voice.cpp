@@ -264,6 +264,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
             if (underrun) {
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
+                    if (stream_) stream_->noteUnderrun();
                     underrun_gain_   = 1.f;
                     // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
                     // dosahl konce) a ring je prazdny → legitimni konec, Info.
