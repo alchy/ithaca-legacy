@@ -1,6 +1,6 @@
 # GUI
 
-Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ithaca-gui** nad Dear ImGui (backend GLFW + OpenGL 3.3). Celý životní cyklus aplikace je řízen funkcí `main()`: načti persistovaný `GuiState` (nebo defaults) → otevři GLFW okno (DPI scale z `glfwGetWindowContentScale`) → inicializuj ImGui s Art Deco tématem a fonty Cormorant → inicializuj `AppContext` (engine + audio + MIDI + log subscriber) → spusť pomocný thread pro flush RT log ringu → **render loop** (~vsync, typicky 60 Hz) → finální `saveState` → shutdown v opačném pořadí. Render loop sestavuje plnoobrazovkové kořenové okno `##root` a rozdecompila ho do pevně daných horizontálních pásem: **top bar** (logo + MIDI dropdown + LOG level) → **indicator strip** (MIDI lampy + sustain bar + 4 diagnostické dlaždice + peak metr L/R) → **hlavní řada 3 sloupců** (BANK 250 px | VOICE/DSP params flex | CONFIG selektor 290 px) → **klaviatura 88 kláves** → **LOG strip** (pohltí zbytek výšky). Aktivní stránka uprostřed se volí přes `ctx.state.config_page` (0 = VOICE, 1–3 = DSP stage): klik v CONFIG panelu přepne index, `renderParamPage` pak genericky nakreslí příslušnou `IParamPage`. Engine je přístupný výhradně skrze `AppContext::engine`; runtime parametry se zapisují buď přes atomické settery (`setMasterGain`, `setResonanceStrength`, …) nebo přes `IParamPage::set()` (které settery volají interně), přičemž přeshraniční čtení diagnostických hodnot z GUI vlákna je bezpečné díky `std::atomic` polím enginu. Stav se ukládá do `state.json` s debounce 1 s (atomicky: zápis do `.tmp` + rename).
+Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ithaca-gui** nad Dear ImGui (backend GLFW + OpenGL 3.3). Celý životní cyklus aplikace je řízen funkcí `main()`: načti persistovaný `GuiState` (nebo defaults) → otevři GLFW okno (DPI scale z `glfwGetWindowContentScale`) → inicializuj ImGui s Art Deco tématem a fonty Cormorant → inicializuj `AppContext` (engine + audio + MIDI + log subscriber) → spusť pomocný thread pro flush RT log ringu → **render loop** (~vsync, typicky 60 Hz) → finální `saveState` → shutdown v opačném pořadí. Render loop sestavuje plnoobrazovkové kořenové okno `##root` a rozdecompila ho do pevně daných horizontálních pásem: **top bar** (logo + MIDI dropdown + LOG level) → **indicator strip** (MIDI lampy + sustain bar + 5 diagnostických dlaždic vč. DSP LOAD + peak metr L/R) → **hlavní řada 3 sloupců** (BANK 250 px | VOICE/DSP params flex | CONFIG selektor 290 px) → **klaviatura 88 kláves** → **LOG strip** (pohltí zbytek výšky). Aktivní stránka uprostřed se volí přes `ctx.state.config_page` (0 = VOICE, 1–3 = DSP stage): klik v CONFIG panelu přepne index, `renderParamPage` pak genericky nakreslí příslušnou `IParamPage`. Engine je přístupný výhradně skrze `AppContext::engine`; runtime parametry se zapisují buď přes atomické settery (`setMasterGain`, `setResonanceStrength`, …) nebo přes `IParamPage::set()` (které settery volají interně), přičemž přeshraniční čtení diagnostických hodnot z GUI vlákna je bezpečné díky `std::atomic` polím enginu. Stav se ukládá do `state.json` s debounce 1 s (atomicky: zápis do `.tmp` + rename).
 
 ---
 
@@ -16,9 +16,9 @@ Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ith
 | `theme.h` | Art Deco barevné tokeny, 4 fonty Cormorant, `apply_theme()`, `load_fonts()`, `find_asset_path()` | `Colors`, `Fonts` |
 | `layout.h` | Jediný zdroj pravdy pro všechny rozměry GUI (px konstanty + DPI scale `g_scale`) | `Dims`, `g_scale`, `S()` |
 | `widgets.h` | Art Deco widgety kreslené přes `ImDrawList` | `DecoSlider`, `StatTile`, `Keyboard`, `HBar`, `ToggleChip`, `Lamp`, `Eyebrow`, `ParamSliderF` |
-| `panel_topbar.{h,cpp}` | Top bar: logo ITHACA, MIDI IN dropdown + RESCAN, CHANNEL (OMNI/1–16), LOG level, RESET | `renderTopBar()` |
+| `panel_topbar.{h,cpp}` | Top bar: logo ITHACA, MIDI IN dropdown + RESCAN, CHANNEL (OMNI/1–16), SR (read-only) + BUFFER combo, LOG level, RESET | `renderTopBar()` |
 | `panel_bank.{h,cpp}` | Levý sloupec: výběr banky z adresáře, TYPE badge, statistiky, RELOAD | `renderBankPanel()`, `scanBanks()` |
-| `panel_indicators.{h,cpp}` | Indicator strip: NOTE/OFF lampy, sustain bar, 4 diagnostické dlaždice, peak L/R | `renderIndicatorStrip()` |
+| `panel_indicators.{h,cpp}` | Indicator strip: NOTE/OFF lampy, sustain bar, 5 diagnostických dlaždic (VOICES/RESONANCE/MAIN RINGS/RESO RINGS/DSP LOAD), peak L/R | `renderIndicatorStrip()` |
 | `panel_keyboard.{h,cpp}` | 88kláves vizualizace aktivních a rezonujících not | `renderKeyboardPanel()` |
 | `panel_params.{h,cpp}` | Generický renderer `IParamPage` (ON/OFF toggle + DecoSlidery + metr) | `renderParamPage()` |
 | `panel_config.{h,cpp}` | Pravý sloupec CONFIG: seznam stránek s LED + výběr klikem | `renderConfigPanel()` |
@@ -61,7 +61,7 @@ Každá iterace provede:
 5. **Zrcadlení DSP parametrů do `ctx.state`** — po renderu hlavní řady se hodnoty DSP stage zpětně čtou z enginu (`ch.stage(i).get(j)`, `agc.enabled()` atd.) a ukládají do `ctx.state`. Tak persistence vidí aktuální hodnoty i po přímé změně z panelu (bez samostatného callback mechanismu).
 
 6. **Persistence debounce** — porovnání 20 polí `ctx.state` vs. `last_saved`. Při první detekované změně se zaznamená `dirty_since = now()`. Teprve po 1 s beze změny (nebo spíše 1 s od první změny, `now − dirty_since > 1 s`) se volá `saveState`. `dirty_since` se resetuje. Tím se zabrání ukládání každý frame při tažení slideru.
-   - **Sledovaná pole:** `bank_path`, `midi_port_name`, `master_gain_db`, `resonance_strength`, `release_ms`, `excite_decay_ms`, `log_level`, `midi_channel`, `agc_enabled`, `agc_target`, `agc_release_ms`, `agc_floor`, `bbe_enabled`, `bbe_definition`, `bbe_bass`, `limiter_enabled`, `limiter_threshold_db`, `limiter_release_ms`, `config_page`, `max_resonance_voices`.
+   - **Sledovaná pole:** `bank_path`, `midi_port_name`, `master_gain_db`, `resonance_strength`, `release_ms`, `excite_decay_ms`, `log_level`, `midi_channel`, `agc_enabled`, `agc_target`, `agc_release_ms`, `agc_floor`, `bbe_enabled`, `bbe_definition`, `bbe_bass`, `limiter_enabled`, `limiter_threshold_db`, `limiter_release_ms`, `config_page`, `max_resonance_voices`, `audio_block_size`. (`audio_sample_rate` se z GUI nemění → není ve sledovaných, ale ukládá se v `saveState` i tak.)
    - **Chybějící pole v debounce kontrole:** `bank_search_dir`, `window_x`, `window_y`, `window_w`, `window_h` — tyto se uloží vždy při shutdownu (finální `saveState`), ale ne přes debounce, viz Nálezy revize.
 
 7. **OpenGL render** — `glViewport`, `glClear(0.1, 0.1, 0.1)`, `RenderDrawData`, `SwapBuffers`.
@@ -82,7 +82,7 @@ Inicializační sekvence (v pořadí volání):
 
 1. **`Logger::setMinSeverity`** — z `state.log_level` (přes `severity_from_string`). Nastaveno *před* `engine.init()`, aby i bank-load logy ctily zvolenou úroveň.
 2. **`Logger::addSubscriber`** — lambda `[this](LogEntry e){ log_buf.push(e); }`. Připojeno *před* `engine.init()`, aby GUI strip viděla i init logy (bank load, stream threads, atd.). Logger drží callback by-value; lambda zachycuje `this` — `AppContext` musí přežít do `shutdown()`.
-3. **`engine.init(cfg)`** — sestavení `EngineConfig` z `GuiState`: `master_gain = pow(10, gain_db/20)` (dB→linear), `sample_rate=48000`, `block_size=256`. **Při selhání vrací `false`** — jediná hard-failure cesta.
+3. **`engine.init(cfg)`** — sestavení `EngineConfig` z `GuiState`: `master_gain = pow(10, gain_db/20)` (dB→linear), `sample_rate = state.audio_sample_rate` (fallback 48000 při ≤ 0), `block_size = clamp(state.audio_block_size, 32, 8192)` (Fáze 8 — dřív napevno 48000/256). Validované hodnoty se promítnou zpět do `state`. **Při selhání vrací `false`** — jediná hard-failure cesta.
 4. **Aplikace DSP parametrů** — `ch.stage(0..2).set(i, v)` a `setEnabled(bool)` pro AGC (3 params), BBE (2 params), LIMITER (2 params). Pořadí odpovídá indexům v `Param` tabulkách stage.
 5. **`engine.setMaxResonanceVoices`** — explicitně, přestože hodnota byla předána přes `cfg` (exercizuje setter cestu).
 6. **Bank load** — `engine.loadBank(state.bank_path)`, jen při neprázdném `bank_path`. Selhání = warning, engine běží prázdný (uživatel vybere banku v UI). Nevrací `false`.
@@ -225,6 +225,10 @@ Obsah zleva doprava:
 1. **Logo ITHACA** — `Fonts::brand`, `Colors::gold`.
 2. **MIDI IN dropdown** (`ImGui::BeginCombo("##midi")`) — zobrazuje `listPorts()` každý frame (live scan). Výběr `(none)` zavře port (`midi.close()`, smaže `state.midi_port_name`). Výběr portu: `midi.close()` + `midi.open(engine, i)` + `midi.setChannel(state.midi_channel)`, uloží přesný název. Tlačítko `RESCAN` je vizuální hook (listPorts se volá každý frame, tlačítko zatím nic extra neprovádí).
 3. **CH dropdown** (`ImGui::BeginCombo("##ch")`) — OMNI nebo 1–16. Při změně: `state.midi_channel = c`, `midi.setChannel(c)`.
+4. **SR | BUFFER skupina** (Fáze 8, mezi CH a LOG) — viz oblast C (Buffery):
+   - **`SR`** read-only label = `engine.sampleRate()` formátovaný (`%g kHz`). Konfiguruje se jen v `state.json` (`audio_sample_rate`), GUI ho jen zobrazuje.
+   - **`BUFFER`** combo `{32…8192}` framů (`##buffer`) — při výběru `ctx.setAudioBlockSize(v)` (stop→setBlockSize→start, persist). Vedle latence v ms = `frames*1000/engine.sampleRate()`.
+   - (DSP load metr je v indicator stripu jako 5. dlaždice, ne zde. MIDI IN combo zkráceno na 210 px.)
 4. **LOG level combo** (vpravo, pevný right margin 290 px) — 6 úrovní `debug/info/warn/error/fatal/off`. Při změně: `state.log_level = kLevels[cur]`, `Logger::setMinSeverity(…)`.
 5. **RESET tlačítko** — resetuje `state.resonance_strength = 0.5`, `release_ms = 200`, `excite_decay_ms = 5000`, `master_gain_db = 0` a volá příslušné engine settery (`setResonanceStrength`, `setReleaseMs`, `setExciteDecayMs`, `setMasterGain(1.f)`).
 
@@ -255,11 +259,12 @@ Tři sekce vedle sebe (`SameLine(0,0)`):
    - `wdg::Lamp("ON", engine.noteOnRecent(120ms), gold)` + `Lamp("OFF", engine.noteOffRecent(120ms), silver)` — blikání 120 ms.
    - `wdg::HBar(pedalCC/127, …, tick01=0.5)` — sustain bar s ryskou na 50 % (half-pedal práh). Popisek `"SUSTAIN  CC"`.
 
-2. **center (4 diagnostické dlaždice)** — `##ind_diag`, šířka `content_w − col3_w`:
+2. **center (5 diagnostických dlaždic)** — `##ind_diag`, šířka `content_w − col3_w`, každá `fifth = center_w/5`:
    - `##t_v`: `StatTile("VOICES", activeVoices, gold, align=0, margin=pad)` — zlaté číslo aktivních hlasů.
    - `##t_r`: `StatTile("RESONANCE", resonanceVoices, silver, align=0.5)` — stříbrné, střed.
    - `##t_m`: `StatTile("MAIN RINGS", mainRingsUsed/Total, main_ur ? ring_red : silver, 0.5)` — zčervená při underrunu > 4 s.
-   - `##t_g`: `StatTile("RESO RINGS", resonanceRingsUsed/Total, res_ur ? ring_red : silver, 1.f)` — vpravo.
+   - `##t_g`: `StatTile("RESO RINGS", resonanceRingsUsed/Total, res_ur ? ring_red : silver, 0.5)`.
+   - `##t_d`: `StatTile("DSP LOAD", dspLoadPeak*100 %, overload ? ring_red : silver, 1.f)` — vpravo; zčervená na 4 s po overloadu (`overloadRecent(4000)`, load ≥ 1.0 = blok minul deadline). Viz oblast C (Buffery).
 
 3. **col3 (peak L/R)** — `##ind_peak`:
    - Dvě `HBar`: L a R výstupní peak, převedeny `lin → dB → 0..1` (rozsah −60..0 dB, `dbTo01(toDb(...))`). Gradient `silver2 → ink`.

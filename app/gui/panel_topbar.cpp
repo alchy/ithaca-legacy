@@ -34,7 +34,7 @@ void renderTopBar(AppContext& ctx) {
     ImGui::TextUnformatted("MIDI IN");
     ImGui::PopStyleColor();
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(300);   // delsi nazvy portu (IAC Driver Bus 1 ...)
+    ImGui::SetNextItemWidth(210);   // zkraceno o 30% (z 300) — misto pro SR/BUFFER/DSP skupinu
     const char* cur = ctx.state.midi_port_name.empty() ? "(none)"
                     : ctx.state.midi_port_name.c_str();
     if (ImGui::BeginCombo("##midi", cur)) {
@@ -84,7 +84,9 @@ void renderTopBar(AppContext& ctx) {
         ImGui::EndCombo();
     }
 
-    // -- SAMPLE RATE (read-only) | BUFFER (runtime combo + ms) | DSP LOAD --
+    // -- SAMPLE RATE (read-only) | BUFFER (runtime combo + ms) --
+    // DSP LOAD metr je v indicator stripu (panel_indicators.cpp) vedle ostatnich
+    // mericu (VOICES/RINGS), ne zde.
     const int   sr   = ctx.engine.sampleRate();
     const float sr_f = (float)(sr > 0 ? sr : 48000);
 
@@ -123,22 +125,6 @@ void renderTopBar(AppContext& ctx) {
       ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
       ImGui::TextUnformatted(b);
       ImGui::PopStyleColor(); }
-
-    ImGui::SameLine(0, 18);
-    ImGui::AlignTextToFramePadding();
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-    ImGui::TextUnformatted("DSP");
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    {
-        const bool  overload = ctx.engine.overloadRecent(4000.f);
-        const ImVec4 col = overload ? Colors::v(IM_COL32(0xd0, 0x5a, 0x4a, 255))
-                                    : Colors::v(Colors::muted);
-        char b[8]; std::snprintf(b, sizeof(b), "%.0f%%", ctx.engine.dspLoadPeak() * 100.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, col);
-        ImGui::TextUnformatted(b);
-        ImGui::PopStyleColor();
-    }
 
     // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako
     // primarni slider.) RESET vraci vsechny VOICE/master parametry na default.

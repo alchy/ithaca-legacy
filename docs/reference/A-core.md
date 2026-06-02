@@ -82,6 +82,8 @@ pod pedalem.
 | `int maxResonanceVoices() const noexcept` | GUI | — → int | GUI | `resonance_->maxVoices()` | — | Null-safe getter. |
 | `float masterPeakL() const noexcept` | GUI | — → 0..∞ | GUI (peak metr) | `master_peak_l_.load()` | — | Atomický load, relaxed. |
 | `float masterPeakR() const noexcept` | GUI | — → 0..∞ | GUI (peak metr) | `master_peak_r_.load()` | — | Analogicky pro pravý kanál. |
+| `float dspLoadPeak() const noexcept` | GUI | — → 0..∞ | GUI (DSP LOAD dlaždice) | `dsp_load_peak_.load()` | — | Peak-hold zatížení audio threadu = čas renderu / perioda bloku. 1.0 = hranice deadline. Relaxed. |
+| `bool overloadRecent(float ms) const noexcept` | GUI | ms → bool | GUI (červené blikání DSP LOAD) | `nowMicros()` | `ms` = okno | `true` když overload (load ≥ 1.0) nastal před méně než `ms`. Vzor `noteOnRecent`. |
 | `dsp::DspChain& dspChain() noexcept` | GUI / off-RT | — → ref | GUI (params panel) | — | — | Přímý přístup ke DSP řetězu pro ovládání stage z GUI. |
 | `void recomputeRefillThreshold() noexcept` | off-RT / `setBlockSize` | — | `init()`, `setBlockSize()` | `stream_main_->setRefillThresholdFrames()`, `stream_resonance_->...` | — | Vypočítá refill threshold = max(cap/2, block_size×4), clamped na (cap−64). Volá se pro oba stream pooly. Zajišťuje, že workery doplňují ring dřív, než ho audio vlákno vyprázdní. |
 | `float scaledReleaseMs() const` | **audio** (v processBlock) | — → ms | `processBlock()` | `pedal_.sustainCC()` | — | Half-pedal kontinuální škálování release: `kf = exp(t × ln(20))`, kde `t = CC64 / 127`. CC0 → ×1, CC64 → ~×4, CC127 → ×20. Volána při každém NoteOff a AllNotesOff v drain smyčce. |
@@ -106,6 +108,8 @@ Jde o centrální audio-RT funkci. Volá ji callback `AudioDevice` (~48 000/256 
 **Krok 3b — DSP řetěz:** `dsp_.process(out_l, out_r, n_samples)` — AGC → BBE → Limiter; vypnutá stage = no-op.
 
 **Krok 4 — peak metr:** Najde `abs` peak v bloku, kombinuje s exponenciálně klesajícím předchozím peak: `new = max(peak_now, cur × decay)`, kde `decay = exp(−n_samples / (0.1 × SR))`. Pro 256 vzorků @ 48 kHz ≈ 0.948 na blok (pokles z 1.0 na 0.1 za ~150 ms). Výsledek se uloží atomicky (relaxed) do `master_peak_l_` / `master_peak_r_`.
+
+**Krok 5 — DSP load metr (Fáze 8):** `block_t0` se zachytí `nowMicros()` hned po Kroku 0 (bank guard); na konci se spočte `dt = nyní − block_t0`, `period_us = n_samples × 1e6 / sample_rate` (guard proti dělení nulou při SR ≤ 0), `load = dt / period`. Peak-hold s decay `exp(−n_samples / (0.5 × SR))` → `dsp_load_peak_` (relaxed). Při `load ≥ 1.0` (blok minul deadline) se orazítkuje `last_overload_us_`. GUI to čte přes `dspLoadPeak()` / `overloadRecent()` a kreslí jako dlaždici DSP LOAD v indicator stripu. Viz oblast C (Buffery) pro souvislost s runtime změnou bufferu.
 
 ---
 

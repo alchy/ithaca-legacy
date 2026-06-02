@@ -37,6 +37,33 @@ Audio výstupní cesta: miniaudio (`AudioDevice`) volá na audio threadu registr
 
 ---
 
+## Vzorkovací frekvence (SR) — kdo ji určuje a role miniaudio
+
+Engine **nepřebírá SR z banky**. SR je naše (standalone) nebo hostitelská (plugin) volba:
+
+- **Standalone:** `audio_sample_rate` ze `state.json` (default 48000) → `EngineConfig::sample_rate` → request do miniaudio (`config.sampleRate` v `AudioDevice::start`). Mění se **jen ručně v JSONu**, aplikuje se při startu; GUI ho jen zobrazuje read-only (topbar `SR`). Žádný runtime SR setter neexistuje (ani ho nepotřebujeme, dokud SR nemění host).
+- **Plugin / JUCE (future):** SR diktuje host přes `prepareToPlay`; `Engine::processBlock(out_l, out_r, n)` je per-call buffer-agnostický, takže funguje beze změny. Tehdy bude engine potřebovat `setSampleRate`/`prepare(sr,...)` entrypoint aktualizující `cfg_.sample_rate` (analogicky `setBlockSize`).
+
+**Co dělá miniaudio se SR:** `config.sampleRate` je rychlost, na které běží náš `dataCallback` (a tím i `processBlock`/engine). miniaudio **interně resampluje** mezi nativní rychlostí HW (`device_->playback.internalSampleRate`) a naším požadavkem — máme-li request 48000 a HW jede 44100, callback dostává 48000 framů a miniaudio je převede na 44100 pro výstup. Důsledek: `engine.sampleRate()` (= `cfg_.sample_rate`) je **autoritativní pravda** pro veškerou SR-závislou matematiku (ms latence na liště, DSP load perioda, onset/release/`pos_inc`). Pozn.: kdyby byl request 0, miniaudio by použil nativní rate a museli bychom přečíst `device_->sampleRate` zpět do enginu — proto vždy posíláme explicitní nenulovou hodnotu.
+
+**Sladění SR banky vs engine — per-voice resampling:** každý sample si nese vlastní nativní SR z WAV hlavičky (`mic_->file.sample_rate`). `Voice::start` (`voice.cpp`) počítá krok čtení `pos_inc_ = pitch_ratio * (sample_sr / engine_sr)` a Voice čte lineární interpolací. Banka tedy SR **nediktuje** — může být nahraná na jiné SR (i smíšeně napříč samply) a engine ji ke svému SR dorovná za běhu (výška/tempo zůstanou správné). Viz oblast D — Polyfonie.
+
+---
+
+## Runtime změna bufferu + DSP load metr (Fáze 8)
+
+**BUFFER selektor (GUI topbar):** `audio_block_size` ze `state.json` (default 256), runtime měnitelný comboem `{32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}`. Změna jde přes `AppContext::setAudioBlockSize(int)`:
+1. `audio->stop()` **PRVNÍ** (joinne miniaudio callback) — pořadí je kritické: jinak by krok 2 mutoval engine stav (DSP koeficienty, rezonance decay, refill práh) souběžně s in-flight `processBlock` na audio threadu = data race.
+2. `engine.setBlockSize(n)` — clamp [32, 8192], `recomputeRefillThreshold()` obou `StreamEngine` instancí, re-prepare DSP + rezonance decay.
+3. `audio->start(&audioCallback, &engine, engine.sampleRate(), n)` — restart device s aktuálním (nezměněným) SR.
+4. persist `audio_block_size` (debounced save v `main.cpp`).
+
+Krátký audio gap při přepnutí je očekávaný (uživatelská akce). Hodnoty se validují i při initu — `initFromState` clampuje block na [32, 8192] a SR padá na fallback 48000 při neplatném (≤ 0) JSON. `ring_capacity_frames` (8192) ≥ max blok (8192) → konzistentní; větší buffer streamování ulehčí (víc času na refill).
+
+**DSP load metr (`Engine::processBlock`, audio thread):** na konci bloku se změří `dt = render_us` (vůči `block_t0` z `nowMicros()` po `bank_loading_` guardu), `period_us = n_samples*1e6 / sample_rate`, `load = dt / period`. Peak-hold s decay ~0.5 s se ukládá do atomiky `dsp_load_peak_`; při `load >= 1.0` (blok minul deadline → riziko dropoutu) se orazítkuje `last_overload_us_`. Gettery `Engine::dspLoadPeak()` a `Engine::overloadRecent(ms)` (vzor master peak / `noteOnRecent`, relaxed atomiky — single-writer audio, reader GUI). GUI je zobrazuje v **indicator stripu** jako 5. dlaždici `DSP LOAD` (`<peak%>`, vedle VOICES/RESONANCE/MAIN RINGS/RESO RINGS, viz oblast H — GUI); číslo **červeně** (ring_red) při `overloadRecent(4000)` (jen červená, žádná žlutá). Latence v ms je vedle BUFFER selektoru v topbaru = `frames * 1000 / engine.sampleRate()`. Perioda počítaná z `n_samples` → metr se přizpůsobí jakémukoli bufferu, i když ho řídí host.
+
+---
+
 ## `engine/stream/stream_engine.h`
 
 ### `RingHandle` — SPSC ring buffer pro jeden hlas

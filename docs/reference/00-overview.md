@@ -26,7 +26,7 @@ celého zdrojáku.
     3. ResonanceEngine.processBlock→ + sympatická rezonance ├─ čte z RAM head +
     4. × master_gain                                        │   streaming ringů
     5. DspChain.process (AGC→BBE→Limiter)                   │   (stream workeři)
-    6. peak metr (atomic)                                   ┘
+    6. peak metr + DSP load metr (atomic)                   ┘
        → interleave → AudioDevice → zvuk
 
   [loader, off-RT] scanBank → loadBank → Bank (RAM head + resonance okno);
