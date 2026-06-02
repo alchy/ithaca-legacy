@@ -9,7 +9,8 @@
 #include "panel_indicators.h"
 #include "panel_params.h"
 #include "panel_config.h"
-#include "voice_page.h"
+#include "master_page.h"
+#include "resonance_page.h"
 #include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
@@ -177,14 +178,16 @@ int main(int argc, char* argv[]) {
     GuiState last_saved = ctx.state;
 
     // CONFIG stranky: VOICE (engine voice params) + 3 DSP stage z chainu.
-    VoicePage voice_page(ctx);
-    ithaca::dsp::IParamPage* pages[4] = {
-        &voice_page,
+    MasterPage    master_page(ctx);
+    ResonancePage resonance_page(ctx);
+    ithaca::dsp::IParamPage* pages[5] = {
+        &master_page,
+        &resonance_page,
         &ctx.engine.dspChain().stage(0),   // AGC
         &ctx.engine.dspChain().stage(1),   // BBE
         &ctx.engine.dspChain().stage(2),   // LIMITER
     };
-    if (ctx.state.config_page < 0 || ctx.state.config_page > 3) ctx.state.config_page = 0;
+    if (ctx.state.config_page < 0 || ctx.state.config_page > 4) ctx.state.config_page = 0;
 
     while (!glfwWindowShouldClose(w)) {
         glfwPollEvents();
@@ -243,7 +246,7 @@ int main(int argc, char* argv[]) {
         ImGui::EndChild();
         ImGui::SameLine(0,0);
         ImGui::BeginChild("##config", {COL3, main_h}, false);
-            renderConfigPanel(ctx, pages, 4, ctx.state.config_page);
+            renderConfigPanel(ctx, pages, 5, ctx.state.config_page);
         ImGui::EndChild();
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci).
         {
@@ -271,7 +274,9 @@ int main(int argc, char* argv[]) {
             last_saved.bank_path           != ctx.state.bank_path ||
             last_saved.midi_port_name      != ctx.state.midi_port_name ||
             last_saved.master_gain_db      != ctx.state.master_gain_db ||
-            last_saved.resonance_strength  != ctx.state.resonance_strength ||
+            last_saved.resonance_enabled   != ctx.state.resonance_enabled ||
+            last_saved.resonance_gain_db   != ctx.state.resonance_gain_db ||
+            last_saved.resonance_layer_db  != ctx.state.resonance_layer_db ||
             last_saved.release_ms          != ctx.state.release_ms ||
             last_saved.excite_decay_ms     != ctx.state.excite_decay_ms ||
             last_saved.log_level           != ctx.state.log_level ||
