@@ -200,7 +200,10 @@ inline void Keyboard(float width, float height, ActiveFn active, ResoFn resonati
         dl->AddLine({kx+kw-1.f,p.y},{kx+kw-1.f,p.y+height},Colors::line,0.5f);
         ++wi; }
     wi = 0;
-    constexpr ImU32 kBlackReso = IM_COL32(0x1c,0x20,0x24,255);  // o malo svetlejsi nez bg
+    // Cerna klapka je sama tmava, takze rezonancni seda musi byt VYRAZNEJSI nez
+    // u bile klapky (kWhiteReso 0x2a3036) — jinak na tmavem podkladu splyne.
+    // Volime o krok svetlejsi sedou, aby byla cerna rezonujici klapka citelna.
+    constexpr ImU32 kBlackReso = IM_COL32(0x3c,0x44,0x4c,255);
     for (int m=FIRST;m<=LAST;++m){ if(!is_black(m)){++wi;continue;}
         float kx=p.x+(wi-1)*kw+kw-bw*0.5f;
         ImU32 col = active(m)     ? IM_COL32(0x8a,0x73,0x30,255)  // zlata-tmava

@@ -212,7 +212,7 @@ Template funkce (ActiveFn, ResoFn = lambda `int→bool`). Kreslí 88 kláves MID
 
 - Nejprve spočítá počet bílých kláves (`n_white`), šířku bílé klávesy `kw = width / n_white`, šířku černé `bw = kw × 0.6`, výšku černé `bh = height × 0.62`.
 - **Průchod 1 (bílé klávesy):** pro každou nebílou (ne-black) notu. Barva: `Colors::gold` pokud `active(m)`, `kWhiteReso` (o málo světlejší než pozadí, `0x2a,0x30,0x36`) pokud `resonating(m)`, jinak `kWhiteBase` (`0x1c,0x20,0x24`). Dělicí svislá čára `Colors::line` tloušťka 0.5.
-- **Průchod 2 (černé klávesy):** kresleny přes bílé. Pozice `kx = (wi-1) × kw + kw − bw/2`. Barva: zlatavě tmavá (`0x8a,0x73,0x30`) pro active, `kBlackReso` (`0x1c,0x20,0x24`, o málo světlejší než bg) pro rezonující, `Colors::bg` jinak.
+- **Průchod 2 (černé klávesy):** kresleny přes bílé. Pozice `kx = (wi-1) × kw + kw − bw/2`. Barva: zlatavě tmavá (`0x8a,0x73,0x30`) pro active, `kBlackReso` (`0x3c,0x44,0x4c`) pro rezonující, `Colors::bg` jinak. Rezonanční šedá černé klávesy je **výraznější** než u bílé (`kWhiteReso 0x2a3036`) — černá klávesa je sama tmavá, takže by jinak na tmavém podkladu splynula.
 - `active` má přednost: klávesa rezonující i aktivní bude zlatá.
 
 ---
