@@ -148,6 +148,32 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         // pri half-pedal = ~0.5 → rezonance startuje tise. processBlock pak
         // udrzuje target podle aktualniho dampingu.
         const float init_gain = excite * pedal.dampingFor(N);
+
+        // Budget gate PRED spawnem: nealokuj ring + necti z disku pro hlas,
+        // ktery by se stejne hned ztlumil. Steal jen kdyz je novy hlasitejsi nez
+        // nejtissi prave znejici (vzor jako hlavni voice findSlot). Tim odpada
+        // spawn-churn (drive: spawn VSECH harmonik → acquireRing + requestRead →
+        // fadeOut pres budget; zbytecna diskova cteni hladovela streamujici
+        // prezivajici rezonanci → underrun i pri MAX RESONANCE=1).
+        {
+            int   live = 0, quietest = -1;
+            float qlevel = 1e30f;
+            for (int k = 0; k < 128; ++k) {
+                const auto& s = voices_[(size_t)k];
+                if (!s || !s->active() || s->fadingOut()) continue;
+                ++live;
+                const float lvl = s->currentLevel();
+                if (lvl < qlevel) { qlevel = lvl; quietest = k; }
+            }
+            const int cap = max_voices_.load(std::memory_order_relaxed);
+            if (live >= cap) {
+                if (init_gain <= qlevel) continue;   // nepreznel by → nespawnuj
+                if (quietest >= 0) {                 // jinak uvolni nejtissi slot
+                    voices_[(size_t)quietest]->fadeOut(engine_sr);
+                    excite_state_[quietest].last_excite = 0.f;
+                }
+            }
+        }
         // DEBUG: novy rezonancni hlas alokovan. Pokud init_gain > 0 pri cc64=0,
         // damping[N] musi byt > 0 → buď N je drzene (main voice eligibility
         // filter to ma blokovat), nebo damping nevynulovany pri lift.
@@ -158,10 +184,11 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
             pedal.dampingFor(N));
         slot->start(N, m, init_gain, pl, pr, engine_sr);
         excite_state_[N].last_excite = excite;
-
-        // Krad pri prekroceni rozpoctu (NIKDY ne main voice — jine pole).
-        enforceVoiceBudget(engine_sr);
     }
+    // Po smycce: dorovnej budget (resi i ZIVE snizeni MAX RESONANCE sliderem —
+    // ztlumi prebytecne nejtissi). Spawn-churn uz vyresil gate vyse, takze tady
+    // se uz jen pripadne dorovna po zmene budgetu (jinak no-op).
+    enforceVoiceBudget(engine_sr);
 }
 
 bool ResonanceEngine::processBlock(float* out_l, float* out_r, int n_samples,
