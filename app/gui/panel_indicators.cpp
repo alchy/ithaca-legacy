@@ -46,10 +46,9 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     // --- center: diag dlazdice (VOICES zlate / RESONANCE,RINGS stribro) ---
     float center_w = ImGui::GetContentRegionAvail().x - col3_w;
     ImGui::BeginChild("##ind_diag", {center_w, H}, false);
-    char vbuf[8], rbuf[8], gbuf[16];
+    char vbuf[8], rbuf[8];
     std::snprintf(vbuf, sizeof(vbuf), "%d", ctx.engine.activeVoices());
     std::snprintf(rbuf, sizeof(rbuf), "%d", ctx.engine.resonanceVoices());
-    std::snprintf(gbuf, sizeof(gbuf), "%d", ctx.engine.numRingsUsed());
     float third = center_w / 3.f;
     // Tri dlazdice roztazene pres celou sirku: VOICES vlevo | RESONANCE na stred
     // | RINGS vpravo (jako justified text). Zarovnani resi StatTile (align +
@@ -62,7 +61,27 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
         ImGui::Dummy({0,8}); wdg::StatTile("RESONANCE", rbuf, Colors::silver, 0.5f, pad);
     ImGui::EndChild(); ImGui::SameLine(0,0);
     ImGui::BeginChild("##t_g", {third, H}, false);
-        ImGui::Dummy({0,8}); wdg::StatTile("RINGS", gbuf, Colors::silver, 1.f, pad);
+    {
+        // Per-pool ring diagnostika. Cislo zcervena na 4 s po underrunu
+        // daneho poolu — uzivatel taha MAX RESONANCE dolu dokud RESO nepresta blikat.
+        const bool main_ur = ctx.engine.mainStreamUnderrunRecent(4000.f);
+        const bool res_ur  = ctx.engine.resonanceStreamUnderrunRecent(4000.f);
+        const ImU32 red = IM_COL32(0xd0, 0x5a, 0x4a, 255);
+        char b1[32], b2[32];
+        std::snprintf(b1, sizeof(b1), "MAIN  %d/%d",
+                      ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal());
+        std::snprintf(b2, sizeof(b2), "RESO  %d/%d",
+                      ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
+        ImGui::Dummy({0, 8}); ImGui::Indent(pad);
+        wdg::Eyebrow("RINGS");
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(main_ur ? red : Colors::muted));
+        ImGui::TextUnformatted(b1);
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(res_ur ? red : Colors::muted));
+        ImGui::TextUnformatted(b2);
+        ImGui::PopStyleColor();
+        ImGui::Unindent(pad);
+    }
     ImGui::EndChild();
     ImGui::EndChild();
 
