@@ -31,7 +31,7 @@ struct EngineConfig {
     int   midi_from      = 0;        // rozsah nacitane banky (rychle testy)
     int   midi_to        = 127;
     int   preload_ms     = 150;      // preload velikost hlavy samplu v ms; ovlivnuje RAM i streaming bezpecnost
-    int   resonance_window_ms = 500;  // delka preload_resonance regionu (Streamed mic)
+    int   resonance_window_ms = 6000;  // RAM cache rezonance: okno [ms] cilove vrstvy
     // -- Faze 4 streaming --
     // Pocet worker threadu paralelne pres stream queue. Vice workeru = vetsi
     // propustnost disku I/O = mensi sance underrunu pri akordu + rezonanci

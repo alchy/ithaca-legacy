@@ -70,6 +70,12 @@ bool Engine::loadBank(const std::string& dir) {
             }
         if (mn <= mx) { bank_peak_rms_min_db_ = mn; bank_peak_rms_max_db_ = mx; }
     }
+    // Postav RAM cache rezonance pro per-notu cilovou vrstvu + zapis ready flagy.
+    {
+        auto ready = ithaca::buildResonanceCache(bank_, cfg_.resonance_layer_db,
+                                                 cfg_.resonance_window_ms, L);
+        if (resonance_) resonance_->setCacheReady(ready);
+    }
     return true;
 }
 
