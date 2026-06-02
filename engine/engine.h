@@ -38,14 +38,11 @@ struct EngineConfig {
     // v jednom audio bloku. Default 4. Na vice-jadernych systemech zvazit 6-8.
     int   stream_threads        = 4;
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
-    // Ring pool je SDILENY mezi hlavnimi (max_voices) a rezonancnimi
-    // (max_resonance_voices) hlasy. Default pokryva plnou polyfonii, aby
-    // pri pedalu + rezonanci nedoslo k `acquireRing → nullptr` (hlas by pak
-    // hral jen preload_head ~150 ms a utichl). Engine::init si pohlida, ze
-    // num_rings >= max_voices + max_resonance_voices.
-    // Pamet: num_rings × ring_capacity_frames × 2 (stereo) × 4 (float) bytes.
-    // Default 288 × 8192 × 8 = ~18 MB.
-    int   num_rings             = 288;
+    // MAIN ring pool (>= max_voices). Oddeleny od rezonancniho poolu.
+    int   num_rings             = 256;    // MAIN ring pool (>= max_voices)
+    // -- Oddeleny streaming pro rezonanci (izolace od hlavnich hlasu) --
+    int   resonance_num_rings      = 48;  // RESONANCE ring pool (>= max_resonance_voices)
+    int   resonance_stream_threads = 4;   // workeri jen pro rezonancni pool
     // -- Faze 5 sympaticka rezonance --
     float resonance_strength    = 0.5f;   // 0..1, expose pres CLI
     int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
@@ -106,13 +103,19 @@ public:
     int  setBlockSize(int new_block_size) noexcept;
 
     // Pristup ke streaming enginu (potreba pro inspect / diag / GUI).
-    StreamEngine* streamEngine() { return stream_.get(); }
+    StreamEngine* streamEngine() { return stream_main_.get(); }   // back-compat (main)
 
     // -- Diagnostika (GUI/monitor; thread-safe atomic loads) --
     // Pocet aktivnich rezonancnich hlasu (sympaticka rezonance, faze 5).
     int     resonanceVoices() const noexcept;
     // Pocet aktualne pouzitych streaming ringu (in_use_ flag).
     int     numRingsUsed()    const noexcept;
+    int  mainRingsUsed()      const noexcept { return stream_main_ ? stream_main_->numRingsUsed() : 0; }
+    int  mainRingsTotal()     const noexcept { return stream_main_ ? stream_main_->numRings() : 0; }
+    int  resonanceRingsUsed() const noexcept { return stream_resonance_ ? stream_resonance_->numRingsUsed() : 0; }
+    int  resonanceRingsTotal()const noexcept { return stream_resonance_ ? stream_resonance_->numRings() : 0; }
+    bool mainStreamUnderrunRecent(float ms)      const noexcept { return stream_main_ && stream_main_->underrunRecent(ms); }
+    bool resonanceStreamUnderrunRecent(float ms) const noexcept { return stream_resonance_ && stream_resonance_->underrunRecent(ms); }
     // Aktualni hodnota sustain pedalu (CC64, 0..127).
     uint8_t pedalCC()         const noexcept;
     // Blikani indikatoru: true kdyz posledni note-on / note-off event nastal
@@ -156,7 +159,8 @@ private:
     std::unique_ptr<VoicePool>        pool_;
     RoundRobinState                   rr_;
     MidiQueue                         midi_q_;
-    std::unique_ptr<StreamEngine>     stream_;
+    std::unique_ptr<StreamEngine>     stream_main_;
+    std::unique_ptr<StreamEngine>     stream_resonance_;
     PedalState                        pedal_;
     std::unique_ptr<ResonanceEngine>  resonance_;
     std::atomic<float>                master_gain_{1.0f};

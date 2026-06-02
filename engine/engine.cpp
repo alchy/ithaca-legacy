@@ -14,33 +14,34 @@ namespace ithaca {
 
 Engine::Engine() {}
 Engine::~Engine() {
-    if (stream_) stream_->stop();
+    if (stream_main_)      stream_main_->stop();
+    if (stream_resonance_) stream_resonance_->stop();
 }
 
 bool Engine::init(const EngineConfig& cfg) {
     cfg_ = cfg;
     pool_   = std::make_unique<VoicePool>(cfg.max_voices);
-    // Bezpecnostni klamr: ring pool MUSI kryt plnou polyfonii (hlavni + rezonance),
-    // jinak hraje pri pedalu se rezonanci docasi k `acquireRing → nullptr` a hlas
-    // utichne po preload_head (fullyloaded_past_head ring=no). Vetsi nez cfg jen
-    // zvedneme; mensi nikdy.
-    const int rings_min = cfg.max_voices + cfg.max_resonance_voices;
-    const int rings_actual = (cfg.num_rings >= rings_min) ? cfg.num_rings : rings_min;
-    if (cfg.num_rings < rings_min) {
-        log::Logger::default_().log("stream", log::Severity::Info,
-            "num_rings %d < max_voices+max_resonance=%d, zvysuji na %d",
-            cfg.num_rings, rings_min, rings_actual);
-    }
-    cfg_.num_rings = rings_actual;
-    stream_ = std::make_unique<StreamEngine>(rings_actual, cfg.ring_capacity_frames,
-                                             cfg.stream_threads);
-    pool_->setStreamEngine(stream_.get());
+    // Oddelene streaming pooly: hlavni hlasy vs rezonance (izolace ringu + workeru,
+    // aby rezonancni burst pod pedalem nevyhladovel hlavni hlasy). Kazdy pool ma
+    // vlastni ringy + workery + frontu.
+    const int main_rings = (cfg.num_rings >= cfg.max_voices) ? cfg.num_rings : cfg.max_voices;
+    const int res_rings  = (cfg.resonance_num_rings >= cfg.max_resonance_voices)
+                         ? cfg.resonance_num_rings : cfg.max_resonance_voices;
+    cfg_.num_rings = main_rings;
+    cfg_.resonance_num_rings = res_rings;
+
+    stream_main_ = std::make_unique<StreamEngine>(main_rings, cfg.ring_capacity_frames,
+                                                  cfg.stream_threads);
+    stream_resonance_ = std::make_unique<StreamEngine>(res_rings, cfg.ring_capacity_frames,
+                                                       cfg.resonance_stream_threads);
+    pool_->setStreamEngine(stream_main_.get());
     recomputeRefillThreshold();
-    stream_->start();
-    // Faze 5: sympaticka rezonance — sdileny stream engine, vlastni hlasy.
+    stream_main_->start();
+    stream_resonance_->start();
+
     resonance_ = std::make_unique<ResonanceEngine>(cfg.max_resonance_voices);
     resonance_->setStrength(cfg.resonance_strength);
-    resonance_->setStreamEngine(stream_.get());
+    resonance_->setStreamEngine(stream_resonance_.get());
     resonance_->setExciteDecayTimeMs(cfg.excite_decay_ms, cfg.block_size,
                                      (float)cfg.sample_rate);
     master_gain_.store(cfg.master_gain, std::memory_order_relaxed);
@@ -254,15 +255,16 @@ int Engine::setBlockSize(int new_block_size) noexcept {
 }
 
 void Engine::recomputeRefillThreshold() noexcept {
-    if (!stream_) return;
-    const int cap = stream_->capacityFrames();
-    // Pravidlo: aspon pulka ringu NEBO 4 audio bloky napred, podle toho co je vetsi.
-    int thr = (std::max)(cap / 2, cfg_.block_size * 4);
-    // Sanitace: prah nesmi prekrocit kapacitu ringu (jinak by Voice zadal
-    // request kazdy blok → fronta pretece).
-    if (thr > cap - 64) thr = cap - 64;
-    if (thr < 0) thr = 0;
-    stream_->setRefillThresholdFrames(thr);
+    auto setFor = [this](StreamEngine* se) {
+        if (!se) return;
+        const int cap = se->capacityFrames();
+        int thr = (std::max)(cap / 2, cfg_.block_size * 4);
+        if (thr > cap - 64) thr = cap - 64;
+        if (thr < 0) thr = 0;
+        se->setRefillThresholdFrames(thr);
+    };
+    setFor(stream_main_.get());
+    setFor(stream_resonance_.get());
 }
 
 // ----- Diagnostika (GUI/monitor) -----------------------------------------
@@ -277,8 +279,10 @@ int Engine::resonanceVoices() const noexcept {
 }
 
 int Engine::numRingsUsed() const noexcept {
-    // StreamEngine::numRingsUsed dela snapshot pres rings_[*].in_use_ atomic.
-    return stream_ ? stream_->numRingsUsed() : 0;
+    int n = 0;
+    if (stream_main_)      n += stream_main_->numRingsUsed();
+    if (stream_resonance_) n += stream_resonance_->numRingsUsed();
+    return n;
 }
 
 uint8_t Engine::pedalCC() const noexcept {
