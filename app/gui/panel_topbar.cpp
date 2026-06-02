@@ -143,11 +143,13 @@ void renderTopBar(AppContext& ctx) {
     }
     ImGui::SameLine(0, 16);
     if (ImGui::Button("RESET")) {
-        ctx.state.resonance_strength = 0.5f;
+        ctx.state.resonance_enabled  = true;
+        ctx.state.resonance_gain_db  = -12.f;
         ctx.state.release_ms         = 200.f;
         ctx.state.excite_decay_ms    = 5000.f;
         ctx.state.master_gain_db     = 0.f;
-        ctx.engine.setResonanceStrength(0.5f);
+        ctx.engine.setResonanceEnabled(true);
+        ctx.engine.setResonanceGainDb(-12.f);
         ctx.engine.setReleaseMs(200.f);
         ctx.engine.setExciteDecayMs(5000.f);
         ctx.engine.setMasterGain(1.f);

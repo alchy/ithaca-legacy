@@ -24,6 +24,7 @@
 
 #include "pedal/pedal_state.h"
 #include "resonance/harmonic_proximity.h"
+#include "resonance/resonance_layer_select.h"
 #include "sample/sample_types.h"
 #include "util/log.h"
 #include "voice/voice_pool.h"
@@ -52,14 +53,23 @@ void ResonanceEngine::reset() noexcept {
     for (auto& es : excite_state_) es.last_excite = 0.f;
 }
 
-void ResonanceEngine::setStrength(float s) {
-    if (s < 0.f) s = 0.f;
-    if (s > 1.f) s = 1.f;
-    strength_.store(s, std::memory_order_relaxed);
+void ResonanceEngine::setGainDb(float db) {
+    gain_lin_.store(std::pow(10.f, db / 20.f), std::memory_order_relaxed);
 }
-
-float ResonanceEngine::strength() const {
-    return strength_.load(std::memory_order_relaxed);
+float ResonanceEngine::gainLinear() const {
+    return gain_lin_.load(std::memory_order_relaxed);
+}
+void ResonanceEngine::setLayerTargetDb(float db) {
+    layer_target_db_.store(db, std::memory_order_relaxed);
+}
+float ResonanceEngine::layerTargetDb() const {
+    return layer_target_db_.load(std::memory_order_relaxed);
+}
+void ResonanceEngine::setEnabled(bool on) {
+    enabled_.store(on, std::memory_order_relaxed);
+}
+bool ResonanceEngine::enabled() const {
+    return enabled_.load(std::memory_order_relaxed);
 }
 
 void ResonanceEngine::setExciteDecayTimeMs(float tau_ms, int block_size, float engine_sr) {
@@ -86,11 +96,10 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
                                      const Bank& bank, const VoicePool& pool,
                                      const PedalState& pedal, float engine_sr) {
     if (played_midi < 0 || played_midi >= 128) return;
-    const float str = strength_.load(std::memory_order_relaxed);
-    // Velocity skala [0..1]. (Velocity 0 je note-off ekvivalent — caller by sem
-    // neposlal, ale defensive.)
+    if (!enabled_.load(std::memory_order_relaxed)) return;
+    const float gain = gain_lin_.load(std::memory_order_relaxed);
     const float vel_norm = (float)velocity / 127.f;
-    if (vel_norm <= 0.f || str <= 0.f) return;
+    if (vel_norm <= 0.f) return;
 
     for (int N = 0; N < 128; ++N) {
         if (N == played_midi) continue;              // play-on-self
@@ -108,7 +117,7 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         // Holy excitation BEZ damping multiplikatoru (damping aplikuje
         // processBlock per-blok pres setTargetGain — tim se zmeny pedalu
         // promitaji plynule do hlasitosti existujici rezonance).
-        const float excite = vel_norm * harm * str;
+        const float excite = vel_norm * harm * gain;
         if (excite < kResonanceExciteMinGain) continue;
 
         if (slot && slot->active()) {
@@ -129,12 +138,12 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
 
         // Alokuj novy rezonancni hlas. Nejdriv najdi sampl pro N.
         const NoteSlots& ns = bank.notes[N];
-        if (!ns.recorded || ns.slots.empty() ||
-            ns.slots[0].variants.empty() ||
-            ns.slots[0].variants[0].mics.empty()) {
-            continue;  // nahravka pro N chybi — rezonance neni z ceho hrat
-        }
-        const SampleAsset& a = ns.slots[0].variants[0];
+        if (!ns.recorded) continue;
+        const int si = nearestSlotByRms(ns, layer_target_db_.load(std::memory_order_relaxed));
+        if (si < 0) continue;
+        const VelocitySlot& vs = ns.slots[(size_t)si];
+        if (vs.variants.empty() || vs.variants[0].mics.empty()) continue;  // nahravka chybi
+        const SampleAsset& a = vs.variants[0];
         const MicLayer*    m = &a.mics[0];
 
         // Lazy konstrukce unique_ptr per slot N.

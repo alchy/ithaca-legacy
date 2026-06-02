@@ -82,7 +82,7 @@ TEST_CASE("Streamed resonance @96kHz traverses file once (ring honors pos_inc)")
     cfg.midi_to             = 73;
     cfg.preload_ms          = 50;    // head 4800 @96k → Streamed (96000 > 9600)
     cfg.resonance_window_ms = 100;   // preload_resonance ~9600 → zbytek streamuje
-    cfg.resonance_strength  = 0.5f;  // default; excite = 1.0*0.70*0.5 = 0.35
+    cfg.resonance_gain_db = 0.f;  // gain_lin=1.0; excite = 1.0*0.70*1.0 = 0.70
     cfg.excite_decay_ms     = 1.0e9f; // prakticky vypnuty decay → duration = ring-read
     REQUIRE(eng.init(cfg));
     REQUIRE(eng.loadBank(tmp.path.string()));
@@ -172,7 +172,7 @@ TEST_CASE("Streamed resonance @44.1k je hladka (lin. interpolace, ne schody)") {
     cfg.midi_to             = 73;
     cfg.preload_ms          = 50;    // head ~2205 @44.1k → Streamed (44100 > 4410)
     cfg.resonance_window_ms = 100;   // preload_resonance ~4410 → zbytek streamuje
-    cfg.resonance_strength  = 0.5f;
+    cfg.resonance_gain_db = 0.f;
     cfg.excite_decay_ms     = 1.0e9f;
     REQUIRE(eng.init(cfg));
     REQUIRE(eng.loadBank(tmp.path.string()));

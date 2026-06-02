@@ -1,6 +1,6 @@
 # GUI
 
-Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ithaca-gui** nad Dear ImGui (backend GLFW + OpenGL 3.3). Celý životní cyklus aplikace je řízen funkcí `main()`: načti persistovaný `GuiState` (nebo defaults) → otevři GLFW okno (DPI scale z `glfwGetWindowContentScale`) → inicializuj ImGui s Art Deco tématem a fonty Cormorant → inicializuj `AppContext` (engine + audio + MIDI + log subscriber) → spusť pomocný thread pro flush RT log ringu → **render loop** (~vsync, typicky 60 Hz) → finální `saveState` → shutdown v opačném pořadí. Render loop sestavuje plnoobrazovkové kořenové okno `##root` a rozdecompila ho do pevně daných horizontálních pásem: **top bar** (logo + MIDI dropdown + LOG level) → **indicator strip** (MIDI lampy + sustain bar + 5 diagnostických dlaždic vč. DSP LOAD + peak metr L/R) → **hlavní řada 3 sloupců** (BANK 250 px | VOICE/DSP params flex | CONFIG selektor 290 px) → **klaviatura 88 kláves** → **LOG strip** (pohltí zbytek výšky). Aktivní stránka uprostřed se volí přes `ctx.state.config_page` (0 = VOICE, 1–3 = DSP stage): klik v CONFIG panelu přepne index, `renderParamPage` pak genericky nakreslí příslušnou `IParamPage`. Engine je přístupný výhradně skrze `AppContext::engine`; runtime parametry se zapisují buď přes atomické settery (`setMasterGain`, `setResonanceStrength`, …) nebo přes `IParamPage::set()` (které settery volají interně), přičemž přeshraniční čtení diagnostických hodnot z GUI vlákna je bezpečné díky `std::atomic` polím enginu. Stav se ukládá do `state.json` s debounce 1 s (atomicky: zápis do `.tmp` + rename).
+Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ithaca-gui** nad Dear ImGui (backend GLFW + OpenGL 3.3). Celý životní cyklus aplikace je řízen funkcí `main()`: načti persistovaný `GuiState` (nebo defaults) → otevři GLFW okno (DPI scale z `glfwGetWindowContentScale`) → inicializuj ImGui s Art Deco tématem a fonty Cormorant → inicializuj `AppContext` (engine + audio + MIDI + log subscriber) → spusť pomocný thread pro flush RT log ringu → **render loop** (~vsync, typicky 60 Hz) → finální `saveState` → shutdown v opačném pořadí. Render loop sestavuje plnoobrazovkové kořenové okno `##root` a rozdecompila ho do pevně daných horizontálních pásem: **top bar** (logo + MIDI dropdown + LOG level) → **indicator strip** (MIDI lampy + sustain bar + 5 diagnostických dlaždic vč. DSP LOAD + peak metr L/R) → **hlavní řada 3 sloupců** (BANK 250 px | VOICE/DSP params flex | CONFIG selektor 290 px) → **klaviatura 88 kláves** → **LOG strip** (pohltí zbytek výšky). Aktivní stránka uprostřed se volí přes `ctx.state.config_page` (0 = MASTER, 1 = RESONANCE, 2–4 = DSP stage AGC/BBE/LIMITER): klik v CONFIG panelu přepne index, `renderParamPage` pak genericky nakreslí příslušnou `IParamPage`. Engine je přístupný výhradně skrze `AppContext::engine`; runtime parametry se zapisují buď přes atomické settery (`setMasterGain`, `setResonanceGainDb`, `setResonanceLayerDb`, `setResonanceEnabled`, …) nebo přes `IParamPage::set()` (které settery volají interně), přičemž přeshraniční čtení diagnostických hodnot z GUI vlákna je bezpečné díky `std::atomic` polím enginu. Stav se ukládá do `state.json` s debounce 1 s (atomicky: zápis do `.tmp` + rename).
 
 ---
 
@@ -8,11 +8,12 @@ Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ith
 
 | Soubor | Odpovědnost | Klíčové typy |
 |---|---|---|
-| `main.cpp` | Vstupní bod: CLI parse, GLFW/ImGui init, DPI scale, render loop, layout shell, persistence debounce, shutdown sekvence | `GuiState`, `AppContext`, `VoicePage`, `IParamPage*[4]` |
+| `main.cpp` | Vstupní bod: CLI parse, GLFW/ImGui init, DPI scale, render loop, layout shell, persistence debounce, shutdown sekvence | `GuiState`, `AppContext`, `MasterPage`, `ResonancePage`, `IParamPage*[5]` |
 | `app_context.h` / `app_context.cpp` | Vlastník všech těžkých objektů (engine, audio device, MIDI, log buffer); inicializace z persistovaného stavu a shutdown | `AppContext`, `audioCallback()` |
 | `persistence.h` / `persistence.cpp` | JSON load/save `GuiState` (schema v3→v4 migrace); atomický zápis přes `.tmp` + rename; platformní cesta | `GuiState`, `loadState()`, `saveState()`, `defaultStatePath()` |
 | `log_subscriber.h` / `log_subscriber.cpp` | Thread-safe kruhový buffer 256 log eventů; snapshot pro GUI render | `LogRingBuffer` |
-| `voice_page.h` | Adaptér `IParamPage` nad engine settery (MASTER, RESONANCE, RELEASE, EXCITE DECAY, MAX RESONANCE) | `VoicePage` |
+| `master_page.h` | Adaptér `IParamPage` "MASTER": MASTER gain + RELEASE | `MasterPage` |
+| `resonance_page.h` | Adaptér `IParamPage` "RESONANCE" (hasEnable): Resonance Layer (dyn. rozsah) + Resonance Gain + Excite Decay + Max Resonance | `ResonancePage` |
 | `theme.h` | Art Deco barevné tokeny, 4 fonty Cormorant, `apply_theme()`, `load_fonts()`, `find_asset_path()` | `Colors`, `Fonts` |
 | `layout.h` | Jediný zdroj pravdy pro všechny rozměry GUI (px konstanty + DPI scale `g_scale`) | `Dims`, `g_scale`, `S()` |
 | `widgets.h` | Art Deco widgety kreslené přes `ImDrawList` | `DecoSlider`, `StatTile`, `Keyboard`, `HBar`, `ToggleChip`, `Lamp`, `Eyebrow`, `ParamSliderF` |
@@ -56,12 +57,12 @@ Každá iterace provede:
 4. **Sestavení 3sloupé hlavní řady** (všechny jako `BeginChild` s `SameLine(0,0)` bez mezery):
    - `##bank` (COL1) → `renderBankPanel(ctx)`
    - `##voice` (flex = `content_w − COL1 − COL3`) → `renderParamPage(ctx, *pages[ctx.state.config_page])`
-   - `##config` (COL3) → `renderConfigPanel(ctx, pages, 4, ctx.state.config_page)`
+   - `##config` (COL3) → `renderConfigPanel(ctx, pages, 5, ctx.state.config_page)`
 
 5. **Zrcadlení DSP parametrů do `ctx.state`** — po renderu hlavní řady se hodnoty DSP stage zpětně čtou z enginu (`ch.stage(i).get(j)`, `agc.enabled()` atd.) a ukládají do `ctx.state`. Tak persistence vidí aktuální hodnoty i po přímé změně z panelu (bez samostatného callback mechanismu).
 
 6. **Persistence debounce** — porovnání 20 polí `ctx.state` vs. `last_saved`. Při první detekované změně se zaznamená `dirty_since = now()`. Teprve po 1 s beze změny (nebo spíše 1 s od první změny, `now − dirty_since > 1 s`) se volá `saveState`. `dirty_since` se resetuje. Tím se zabrání ukládání každý frame při tažení slideru.
-   - **Sledovaná pole:** `bank_path`, `midi_port_name`, `master_gain_db`, `resonance_strength`, `release_ms`, `excite_decay_ms`, `log_level`, `midi_channel`, `agc_enabled`, `agc_target`, `agc_release_ms`, `agc_floor`, `bbe_enabled`, `bbe_definition`, `bbe_bass`, `limiter_enabled`, `limiter_threshold_db`, `limiter_release_ms`, `config_page`, `max_resonance_voices`, `audio_block_size`. (`audio_sample_rate` se z GUI nemění → není ve sledovaných, ale ukládá se v `saveState` i tak.)
+   - **Sledovaná pole:** `bank_path`, `midi_port_name`, `master_gain_db`, `resonance_enabled`, `resonance_gain_db`, `resonance_layer_db`, `release_ms`, `excite_decay_ms`, `log_level`, `midi_channel`, `agc_enabled`, `agc_target`, `agc_release_ms`, `agc_floor`, `bbe_enabled`, `bbe_definition`, `bbe_bass`, `limiter_enabled`, `limiter_threshold_db`, `limiter_release_ms`, `config_page`, `max_resonance_voices`, `audio_block_size`. (`audio_sample_rate` se z GUI nemění → není ve sledovaných, ale ukládá se v `saveState` i tak.)
    - **Chybějící pole v debounce kontrole:** `bank_search_dir`, `window_x`, `window_y`, `window_w`, `window_h` — tyto se uloží vždy při shutdownu (finální `saveState`), ale ne přes debounce, viz Nálezy revize.
 
 7. **OpenGL render** — `glViewport`, `glClear(0.1, 0.1, 0.1)`, `RenderDrawData`, `SwapBuffers`.
@@ -106,7 +107,7 @@ Inicializační sekvence (v pořadí volání):
 
 1. Přečte celý soubor do `std::string`.
 2. Zkontroluje `schema_version`: akceptuje **3 nebo 4** (jiné hodnoty nebo chybějící klíč → `nullopt`).
-3. Načte povinná pole přítomná v obou verzích: `bank_search_dir`, `bank_path`, `midi_port_name`, `log_level` (default `"info"` při prázdném), `midi_channel` (default `-1`), `master_gain_db`, `resonance_strength`, `release_ms`, `excite_decay_ms`, `max_resonance_voices`, `window_x/y/w/h`.
+3. Načte povinná pole přítomná v obou verzích: `bank_search_dir`, `bank_path`, `midi_port_name`, `log_level` (default `"info"` při prázdném), `midi_channel` (default `-1`), `master_gain_db`, `release_ms`, `excite_decay_ms`, `max_resonance_voices`, `window_x/y/w/h`. Rezonanční pole `resonance_enabled`/`resonance_gain_db`/`resonance_layer_db` jsou čtena defensivně (`readB`/`readF`, default při chybějícím klíči — migrace ze starých souborů s `resonance_strength`, který se ignoruje).
 4. **Schema v4 DSP pole** — načítána obraně pomocí lambda helperů `readF/readB/readI`: při chybějícím klíči (tj. v3 soubor) vrací default ze struktury `GuiState`. Tím je migrace v3→v4 automatická a bezúpadková: DSP stage budou ve výchozím stavu (disabled, default hodnoty).
 5. Nakonec nastaví `s.schema_version = 4` — soubor se při příštím `saveState` uloží vždy jako v4.
 6. Celý blok je v `try/catch(...)` → při jakékoli výjimce ze `stof`/`stoi` vrací `nullopt` (korupce souboru = začni s defaults).
@@ -133,21 +134,19 @@ Kapacita bufferu je `kCapacity = 256`. Producent může být libovolný vlákno 
 
 ---
 
-## `voice_page.h`
+## `master_page.h` / `resonance_page.h` (Fáze 8)
 
-| Funkce (signatura) | Vlákno | Vstup → výstup | Volá ji | Volá (proč) | Parametry | Vysvětlení |
-|---|---|---|---|---|---|---|
-| `VoicePage::name() → const char*` | GUI | — → `"VOICE"` | `renderConfigPanel()`, `renderParamPage()` | — | — | Název stránky pro CONFIG panel a eyebrow nadpis. |
-| `VoicePage::paramCount() → int` | GUI | — → 5 | `renderParamPage()` | — | — | 5 parametrů: MASTER dB, RESONANCE, RELEASE, EXCITE DECAY, MAX RESONANCE. |
-| `VoicePage::param(int i) → const Param&` | GUI | index → deskriptor parametru | `renderParamPage()` | — | i: 0–4 | Vrátí statický `kParams[i]` s metadaty (label, min, max, fmt, readonly=false pro všechny). |
-| `VoicePage::get(int i) → float` | GUI | index → aktuální hodnota z `ctx_.state` | `renderParamPage()` | — | i: 0–4 | Čte přímo z `ctx_.state.*` (ne z engine atomiku) — GUI zobrazuje hodnotu naposledy zapsanou do stavu. Pro i=4 vrátí `(float)ctx_.state.max_resonance_voices`. |
-| `VoicePage::set(int i, float v) → void` | GUI | index + nová hodnota | `renderParamPage()` při pohybu slideru | `engine.setMasterGain`, `engine.setResonanceStrength`, `engine.setReleaseMs`, `engine.setExciteDecayMs`, `engine.setMaxResonanceVoices` | i: 0–4; v: hodnota | Klampuje `v` do `[p.min, p.max]`, zapíše do `ctx_.state.*` a okamžitě propaguje do enginu přes příslušný setter. Konverze pro MASTER: `linear = pow(10, v/20)`. Pro MAX RESONANCE: `(int)v` (engine ihned aktualizuje strop polyfonie). |
-| `VoicePage::hasEnable() → bool` | GUI | — → `false` | `renderParamPage()` | — | — | VOICE stránka nemá ON/OFF toggle (vždy aktivní). |
-| `VoicePage::enabled() → bool` | GUI | — → `true` | `renderConfigPanel()` (LED stav) | — | — | Vždy vrací `true` — VOICE LED svítí zlatě. |
-| `VoicePage::setEnabled(bool) → void` | GUI | — | `renderParamPage()` | — | — | No-op. |
-| `VoicePage::meter(float&, const char*&) → bool` | GUI | — → `false` | `renderParamPage()` | — | — | VOICE stránka nemá metr (no-op). |
+`VoicePage` byl rozdělen na dvě `IParamPage` stránky (kvůli reorgu CONFIG a novému rezonančnímu modelu).
 
-`kParams[5]` jsou `static constexpr` — inicializovány jednou, sdíleny všemi instancemi (je jich vždy právě jedna). Rozsahy: MASTER −60..+6 dB, RESONANCE 0..1, RELEASE 50..2000 ms, EXCITE DECAY 500..30000 ms, MAX RESONANCE 1..64.
+**`MasterPage`** (`name()="MASTER"`, `hasEnable()=false`) — 2 parametry: `MASTER` (master_gain_db, −60..6 dB; `engine.setMasterGain(pow(10,v/20))`) a `RELEASE` (release_ms, 50..2000 ms; `engine.setReleaseMs`). `get`/`set` čtou/zapisují `ctx_.state.*`. `kParams[2]` static constexpr.
+
+**`ResonancePage`** (`name()="RESONANCE"`, `hasEnable()=true`) — 4 parametry:
+- index 0 `RESONANCE LAYER` (resonance_layer_db, **dynamický rozsah**) — `param(0)` nastavuje `min/max` z `engine.bankPeakRmsMinDb()/MaxDb()` do `mutable layer_param_` (renderParamPage čte min/max živě); `get(0)` clampuje uloženou hodnotu do rozsahu banky; `set(0)` → `engine.setResonanceLayerDb`.
+- index 1 `RESONANCE GAIN` (resonance_gain_db, −60..0 dB) → `engine.setResonanceGainDb`.
+- index 2 `EXCITE DECAY` (excite_decay_ms, 500..30000) → `engine.setExciteDecayMs`.
+- index 3 `MAX RESONANCE` (max_resonance_voices, 1..64) → `engine.setMaxResonanceVoices`.
+- `enabled()`/`setEnabled()` mapují na `ctx_.state.resonance_enabled` + `engine.setResonanceEnabled` (ON/OFF toggle v `renderParamPage`).
+- `kParams[3]` (GAIN/EXCITE/MAX) static constexpr; LAYER je `mutable` člen kvůli dyn. rozsahu.
 
 ---
 
@@ -230,7 +229,7 @@ Obsah zleva doprava:
    - **`BUFFER`** combo `{32…8192}` framů (`##buffer`) — při výběru `ctx.setAudioBlockSize(v)` (stop→setBlockSize→start, persist). Jen počet framů (ms latence vynechána kvůli místu na liště).
    - (DSP load metr je v indicator stripu jako 5. dlaždice, ne zde. MIDI IN combo zkráceno na 210 px.)
 4. **LOG level combo** (vpravo, pevný right margin 290 px) — 6 úrovní `debug/info/warn/error/fatal/off`. Při změně: `state.log_level = kLevels[cur]`, `Logger::setMinSeverity(…)`.
-5. **RESET tlačítko** — resetuje `state.resonance_strength = 0.5`, `release_ms = 200`, `excite_decay_ms = 5000`, `master_gain_db = 0` a volá příslušné engine settery (`setResonanceStrength`, `setReleaseMs`, `setExciteDecayMs`, `setMasterGain(1.f)`).
+5. **RESET tlačítko** — resetuje `state.resonance_enabled = true`, `resonance_gain_db = -12`, `release_ms = 200`, `excite_decay_ms = 5000`, `master_gain_db = 0` a volá příslušné engine settery (`setResonanceEnabled`, `setResonanceGainDb`, `setReleaseMs`, `setExciteDecayMs`, `setMasterGain(1.f)`). **Neresetuje** `resonance_layer_db` (vázán na rozsah banky) ani `max_resonance_voices`.
 
 Chybí reset `max_resonance_voices` v RESET akci — viz Nálezy revize.
 
@@ -290,7 +289,7 @@ Načte `engine.activeMidiNotes(active[128])` a `engine.resonatingMidiNotes(reso[
 | Smyčka sliderů | vždy | pro `i = 0..paramCount()-1`: `page.get(i)` → `wdg::DecoSlider(p.label, &v, p.min, p.max, p.fmt, accent, !p.readonly)`. Barva: i=0 → `gold`, ostatní → `silver2`. Při změně: `page.set(i, v)`. |
 | Metr | `page.meter(mv, ml)` | `wdg::Eyebrow(ml)` + formátovaná hodnota `Colors::ink` |
 
-Zcela generický — nezná konkrétní stage. Funguje pro `VoicePage` (5 params, hasEnable=false) i pro `DspStage` (proměnný počet, hasEnable=true). Parametr `ctx` je přijat ale nevyužit (`(void)ctx`) — připravenost pro budoucí kontextové akce.
+Zcela generický — nezná konkrétní stage. Funguje pro `MasterPage` (hasEnable=false) / `ResonancePage` (hasEnable=true) i pro `DspStage` (proměnný počet, hasEnable=true). Parametr `ctx` je přijat ale nevyužit (`(void)ctx`) — připravenost pro budoucí kontextové akce.
 
 ---
 
@@ -322,7 +321,7 @@ Parametr `ctx` přijat ale nevyužit (`(void)ctx`). `selected` je `int&` — in/
 
 | Oblast | Co GUI ovládá / čte |
 |---|---|
-| **Engine** (`engine/engine.h`) | `initFromState`: `engine.init(cfg)`, `loadBank`, `setMaxResonanceVoices`. Runtime: `setMasterGain`, `setResonanceStrength`, `setReleaseMs`, `setExciteDecayMs` (přes `VoicePage::set`), `dspChain().stage(i).set/setEnabled` (přes `renderParamPage`). Diagnostika: `activeVoices`, `resonanceVoices`, `mainRingsUsed/Total`, `resonanceRingsUsed/Total`, `masterPeakL/R`, `noteOnRecent`, `noteOffRecent`, `pedalCC`, `activeMidiNotes`, `resonatingMidiNotes`, `bankType`, `recordedNotes`, `loadedSamples`, `mainStreamUnderrunRecent`, `resonanceStreamUnderrunRecent`. |
+| **Engine** (`engine/engine.h`) | `initFromState`: `engine.init(cfg)`, `loadBank`, `setMaxResonanceVoices`, `setResonanceEnabled/GainDb/LayerDb`. Runtime: `setMasterGain`, `setReleaseMs` (přes `MasterPage::set`), `setResonanceGainDb`, `setResonanceLayerDb`, `setResonanceEnabled`, `setExciteDecayMs`, `setMaxResonanceVoices` (přes `ResonancePage::set`), `bankPeakRmsMinDb/MaxDb` (dyn. rozsah slideru), `dspChain().stage(i).set/setEnabled` (přes `renderParamPage`). Diagnostika: `activeVoices`, `resonanceVoices`, `mainRingsUsed/Total`, `resonanceRingsUsed/Total`, `masterPeakL/R`, `noteOnRecent`, `noteOffRecent`, `pedalCC`, `activeMidiNotes`, `resonatingMidiNotes`, `bankType`, `recordedNotes`, `loadedSamples`, `mainStreamUnderrunRecent`, `resonanceStreamUnderrunRecent`. |
 | **DSP Chain** (`engine/dsp/dsp_stage.h`, `dsp_chain.h`) | `renderParamPage` + `renderConfigPanel` pracují s `IParamPage*` (polymorfní). `main.cpp` získá reference `dspChain().stage(0..2)` a zrcadlí hodnoty do `ctx.state` každý frame. |
 | **Audio** (`io/audio_device.h`) | `AppContext::initFromState` volá `audio->start(&audioCallback, &engine, 48000, 256)`. `shutdown` volá `audio->stop()`. GUI jinak s audio device nekomunikuje. |
 | **MIDI** (`midi/midi_input.h`) | `renderTopBar` volá `MidiInput::listPorts()`, `midi.open/close`, `midi.setChannel`. `AppContext::initFromState` otevírá port dle persistovaného jména. |
@@ -340,7 +339,7 @@ Porovnávací blok v render loop kontroluje 20 polí `GuiState`, ale **vynecháv
 
 ### 2. RESET netleží `max_resonance_voices`
 
-`renderTopBar` → RESET tlačítko resetuje `resonance_strength`, `release_ms`, `excite_decay_ms`, `master_gain_db` na defaults a volá odpovídající engine settery. **Neresetuje** `max_resonance_voices` (default 32). Pokud uživatel sníží MAX RESONANCE na 1 a klikne RESET, hodnota zůstane na 1. Nekonzistentnost s ostatními VOICE parametry.
+`renderTopBar` → RESET tlačítko resetuje `resonance_enabled`, `resonance_gain_db`, `release_ms`, `excite_decay_ms`, `master_gain_db` na defaults a volá odpovídající engine settery. **Neresetuje** `max_resonance_voices` (default 32) ani `resonance_layer_db` (vázán na banku).
 
 ### 3. `reloadBank` blokuje GUI vlákno ~60 ms
 

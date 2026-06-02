@@ -58,7 +58,9 @@ bool AppContext::initFromState(const GuiState& s) {
     state.audio_sample_rate  = cfg.sample_rate;   // promitni validovane zpet do state
     state.audio_block_size   = cfg.block_size;
     cfg.master_gain          = std::pow(10.f, state.master_gain_db / 20.f);
-    cfg.resonance_strength   = state.resonance_strength;
+    cfg.resonance_enabled    = state.resonance_enabled;
+    cfg.resonance_gain_db    = state.resonance_gain_db;
+    cfg.resonance_layer_db   = state.resonance_layer_db;
     cfg.release_ms           = state.release_ms;
     cfg.excite_decay_ms      = state.excite_decay_ms;
     cfg.max_resonance_voices = state.max_resonance_voices;
@@ -84,6 +86,8 @@ bool AppContext::initFromState(const GuiState& s) {
     // Zivý strop rezonancni polyfonie (uz predano pres cfg, ale explicitne
     // volame setter aby cesta setMaxResonanceVoices byla vzdy exercisovana).
     engine.setMaxResonanceVoices(state.max_resonance_voices);
+    engine.setResonanceEnabled(state.resonance_enabled);
+    engine.setResonanceGainDb(state.resonance_gain_db);
 
     // Bank: best-effort. Pokud cesta neni nebo nejde nacist, jen warning a
     // engine bezi prazdny (uzivatel muze banku vybrat pozdeji pres UI).
@@ -93,6 +97,15 @@ bool AppContext::initFromState(const GuiState& s) {
                 "Nelze nacist banku: %s", state.bank_path.c_str());
         }
     }
+
+    // Default Resonance Layer = 1/3 rozsahu banky, kdyz uzivatel jeste nenastavil
+    // (heuristika: persistovany default -30 dB). Jinak respektuj ulozenou hodnotu.
+    if (!state.bank_path.empty()) {
+        const float lo = engine.bankPeakRmsMinDb(), hi = engine.bankPeakRmsMaxDb();
+        if (hi > lo && state.resonance_layer_db == -30.f)
+            state.resonance_layer_db = lo + (hi - lo) / 3.f;
+    }
+    engine.setResonanceLayerDb(state.resonance_layer_db);
 
     // Audio device start. AudioCallback je free funkce + userdata (Engine*).
     // Musi byt AZ po engine.init() (voice pool / stream / ringy uz priprazene).

@@ -19,7 +19,9 @@ struct GuiState {
     std::string log_level         = "info";   // debug|info|warn|error|fatal
     int         midi_channel      = -1;   // -1 = OMNI, 0..15 = MIDI kanal (0-based)
     float       master_gain_db      = 0.f;
-    float       resonance_strength  = 0.5f;
+    bool        resonance_enabled  = true;
+    float       resonance_gain_db  = -12.f;
+    float       resonance_layer_db = -30.f;
     float       release_ms          = 200.f;
     float       excite_decay_ms     = 5000.f;
     int         max_resonance_voices = 32;

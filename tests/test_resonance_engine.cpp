@@ -83,7 +83,7 @@ TEST_CASE("ResonanceEngine: eligibility (1) — N s aktivni main voice neni elig
     PedalState pedal;
     VoicePool  pool(16);
     ResonanceEngine res;
-    res.setStrength(1.f);
+    res.setEnabled(true); res.setGainDb(0.f);   // gain_lin = 1.0 (jako drive strength 1.0)
     const float sr = 48000.f;
 
     pedal.setSustainCC(127);  // pedal dolu — vsechny struny undamped
@@ -135,7 +135,7 @@ TEST_CASE("ResonanceEngine: uniqueness (2) — multi-source jen aktualizuje ampl
     PedalState pedal;
     VoicePool  pool(16);
     ResonanceEngine res;
-    res.setStrength(1.f);
+    res.setEnabled(true); res.setGainDb(0.f);   // gain_lin = 1.0 (jako drive strength 1.0)
     const float sr = 48000.f;
 
     pedal.setSustainCC(127);
@@ -180,7 +180,7 @@ TEST_CASE("ResonanceEngine: pravidlo B — note-on na rezonujici notu zafade rez
     PedalState pedal;
     VoicePool  pool(16);
     ResonanceEngine res;
-    res.setStrength(1.f);
+    res.setEnabled(true); res.setGainDb(0.f);   // gain_lin = 1.0 (jako drive strength 1.0)
     const float sr = 48000.f;
 
     pedal.setSustainCC(127);
@@ -211,7 +211,7 @@ TEST_CASE("ResonanceEngine: pedal UP -> rezonance ne-drzenych not fade") {
     PedalState pedal;
     VoicePool  pool(16);
     ResonanceEngine res;
-    res.setStrength(1.f);
+    res.setEnabled(true); res.setGainDb(0.f);   // gain_lin = 1.0 (jako drive strength 1.0)
     const float sr = 48000.f;
     // Per-blok decay nastav agresivnejsi (tau=100 ms), aby test bezel rychle.
     res.setExciteDecayTimeMs(100.f, 256, sr);
