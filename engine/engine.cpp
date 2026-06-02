@@ -14,6 +14,7 @@ namespace ithaca {
 
 Engine::Engine() {}
 Engine::~Engine() {
+    if (recache_thread_.joinable()) recache_thread_.join();
     if (stream_main_)      stream_main_->stop();
     if (stream_resonance_) stream_resonance_->stop();
 }
@@ -94,6 +95,10 @@ bool Engine::reloadBank(const std::string& dir) {
     // 4) Pockej ~10 ms aby in-flight processBlock dobehl. Audio bloky maji
     //    typicky pod 6 ms (256 vz / 48k), 10 ms je bezpecna rezerva.
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // Join pripadny bezici recache thread — pristupuje k bank_/cfg_, musi
+    // dobehnout DRIV nez loadBank prepise banku (jinak race / use-after-free).
+    if (recache_thread_.joinable()) recache_thread_.join();
+    recache_running_.store(false, std::memory_order_release);
     // 5) TVRDE zastav vsechny hlasy DRIV nez uvolnime bank_ — jinak by Voice/
     //    ResonanceVoice drzely const MicLayer*/SampleAsset* do uvolnene pameti
     //    stare banky (release ~200 ms >> 60 ms pauza) => use-after-free.
@@ -389,6 +394,38 @@ void Engine::setResonanceLayerDb(float db) noexcept {
 }
 void Engine::setResonanceEnabled(bool on) noexcept {
     if (resonance_) resonance_->setEnabled(on);
+}
+
+void Engine::rebuildResonanceCache(float target_db) noexcept {
+    if (!resonance_) return;
+    cfg_.resonance_layer_db = target_db;          // engine si pamatuje aktualni cil
+    resonance_->setLayerTargetDb(target_db);      // nove spawny vyberou novou vrstvu hned
+    // Pokud uz rebuild bezi, jen uloz pending cil (coalescing).
+    if (recache_running_.exchange(true, std::memory_order_acq_rel)) {
+        recache_pending_target_.store(target_db, std::memory_order_relaxed);
+        recache_has_pending_.store(true, std::memory_order_release);
+        return;
+    }
+    resonance_->clearCacheReady();      // nove hlasy → stream mod
+    resonance_->requestRecacheFade();   // audio thread fadene aktivni cache-mod hlasy
+    if (recache_thread_.joinable()) recache_thread_.join();   // predchozi uz dobehl
+    recache_thread_ = std::thread([this]() {
+        for (;;) {
+            const float t = cfg_.resonance_layer_db;
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));  // dobeh fade
+            auto ready = ithaca::buildResonanceCache(
+                bank_, t, cfg_.resonance_window_ms, log::Logger::default_());
+            if (resonance_) resonance_->setCacheReady(ready);
+            if (recache_has_pending_.exchange(false, std::memory_order_acquire)) {
+                const float nt = recache_pending_target_.load(std::memory_order_relaxed);
+                cfg_.resonance_layer_db = nt;
+                if (resonance_) { resonance_->clearCacheReady(); resonance_->requestRecacheFade(); }
+                continue;
+            }
+            break;
+        }
+        recache_running_.store(false, std::memory_order_release);
+    });
 }
 
 void Engine::setExciteDecayMs(float ms) noexcept {

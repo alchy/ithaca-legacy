@@ -16,8 +16,10 @@
 #include "dsp/dsp_chain.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace ithaca {
 
@@ -139,6 +141,10 @@ public:
     void setResonanceGainDb(float db) noexcept;
     void setResonanceLayerDb(float db) noexcept;
     void setResonanceEnabled(bool on) noexcept;
+    // Runtime prestavba rezonancni cache pro novy layer target (GUI slider).
+    // Fadene aktivni rezonance + ready=false (nove streamuji), pak na pozadi
+    // znovu nacte cilove vrstvy a ready=true. Volat z GUI threadu (debounced).
+    void rebuildResonanceCache(float target_db) noexcept;
     // Min/max peak RMS [dB] napric nactenou bankou (pro dynamicky rozsah GUI
     // slideru "Resonance Layer"). Bez banky default -60 / 0.
     float bankPeakRmsMinDb() const noexcept { return bank_peak_rms_min_db_; }
@@ -198,6 +204,10 @@ private:
     // eventu. Psano z MIDI/GUI threadu pri noteOn/noteOff, cteno z GUI.
     std::atomic<uint64_t>             last_note_on_us_{0};
     std::atomic<uint64_t>             last_note_off_us_{0};
+    std::thread          recache_thread_;
+    std::atomic<bool>    recache_running_{false};
+    std::atomic<float>   recache_pending_target_{-30.f};
+    std::atomic<bool>    recache_has_pending_{false};
     bool                              initialized_ = false;
 };
 
