@@ -1,6 +1,6 @@
 # Rezonance
 
-Sympatická rezonance simuluje fyzikální jev, kdy zahrání noty M rozvibruje jiné struny klavíru, jejichž frekvence jsou blízké parciálům M. Engine prochází všech 128 MIDI not N ≠ M; struna N je eligibilní, pokud není tlumena pedálem (`pedal.isUndamped(N)`) a zároveň pro ni neexistuje žádný aktivní hlavní hlas (`!pool.hasActiveMainVoice(N)`) — tím je zachován invariant 5.5.1: na jedné strune v daný okamžik zní buď hlavní, nebo rezonantní hlas, nikdy oba. Síla rezonance se spočte z harmonické blízkosti `harmonicProximity(N, M)` (model partial-coincidence z ideální harmonické řady), velocity a parametru `strength`. Vzniklý `ResonanceVoice` nehraje vzorek od začátku, ale přeskakuje attack a čte z regionu `preload_resonance` (Streamed mic) nebo od `resonance_start_frame` v `preload_head` (FullyLoaded mic), takže zní jako doznívající struna bez perkusivního nástupu. Per-blok `processBlock` aplikuje exponenciální decay na `last_excite` a okamžitě aktualizuje `target_gain` každého aktivního hlasu podle aktuálního `pedal.dampingFor(N)` — změny pedálu (včetně half-pedalu) se tak plynule promítají do hlasitosti rezonance bez nutnosti dalšího note-on eventu.
+Sympatická rezonance simuluje fyzikální jev, kdy zahrání noty M rozvibruje jiné struny klavíru, jejichž frekvence jsou blízké parciálům M. Engine prochází všech 128 MIDI not N ≠ M; struna N je eligibilní, pokud není tlumena pedálem (`pedal.isUndamped(N)`) a zároveň pro ni neexistuje žádný aktivní hlavní hlas (`!pool.hasActiveMainVoice(N)`) — tím je zachován invariant 5.5.1: na jedné strune v daný okamžik zní buď hlavní, nebo rezonantní hlas, nikdy oba. Síla rezonance se spočte z harmonické blízkosti `harmonicProximity(N, M)` (model partial-coincidence z ideální harmonické řady), velocity a lineárního gainu `gain_lin` (z dB; `excite = vel_norm × harm × gain_lin`). Rezonance je gated `enabled_` (toggle — při vypnutí `onPlayedNoteOn` hned vrací). **Výběr velocity vrstvy** (Fáze 8): místo natvrdo nejtišší `slots[0]` se použije `nearestSlotByRms(NoteSlots, layer_target_db_)` (čistá fce v `resonance_layer_select.{h,cpp}`) — slot, jehož peak `rms_db` je nejblíž uživatelskému cíli (`Resonance Layer` dB). Vzniklý `ResonanceVoice` nehraje vzorek od začátku, ale přeskakuje attack a čte z regionu `preload_resonance` (Streamed mic) nebo od `resonance_start_frame` v `preload_head` (FullyLoaded mic) — proto výběr hlasitější vrstvy nepřináší attack artefakty (skip-attack platí pro Streamed mic). Per-blok `processBlock` aplikuje exponenciální decay na `last_excite` a okamžitě aktualizuje `target_gain` každého aktivního hlasu podle aktuálního `pedal.dampingFor(N)` — změny pedálu (včetně half-pedalu) se tak plynule promítají do hlasitosti rezonance bez nutnosti dalšího note-on eventu.
 
 ---
 
@@ -26,8 +26,9 @@ Sympatická rezonance simuluje fyzikální jev, kdy zahrání noty M rozvibruje 
 | `ResonanceEngine(int max_resonance_voices)` | off-RT (init) | počet hlasů → objekt | `Engine::Engine` (přes `std::make_unique`) | `setMaxVoices` (clamp + uložení) |
 | `setStreamEngine(StreamEngine* se)` | off-RT | pointer na stream engine → void | `Engine::Engine` (init) | `v->setStreamEngine` na existující hlasy |
 | `reset()` noexcept | audio nebo off-RT (reload) | — → void (hard-stop všech hlasů) | `Engine::reloadBank` | `slot->hardStop()`, vynuluje `excite_state_` |
-| `setStrength(float s)` | off-RT nebo GUI | 0..1 → atomic | `Engine::setResonanceStrength` | — |
-| `strength()` | audio | — → float (atomic read) | `onPlayedNoteOn` | — |
+| `setGainDb(float db)` / `gainLinear()` | off-RT/GUI / audio | dB → `gain_lin_` (10^(db/20)) / read | `Engine::setResonanceGainDb` / `onPlayedNoteOn` | — |
+| `setLayerTargetDb(float db)` / `layerTargetDb()` | off-RT/GUI / audio | dB cíl pro výběr vrstvy → `layer_target_db_` / read | `Engine::setResonanceLayerDb` / `onPlayedNoteOn` (`nearestSlotByRms`) | — |
+| `setEnabled(bool)` / `enabled()` | off-RT/GUI / audio | bool → `enabled_` / read | `Engine::setResonanceEnabled` / `onPlayedNoteOn` (early-return) | — |
 | `setMaxVoices(int n)` noexcept | off-RT nebo GUI | 1..64 (clamp) → atomic | konstruktor; `Engine::setMaxResonanceVoices` | — |
 | `maxVoices()` noexcept | libovolné | — → int (atomic read) | testy, diagnostika | — |
 | `setExciteDecayTimeMs(float tau_ms, int block_size, float engine_sr)` | off-RT | tau [ms], blok, sr → `decay_per_block_` | `Engine::Engine`, `Engine::setBlockSize`, `Engine::setExciteDecayMs` | `std::exp(-block_ms / tau_ms)` |
@@ -51,7 +52,7 @@ Funkce iteruje všech 128 MIDI not N a pro každou provádí třívrstvý filtr:
 2. *Rule B in-progress:* pokud `slot->active() && slot->fadingOut()`, přeskočí — nová excitace by přerušila probíhající fade-out z rule B.
 3. *Harmonický práh:* `harmonicProximity(N, M) < kResonanceHarmonicMin` (0.05) → vynechá (sekunda, tritonus — téměř nulová hodnota).
 
-Excitace se počítá jako `excite = vel_norm * harm * strength` bez dampingového multiplikátoru — ten se aplikuje až v `processBlock` per-blok přes `setTargetGain`, aby se změny pedálu plynule promítaly do hlasitosti existující rezonance.
+Před iterací: `if (!enabled_) return;`. Excitace se počítá jako `excite = vel_norm * harm * gain_lin` (kde `gain_lin = 10^(resonance_gain_db/20)`) bez dampingového multiplikátoru — ten se aplikuje až v `processBlock` per-blok přes `setTargetGain`, aby se změny pedálu plynule promítaly do hlasitosti existující rezonance. Sample pro N se vybere `nearestSlotByRms(ns, layer_target_db_)` (nejbližší peak RMS k cíli), pak `variants[0]`, `mics[0]`.
 
 Pokud slot pro N již existuje a je aktivní (per-nota uniqueness 5.5.1(2)), volá `slot->addExcitation(excite)` a aktualizuje `excite_state_[N].last_excite = max(...)`. Nealokuje druhý hlas.
 
