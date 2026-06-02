@@ -116,6 +116,11 @@ bool Engine::noteOffRecent(float ms) const noexcept {
     if (t == 0) return false;
     return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
 }
+bool Engine::overloadRecent(float ms) const noexcept {
+    const uint64_t t = last_overload_us_.load(std::memory_order_relaxed);
+    if (t == 0) return false;
+    return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
+}
 void Engine::allNotesOff() {
     midi_q_.push({MidiEvent::AllNotesOff, 0, 0});
 }
@@ -136,6 +141,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
         master_peak_r_.store(0.f, std::memory_order_relaxed);
         return;
     }
+    const uint64_t block_t0 = nowMicros();
     const float sr = (float)cfg_.sample_rate;
 
     // 1. Vyprazdni MIDI frontu (audio thread) → akce do voice poolu + rezonance.
@@ -236,6 +242,19 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     const float new_r = (peak_r > cur_r * decay) ? peak_r : cur_r * decay;
     master_peak_l_.store(new_l, std::memory_order_relaxed);
     master_peak_r_.store(new_r, std::memory_order_relaxed);
+
+    // 5. DSP load meter: cas renderu / perioda bloku. Peak-hold s decay ~0.5 s,
+    // aby cislo na liste bylo citelne. Overload (load >= 1.0 = minul deadline)
+    // orazitkujeme pro cervene blikani v GUI.
+    const uint64_t dt_us     = nowMicros() - block_t0;
+    const uint64_t period_us = (uint64_t)n_samples * 1000000ull / (uint64_t)cfg_.sample_rate;
+    const float    load      = period_us > 0 ? (float)dt_us / (float)period_us : 0.f;
+    if (load >= 1.0f)
+        last_overload_us_.store(nowMicros(), std::memory_order_relaxed);
+    const float load_decay = std::exp(-(float)n_samples / (0.5f * sr));
+    const float cur_load   = dsp_load_peak_.load(std::memory_order_relaxed);
+    dsp_load_peak_.store((load > cur_load * load_decay) ? load : cur_load * load_decay,
+                         std::memory_order_relaxed);
 }
 
 int Engine::setBlockSize(int new_block_size) noexcept {
