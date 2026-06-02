@@ -1,42 +1,48 @@
-// tests/test_harmonic_proximity.cpp
+// tests/test_harmonic_proximity.cpp — partial-coincidence rezonancni model.
+// POZN.: model uz NENI symetricky (oktava nahoru != oktava dolu) — budi se
+// jine parcialy, viz spec 2026-06-02-resonance-partial-coincidence-design.md.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-
 #include "resonance/harmonic_proximity.h"
-
+#include <cmath>
 using namespace ithaca;
 
-TEST_CASE("nota sama na sebe = 0 (resi se jinde, play-on-self)") {
-    CHECK(harmonicProximity(60, 60) == doctest::Approx(0.f));
+// harmonicProximity(target N, source P): jak silne nota P budi strunu N.
+
+TEST_CASE("self je 0 (play-on-self resi voice pool)") {
+    CHECK(harmonicProximity(60, 60) == 0.f);
 }
 
-TEST_CASE("oktavy klesaji s vzdalenosti") {
-    float p1 = harmonicProximity(60, 72);   // +1 oktava
-    float p2 = harmonicProximity(60, 84);   // +2 oktavy
-    float p3 = harmonicProximity(60, 96);   // +3 oktavy
-    CHECK(p1 > p2);
-    CHECK(p2 > p3);
-    CHECK(p1 > 0.5f);
-    CHECK(p3 > 0.f);
+TEST_CASE("poradi sily nahoru: oktava > kvinta > V.tercie") {
+    CHECK(harmonicProximity(72, 60) > harmonicProximity(67, 60));   // okt > kvinta
+    CHECK(harmonicProximity(67, 60) > harmonicProximity(64, 60));   // kvinta > tercie
 }
 
-TEST_CASE("kvinta > kvarta > tercia") {
-    float q5 = harmonicProximity(60, 67);   // kvinta
-    float q4 = harmonicProximity(60, 65);   // kvarta
-    float t3 = harmonicProximity(60, 64);   // velka tercia
-    CHECK(q5 > q4);
-    CHECK(q4 > t3);
+TEST_CASE("up/down asymetrie: oktava nahoru > oktava dolu > 0") {
+    CHECK(harmonicProximity(72, 60) > harmonicProximity(48, 60));   // up > down
+    CHECK(harmonicProximity(48, 60) > 0.f);                          // dolu stale rezonuje
 }
 
-TEST_CASE("tritonus / nahodne intervaly = ~0") {
-    CHECK(harmonicProximity(60, 66) < 0.05f);   // tritonus
-    CHECK(harmonicProximity(60, 61) < 0.05f);   // sekunda
+TEST_CASE("oktava nahoru = normalizovane maximum (~1.0)") {
+    CHECK(harmonicProximity(72, 60) == doctest::Approx(1.0f).epsilon(0.001));
+    for (int t = 0; t < 128; ++t)
+        CHECK(harmonicProximity(t, 60) <= harmonicProximity(72, 60) + 1e-4f);
 }
 
-TEST_CASE("symetrie: f(a,b) == f(b,a)") {
-    for (int a : {21, 36, 60, 84, 108}) {
-        for (int b : {24, 48, 67, 72, 96}) {
-            CHECK(harmonicProximity(a, b) == doctest::Approx(harmonicProximity(b, a)));
-        }
+TEST_CASE("pokles se vzdalenosti: 2 oktavy nahoru < 1 oktava nahoru") {
+    CHECK(harmonicProximity(84, 60) < harmonicProximity(72, 60));
+}
+
+TEST_CASE("tritonus / sekunda = slabe (< 0.05)") {
+    CHECK(harmonicProximity(66, 60) < 0.05f);   // tritonus
+    CHECK(harmonicProximity(61, 60) < 0.05f);   // m2
+}
+
+TEST_CASE("rozsah [0,1] a koncne hodnoty") {
+    for (int t = 0; t < 128; ++t) {
+        float v = harmonicProximity(t, 60);
+        CHECK(v >= 0.f);
+        CHECK(v <= 1.0f + 1e-4f);
+        CHECK(std::isfinite(v));
     }
 }

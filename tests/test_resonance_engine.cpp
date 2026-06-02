@@ -43,8 +43,10 @@ SampleAsset makeAsset(float amp, int frames) {
     return a;
 }
 
-// Banka pro test: 4 noty (60, 64, 67, 72), kazda 1 slot, 1 variant, 1 mic.
-// Sampl je dlouhy (5 s @ 48k) — vejde se do testu bez doejti pri 50 blocich.
+// Banka pro test: noty 48, 60, 64, 67, 72 (oktava dolu + C dur trojzvuk +
+// oktava nahoru), kazda 1 slot, 1 variant, 1 mic. Partial-coincidence model:
+// silni partneri 60 jsou 72 (oktava nahoru), 48 (oktava dolu), 67 (kvinta);
+// 64 (V.tercie) je pod prahem → nerezonuje. Sampl 5 s @ 48k.
 struct Fixture {
     Bank bank;
     // SampleAsset musi prezit po dobu testu — drzime ho jako member.
@@ -52,7 +54,7 @@ struct Fixture {
 
     Fixture() {
         const int frames = 48000 * 5;        // 5 sekund
-        for (int n : {60, 64, 67, 72}) {
+        for (int n : {48, 60, 64, 67, 72}) {
             assets[n] = makeAsset(0.25f, frames);
             VelocitySlot slot;
             slot.rms_db = -12.f;
@@ -98,29 +100,32 @@ TEST_CASE("ResonanceEngine: eligibility (1) — N s aktivni main voice neni elig
     res.onPlayedNoteOn(60, 100, fx.bank, pool, pedal, sr);
     // 60 nesmi mit rezonanci (play-on-self filter v onPlayedNoteOn).
     CHECK_FALSE(res.isResonating(60));
-    // 60 budila 64 (M3, 0.20), 67 (P5, 0.60), 72 (oktava, 0.70) — vse > min.
-    CHECK(res.isResonating(64));
+    // 60 budi silne partnery: 48 (oktava dolu), 67 (kvinta), 72 (oktava nahoru).
+    CHECK(res.isResonating(48));
     CHECK(res.isResonating(67));
     CHECK(res.isResonating(72));
+    // 64 (V.tercie) je v partial-coincidence modelu pod prahem → nerezonuje.
+    CHECK_FALSE(res.isResonating(64));
 
-    // Ted hraj 64 — rule B zafade rezonanci 64 (ktera prave znela), pak alokuje
-    // hlavni hlas 64. Vysledek: 64 ma main voice (rezonance se fade-uje k 0).
-    VoiceSpec vs64;
-    vs64.asset = &fx.bank.notes[64].slots[0].variants[0];
-    vs64.pitch_ratio = 1.0; vs64.vel_gain = 1.f;
-    pedal.noteOn(64);
-    res.onSelfNoteOn(64, sr);                // rule B na rezonujici 64
-    pool.noteOn(64, vs64, sr);
-    res.onPlayedNoteOn(64, 100, fx.bank, pool, pedal, sr);
+    // Ted hraj 48 (silny partner, ktery prave rezonoval) — rule B zafade jeho
+    // rezonanci, pak alokuje hlavni hlas 48.
+    VoiceSpec vs48;
+    vs48.asset = &fx.bank.notes[48].slots[0].variants[0];
+    vs48.pitch_ratio = 1.0; vs48.vel_gain = 1.f;
+    pedal.noteOn(48);
+    res.onSelfNoteOn(48, sr);                // rule B na rezonujici 48
+    pool.noteOn(48, vs48, sr);
+    res.onPlayedNoteOn(48, 100, fx.bank, pool, pedal, sr);
 
-    // 60 ma main voice → eligibility (1) blokuje rezonanci 60 od 64 (M3).
+    // 48 budi 60 (oktava nahoru, silne), ale 60 MA main voice → eligibility (1)
+    // tu rezonanci blokuje.
     CHECK_FALSE(res.isResonating(60));
-    // 64 prave fade-uje (rule B); active() je stale true do dojeti rampy.
-    CHECK(res.isResonating(64));
-    // Renderni dost bloku, aby rule B fade dosel (5 ms = 240 fr; 30 bloku × 256 = 7680 fr).
+    // 48 prave fade-uje (rule B); active() je stale true do dojeti rampy.
+    CHECK(res.isResonating(48));
+    // Render dost bloku, aby rule B fade dosel (5 ms = 240 fr; 30 bloku × 256 = 7680 fr).
     renderNBlocks(res, pedal, 30);
-    CHECK_FALSE(res.isResonating(64));      // rule B fade dohrany, eligibility (main voice 64) blokuje
-    // 67 a 72 stale rezonuji od 60 (nemaji main voice; 64→67/72 jen aktualizuje).
+    CHECK_FALSE(res.isResonating(48));      // rule B fade dohrany, main voice 48 blokuje
+    // 67 a 72 stale rezonuji od 60 (nemaji main voice).
     CHECK(res.isResonating(67));
     CHECK(res.isResonating(72));
 }
@@ -136,45 +141,38 @@ TEST_CASE("ResonanceEngine: uniqueness (2) — multi-source jen aktualizuje ampl
     pedal.setSustainCC(127);
 
     // Note-on 60 BEZ pool.noteOn (cisty rezonancni test — testujeme jen budici
-    // chovani; eligibility na 60 by neblokoval, kdyby nehrala). Note-on 60 budi
-    // 64 (M3, 0.20), 67 (P5, 0.60), 72 (oktava, 0.70).
+    // chovani, ne eligibility). 60 budi silne partnery 48 (oktava dolu), 67
+    // (kvinta), 72 (oktava nahoru). 64 (V.tercie) je pod prahem.
     res.onPlayedNoteOn(60, 80, fx.bank, pool, pedal, sr);
     const int after1 = res.activeCount();
-    CHECK(after1 == 3);                     // 64, 67, 72 rezonuji
-    CHECK(res.isResonating(64));
+    CHECK(after1 == 3);                     // 48, 67, 72 rezonuji
+    CHECK(res.isResonating(48));
     CHECK(res.isResonating(67));
     CHECK(res.isResonating(72));
-    // Necht 67 naramppuje k targetu (30 ms ramp = 1440 fr ~ 6 bloku po 256).
+    CHECK_FALSE(res.isResonating(64));
+    // Necht 48 naramppuje k targetu (30 ms ramp = 1440 fr ~ 6 bloku po 256).
     renderNBlocks(res, pedal, 8);
-    const float lvl_67_before = res.currentLevelFor(67);
-    CHECK(lvl_67_before > 0.f);
+    const float lvl_48_before = res.currentLevelFor(48);
+    CHECK(lvl_48_before > 0.f);
 
-    // Note-on 64 (taky bez pool.noteOn → 64 by mohla mit main voice; pro tento
-    // test ji ZAMERNE neaktivujeme — testujeme uniqueness na rezonancnich
-    // hlasech, ne eligibility). 64 budi 60 (M3, 0.20), 67 (m3, 0.10),
-    // 72 (m6, 0.10). 67 a 72 uz rezonuji od 60 → musi jen update (uniqueness).
-    // 60 doposud nehraje jako rezonance — alokuje se novy slot.
-    res.onPlayedNoteOn(64, 80, fx.bank, pool, pedal, sr);
+    // Note-on 72 (taky bez pool.noteOn). 72 budi 60 (oktava dolu — NOVY slot,
+    // 60 zatim nerezonuje) a 48 (dve oktavy dolu — UZ rezonuje od 60 → jen
+    // update, uniqueness). 72 sama je play-on-self → jeji rezonance od 60 trva.
+    res.onPlayedNoteOn(72, 80, fx.bank, pool, pedal, sr);
     const int after2 = res.activeCount();
-    // Pribyl jen 1 novy hlas (60). Slot 67 a 72 zustavaji — uniqueness.
+    // Pribyl jen 1 novy hlas (60). Sloty 48, 67, 72 zustavaji — uniqueness.
     CHECK(after2 == after1 + 1);
     CHECK(res.isResonating(60));
+    CHECK(res.isResonating(48));
     CHECK(res.isResonating(67));
-    CHECK(res.isResonating(72));
-    // 64 NEsmi rezonovat (play-on-self filter na M=64; 64 sama na sebe).
-    // Pozn: 64 mohla mit rezonanci jiz od prvniho note-on 60→64 — to nahore
-    // ASSERTujeme. Po druhem note-on (64 sama) ji NIC NEMENI (play-on-self
-    // nas neztracuje, ale ani nealokuje). Takze 64 STALE rezonuje.
-    CHECK(res.isResonating(64));
+    CHECK(res.isResonating(72));            // play-on-self ji neztlumi (trva od 60)
 
-    // Uniqueness: gain 67 nesmi klesnout (addExcitation jen zvysuje target).
-    // Po dalsim renderu by gain mel byt >= predesly (decay je pomaly tau~5s).
+    // Uniqueness: gain 48 nesmi klesnout (72→48 addExcitation jen zvysuje target).
     renderNBlocks(res, pedal, 2);
-    const float lvl_67_after = res.currentLevelFor(67);
+    const float lvl_48_after = res.currentLevelFor(48);
     // Tolerance: max() pricte vyssi z (old, new excite) → target stoupne;
-    // gain rampuje k targetu. Per-blok decay je ~0.998, takze za 2 bloku
-    // jen ~0.4% pokles z decayu — pred tim ale addExcitation pricetla vic.
-    CHECK(lvl_67_after >= lvl_67_before * 0.99f);
+    // gain rampuje k targetu. Per-blok decay ~0.998 → za 2 bloky ~0.4% pokles.
+    CHECK(lvl_48_after >= lvl_48_before * 0.99f);
 }
 
 TEST_CASE("ResonanceEngine: pravidlo B — note-on na rezonujici notu zafade rezonanci") {
