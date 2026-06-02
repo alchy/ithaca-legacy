@@ -44,23 +44,23 @@ TEST_CASE("Engine runtime setters") {
     cfg.sample_rate = 48000;
     cfg.block_size = 256;
     cfg.release_ms = 200.f;
-    cfg.resonance_strength = 0.5f;
+    cfg.resonance_gain_db = -12.f;
     cfg.excite_decay_ms = 5000.f;
     REQUIRE(e.init(cfg));
 
     // Settery nesmi crashnout pri rozumnych hodnotach.
     CHECK_NOTHROW(e.setReleaseMs(500.f));
-    CHECK_NOTHROW(e.setResonanceStrength(0.8f));
+    CHECK_NOTHROW(e.setResonanceGainDb(-6.f));
     CHECK_NOTHROW(e.setExciteDecayMs(3000.f));
 
     // Clamp na hranicich (release_ms 1..60000).
     CHECK_NOTHROW(e.setReleaseMs(-100.f));
     CHECK_NOTHROW(e.setReleaseMs(999999.f));
 
-    // setResonanceStrength sama clampuje (per ResonanceEngine::setStrength
-    // signaturu). Neoveruj zde clamp, jen ze neselze.
-    CHECK_NOTHROW(e.setResonanceStrength(-1.f));
-    CHECK_NOTHROW(e.setResonanceStrength(2.f));
+    // Dalsi rezonancni settery (enable / layer target dB). Neoveruj zde
+    // konkretni hodnoty, jen ze neselzou.
+    CHECK_NOTHROW(e.setResonanceEnabled(false));
+    CHECK_NOTHROW(e.setResonanceLayerDb(-25.f));
 
     // setExciteDecayMs musi pretrpet sub-ms hodnoty (ResonanceEngine si poradi).
     CHECK_NOTHROW(e.setExciteDecayMs(0.1f));

@@ -44,7 +44,9 @@ struct EngineConfig {
     int   resonance_num_rings      = 48;  // RESONANCE ring pool (>= max_resonance_voices)
     int   resonance_stream_threads = 4;   // workeri jen pro rezonancni pool
     // -- Faze 5 sympaticka rezonance --
-    float resonance_strength    = 0.5f;   // 0..1, expose pres CLI
+    bool  resonance_enabled     = true;
+    float resonance_gain_db     = -12.f;  // dB; expose pres CLI/GUI
+    float resonance_layer_db    = -30.f;  // dB cil pro vyber velocity vrstvy
     int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
     float excite_decay_ms       = 5000.f; // tau prirozeneho decay last_excite
 };
@@ -134,7 +136,13 @@ public:
 
     // -- Runtime parametry (GUI; atomic / single-thread-safe) --
     void setReleaseMs(float ms) noexcept;
-    void setResonanceStrength(float s) noexcept;   // wrap resonance_->setStrength
+    void setResonanceGainDb(float db) noexcept;
+    void setResonanceLayerDb(float db) noexcept;
+    void setResonanceEnabled(bool on) noexcept;
+    // Min/max peak RMS [dB] napric nactenou bankou (pro dynamicky rozsah GUI
+    // slideru "Resonance Layer"). Bez banky default -60 / 0.
+    float bankPeakRmsMinDb() const noexcept { return bank_peak_rms_min_db_; }
+    float bankPeakRmsMaxDb() const noexcept { return bank_peak_rms_max_db_; }
     void setExciteDecayMs(float ms) noexcept;      // wrap resonance_->setExciteDecayTimeMs
     void setMaxResonanceVoices(int n) noexcept { if (resonance_) resonance_->setMaxVoices(n); }
     int  maxResonanceVoices()    const noexcept { return resonance_ ? resonance_->maxVoices() : 0; }
@@ -166,6 +174,8 @@ private:
 
     EngineConfig                      cfg_;
     Bank                              bank_;
+    float bank_peak_rms_min_db_ = -60.f;
+    float bank_peak_rms_max_db_ =   0.f;
     std::unique_ptr<VoicePool>        pool_;
     RoundRobinState                   rr_;
     MidiQueue                         midi_q_;

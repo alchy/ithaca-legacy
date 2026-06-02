@@ -40,7 +40,9 @@ bool Engine::init(const EngineConfig& cfg) {
     stream_resonance_->start();
 
     resonance_ = std::make_unique<ResonanceEngine>(cfg.max_resonance_voices);
-    resonance_->setStrength(cfg.resonance_strength);
+    resonance_->setGainDb(cfg.resonance_gain_db);
+    resonance_->setLayerTargetDb(cfg.resonance_layer_db);
+    resonance_->setEnabled(cfg.resonance_enabled);
     resonance_->setStreamEngine(stream_resonance_.get());
     resonance_->setExciteDecayTimeMs(cfg.excite_decay_ms, cfg.block_size,
                                      (float)cfg.sample_rate);
@@ -57,7 +59,18 @@ bool Engine::loadBank(const std::string& dir) {
     bank_ = ithaca::loadBank(dir, L, /*cache_budget_mb=*/0,
                            cfg_.midi_from, cfg_.midi_to,
                            cfg_.preload_ms, cfg_.resonance_window_ms);
-    return bank_.loaded_samples > 0;
+    if (bank_.loaded_samples <= 0) return false;
+    // Cache min/max peak RMS napric vsemi velocity sloty (pro GUI slider rozsah).
+    {
+        float mn = 1e30f, mx = -1e30f;
+        for (int n = 0; n < 128; ++n)
+            for (const auto& s : bank_.notes[n].slots) {
+                if (s.rms_db < mn) mn = s.rms_db;
+                if (s.rms_db > mx) mx = s.rms_db;
+            }
+        if (mn <= mx) { bank_peak_rms_min_db_ = mn; bank_peak_rms_max_db_ = mx; }
+    }
+    return true;
 }
 
 bool Engine::reloadBank(const std::string& dir) {
@@ -362,9 +375,14 @@ void Engine::setReleaseMs(float ms) noexcept {
     cfg_.release_ms = ms;
 }
 
-void Engine::setResonanceStrength(float s) noexcept {
-    // ResonanceEngine::setStrength si sama clampuje 0..1 a uklada atomic.
-    if (resonance_) resonance_->setStrength(s);
+void Engine::setResonanceGainDb(float db) noexcept {
+    if (resonance_) resonance_->setGainDb(db);
+}
+void Engine::setResonanceLayerDb(float db) noexcept {
+    if (resonance_) resonance_->setLayerTargetDb(db);
+}
+void Engine::setResonanceEnabled(bool on) noexcept {
+    if (resonance_) resonance_->setEnabled(on);
 }
 
 void Engine::setExciteDecayMs(float ms) noexcept {

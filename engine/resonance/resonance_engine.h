@@ -64,9 +64,15 @@ public:
 
     void reset() noexcept;   // hard-stop vsech rezonancnich hlasu (reloadBank)
 
-    // Sila rezonance (0..1). Realtime-safe; cte se v onPlayedNoteOn.
-    void  setStrength(float s);
-    float strength() const;
+    // Linearni gain rezonance (z dB). Realtime-safe; cte se v onPlayedNoteOn.
+    void  setGainDb(float db);
+    float gainLinear() const;
+    // Cilove dB pro vyber velocity vrstvy (nearestSlotByRms). Realtime-safe.
+    void  setLayerTargetDb(float db);
+    float layerTargetDb() const;
+    // Zapnuti/vypnuti sympaticke rezonance (onPlayedNoteOn early-return kdyz off).
+    void  setEnabled(bool on);
+    bool  enabled() const;
 
     // Zivy strop poctu soucasne znejicich rezonancnich hlasu (GUI slider, dle HW).
     // Meni jen kolik hlasu smi znit (enforceVoiceBudget) — bez resize poli/ringu.
@@ -122,7 +128,9 @@ private:
 
     std::array<std::unique_ptr<ResonanceVoice>, 128> voices_;
     ExciteState         excite_state_[128];
-    std::atomic<float>  strength_{0.5f};
+    std::atomic<float>  gain_lin_{0.251f};       // ~ -12 dB default
+    std::atomic<float>  layer_target_db_{-30.f};
+    std::atomic<bool>   enabled_{true};
     float               decay_per_block_ = 0.998f;  // ~5 s @ 256 samples/48k
     std::atomic<int>    max_voices_{kDefaultMaxResonanceVoices};
     StreamEngine*       stream_          = nullptr;
