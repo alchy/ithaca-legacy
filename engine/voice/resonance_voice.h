@@ -59,7 +59,7 @@ public:
     // (gain_ rampuje z 0 → initial_gain pres kResonanceRampMs). `engine_sr`
     // potreba pro pos_inc + ramp prepocty.
     void start(int midi, const MicLayer* mic, float initial_gain,
-               float pan_l, float pan_r, float engine_sr);
+               float pan_l, float pan_r, float engine_sr, bool use_cache = true);
 
     // Multi-source: pricte buzeni od dalsi hrane noty (target = max(target,
     // gain + excitation_gain)). Pouziti: ResonanceEngine vi, ze dalsi note-on M
@@ -93,6 +93,7 @@ public:
 
 private:
     const MicLayer*  mic_   = nullptr;
+    bool   use_cache_ = true;   // false → ignoruj preload_resonance, streamuj od resonance_start_frame
 
     bool   active_         = false;
     int    midi_           = -1;

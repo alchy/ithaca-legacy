@@ -15,7 +15,8 @@
 namespace ithaca {
 
 void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
-                           float pan_l, float pan_r, float engine_sr) {
+                           float pan_l, float pan_r, float engine_sr, bool use_cache) {
+    use_cache_ = use_cache;
     // Kdybychom drzeli ring z minule, vrat ho. (V realnem provozu se ResonanceVoice
     // slot recykluje az po deaktivaci, kdy ring uz byl uvolnen v process();
     // ale defensive cleanup pro pripady ze caller re-start aktivni slot.)
@@ -68,8 +69,9 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
         ring_ = stream_->acquireRing();
         if (ring_) {
             const int64_t cap         = (int64_t)ring_->capacity_frames;
+            const int     eff_res_frames = use_cache_ ? mic_->resonance_frames : 0;
             const int64_t res_end     = (int64_t)mic_->resonance_start_frame
-                                      + (int64_t)mic_->resonance_frames;
+                                      + (int64_t)eff_res_frames;
             const int64_t total_after = (int64_t)mic_->file.frames - res_end;
             // Pokud uz neni co streamovat (resonance_window pokryval konec souboru),
             // tak ring stejne mame, jen ho oznacime jako EOF a request neposleme.
@@ -164,9 +166,9 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
     const float*  head_data    = mic_->preload_head.data();
     const int     head_frames  = mic_->head_frames;
     const int     total_frames = mic_->file.frames;
-    const float*  res_data     = mic_->preload_resonance.data();
+    const float*  res_data     = use_cache_ ? mic_->preload_resonance.data() : nullptr;
     const int     res_start    = mic_->resonance_start_frame;
-    const int     res_frames   = mic_->resonance_frames;
+    const int     res_frames   = use_cache_ ? mic_->resonance_frames : 0;
     const int64_t res_end      = (int64_t)res_start + (int64_t)res_frames;
     const bool    streamed     = (mic_->mode == MicLayerMode::Streamed);
 
