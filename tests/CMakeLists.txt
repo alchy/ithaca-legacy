@@ -113,3 +113,7 @@ add_test(NAME test_sample_rate_and_reload COMMAND test_sample_rate_and_reload)
 add_executable(test_resonance_stream_sr test_resonance_stream_sr.cpp)
 target_link_libraries(test_resonance_stream_sr PRIVATE ithaca_core doctest)
 add_test(NAME test_resonance_stream_sr COMMAND test_resonance_stream_sr)
+
+add_executable(test_resonance_layer_select test_resonance_layer_select.cpp)
+target_link_libraries(test_resonance_layer_select PRIVATE ithaca_core doctest)
+add_test(NAME test_resonance_layer_select COMMAND test_resonance_layer_select)
