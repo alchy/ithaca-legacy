@@ -86,6 +86,16 @@ public:
 
     int  sampleRate() const { return cfg_.sample_rate; }
     int  blockSize()  const { return cfg_.block_size; }
+    // Detekovany format nactene banky (fixed-velocity / dynamic-velocity / …).
+    // Unknown dokud neni nactena zadna banka. Pro GUI TYPE badge.
+    BankFormat bankType() const noexcept { return bank_.format; }
+    // Realna fakta o nactene bance (pro GUI). 0 dokud neni banka.
+    int loadedSamples() const noexcept { return bank_.loaded_samples; }
+    int recordedNotes() const noexcept {
+        int n = 0;
+        for (int i = 0; i < 128; ++i) if (bank_.notes[i].recorded) ++n;
+        return n;
+    }
     int  activeVoices() const { return pool_ ? pool_->activeCount() : 0; }
     void setMasterGain(float g) { master_gain_.store(g, std::memory_order_relaxed); }
 

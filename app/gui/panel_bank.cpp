@@ -1,11 +1,12 @@
 // app/gui/panel_bank.cpp - BANK sloupec (levy). Select banky + TYPE badge
-// (zatim hardcoded LEGACY — autodetekce je samostatny engine task) + fakta
+// TYPE badge = autodetekovany format (FIXED/DYNAMIC) z ctx.engine.bankType() + fakta
 // o bance + RELOAD. Kresli do ##bank childu.
 #include "panel_bank.h"
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
 #include "imgui.h"
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -64,11 +65,17 @@ void renderBankPanel(AppContext& ctx) {
     }
     ImGui::Dummy({0, 8});
 
-    // TYPE badge (read-only). FUTURE: ctx.engine.bankType() az bude folder-type
-    // loader + autodetekce; zatim podporujeme jen legacy.
+    // TYPE badge (read-only) — autodetekovany format banky z engine.
+    const char* type_label = "—";
+    switch (ctx.engine.bankType()) {
+        case BankFormat::FixedVelocity:   type_label = "FIXED";   break;
+        case BankFormat::DynamicVelocity: type_label = "DYNAMIC"; break;
+        case BankFormat::Extended:        type_label = "EXTENDED"; break;
+        case BankFormat::Unknown:         type_label = "—";       break;
+    }
     wdg::Eyebrow("TYPE"); ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::gold));
-    ImGui::TextUnformatted("LEGACY");
+    ImGui::TextUnformatted(type_label);
     ImGui::PopStyleColor();
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
@@ -76,11 +83,13 @@ void renderBankPanel(AppContext& ctx) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0, 8});
 
-    // Fakta o bance. FUTURE: vytahnout realna cisla z engine (pocet samplu,
-    // RAM, SR) az bude API; zatim staticke + co lze (jen orientacni).
+    // Fakta o bance — realna cisla z engine. Pocet velocity vrstev se neuvadi
+    // (u dynamic-velocity je per nota promenny); staci pocet not a samplu.
+    char facts[48];
+    std::snprintf(facts, sizeof(facts), "%d not \xC2\xB7 %d samplu",
+                  ctx.engine.recordedNotes(), ctx.engine.loadedSamples());
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-    ImGui::TextUnformatted("8 velocity vrstev");
-    ImGui::TextUnformatted("88 not \xC2\xB7 48 kHz");
+    ImGui::TextUnformatted(facts);
     ImGui::PopStyleColor();
     ImGui::Dummy({0, 10});
 

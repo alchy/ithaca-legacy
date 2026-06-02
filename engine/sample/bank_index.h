@@ -39,7 +39,7 @@ struct BankScan {
 };
 
 // -- Ciste parsovaci funkce (testovatelne bez disku) --
-ParsedName parseLegacyName(const std::string& filename);
+ParsedName parseFixedVelocityName(const std::string& filename);
 ParsedName parseExtendedName(const std::string& filename);   // faze 7 — minimalni
 BankFormat detectFormatFromName(const std::string& filename);
 
