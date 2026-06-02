@@ -247,7 +247,8 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     // aby cislo na liste bylo citelne. Overload (load >= 1.0 = minul deadline)
     // orazitkujeme pro cervene blikani v GUI.
     const uint64_t dt_us     = nowMicros() - block_t0;
-    const uint64_t period_us = (uint64_t)n_samples * 1000000ull / (uint64_t)cfg_.sample_rate;
+    const uint64_t period_us = cfg_.sample_rate > 0
+        ? (uint64_t)n_samples * 1000000ull / (uint64_t)cfg_.sample_rate : 0;
     const float    load      = period_us > 0 ? (float)dt_us / (float)period_us : 0.f;
     if (load >= 1.0f)
         last_overload_us_.store(nowMicros(), std::memory_order_relaxed);
