@@ -85,7 +85,7 @@ void MidiInput::close() {
 
 // Callback bezi na RtMidi threadu. Engine API frontuje vse pres lock-free
 // MidiQueue, takze tady jen prelozime status byte na metodu fasady.
-void MidiInput::callback(double /*ts*/,
+void MidiInput::callback(double ts,
                          std::vector<unsigned char>* msg,
                          void* user_data) {
     if (!msg || msg->size() < 2) return;
@@ -93,10 +93,22 @@ void MidiInput::callback(double /*ts*/,
     if (!self || !self->engine_) return;
 
     const uint8_t status = (*msg)[0];
-    if (!channelAccepts(self->channel_, status)) return;
     const uint8_t data1  = (*msg)[1];
     const uint8_t data2  = (msg->size() > 2) ? (*msg)[2] : 0;
     const uint8_t type   = status & 0xF0;
+
+    // DIAG: log kazdou prichozi MIDI udalost JESTE PRED channel filtrem — at
+    // vidime, jestli nota vubec dorazi z hardwaru a na jakem kanale (ts = RtMidi
+    // delta-cas od minule udalosti v sekundach).
+    if (type == 0x90 || type == 0x80) {
+        log::Logger::default_().log("midi_in", log::Severity::Debug,
+            "RX %s midi=%d vel=%d ch=%d dt=%.4f%s",
+            type == 0x90 ? "NoteOn " : "NoteOff", (int)data1, (int)data2,
+            (int)(status & 0x0F), ts,
+            channelAccepts(self->channel_, status) ? "" : " [FILTERED-OUT]");
+    }
+
+    if (!channelAccepts(self->channel_, status)) return;
 
     switch (type) {
         case 0x90:  // Note On (vel=0 == Note Off dle MIDI konvence)
