@@ -2,7 +2,17 @@
 
 **Naming:** Modul se jmenuje **Enhancer** (ex-„BBE") — všude: třída `Enhancer`, soubory `enhancer.{h,cpp}`, GUI label „ENHANCER", persistence klíče `enhancer_*` (migrace ze starých `bbe_*`). „BBE" v tomto specu = referenční hardware, ne náš modul.
 
-**Goal:** Nahradit statické 2-shelf BBE **hybridním** modelem podle reálného obvodu BBE Sonic Stomp / Lumin (3-pásmová sumační topologie: PROCESS/CONTOUR/MID) **plus** programově závislá dynamika (boost-when-loud) na PROCESS pásmu — aby zapnutí/vypnutí dělalo slyšitelnou změnu a model odpovídal měřením i schématu.
+**Goal:** **Originální Enhancer pro klavír** (NE 1:1 klon BBE) — hybrid enhancing technik, které mají reálný pozitivní dopad a sedí s teorií BBE. Cíl: aby zapnutí dělalo slyšitelné pozitivní zlepšení klavírního výstupu. BBE měření/schéma = teoretické ukotvení a sanity-reference, ne cíl ke kopírování.
+
+**Moduly (vlastní inženýrské rozhodnutí — střídmý hudební hybrid, ne kitchen-sink):**
+1. Fázové/group-delay zarovnání (BBE jádro) — definovanější atak.
+2. Dynamické HF „definition" (boost-when-loud) — jiskra na úhozu bez šumu v tichu.
+3. Bass contour (konstantní) — teplo.
+4. Mid presence (bell) — srozumitelnost.
+5. Jemný harmonický exciter (2. harmonická na výškách, navázaný na PROCESS+dynamiku) — „vzduch/sparkle" navíc, originální enhancing prvek.
+Transient shaper VYNECHÁN (atak řeší dynamické HF + fáze).
+
+Ovladače: **3** — `PROCESS` (= dynamické HF shelf **+** navázaný exciter; jeden „air/definition" knob), `CONTOUR` (basy), `MID` (středy). Fáze vždy on, interní.
 
 ## Reference (web + schéma)
 - **AionFX Lumin / BBE Sonic Stomp schéma** (uživatelem dodané): 3× TL072, 3 ovladače **PROCESS / CONTOUR / MID** (50kB), sumační mix. HIGH pásmo (IC2A): caps 3n3/1n5 @ 22k → rohy ≈ **2,2 / 4,8 kHz** (HIFREQ switch). LOW pásmo (IC3A): caps 47n/22n @ 15k/10k → ≈ **226/339/482 Hz** (LOFREQ switch). Výstup R17 56k + C6 100p. **Statická** verze (bez VCA).
@@ -32,6 +42,7 @@ input ─┬─ [broadband PEAK level monitor] (attack ~5ms / release ~80ms) →
 1. **3-pásmový split** — crossovery ~**250 Hz** (low/mid) a ~**3 kHz** (mid/high), Linkwitz-Riley 2. řádu (nebo SVF LP/BP/HP). HIGH navíc 1-pól LP ~**10–12 kHz** (rolloff dle měření). Per kanál.
 2. **Per-pásmové zisky:** `LOW × 10^(CONTOUR/20)`, `MID × 10^(MID/20)`, `HIGH × 10^(PROCESS/20) × scale`. Zisk 1.0 (0 dB) = pásmo prochází neutrálně → součet ≈ originál (transparentní při všech 0).
 3. **Dynamika HIGH (boost-when-loud):** broadband **peak** detektor vstupu → smoothed env → `scale∈[0,1]` (`scale = smoothstep(env, lo, hi)`). HIGH zisk se škáluje `scale` per-sample (smoothed, bez zipperu). Silný signál → plný PROCESS boost; ticho → boost mizí (šetří šum). Linkovaný detektor (max L/R) → stabilní stereo.
+5. **Harmonický exciter (navázaný na PROCESS):** z HIGH pásma `exc = softsat(high)` (jemná asymetrická saturace `x + k·x·|x|` → 2. harmonická, „teplý" sparkle), pak high-pass (~4–5 kHz, ponechá jen generované horní harmonické), škálováno `excite_amt = kExcite · (PROCESS/12) · scale` (dynamické, navázané na PROCESS knob). Přičteno k HIGH výstupu. Jemné (kExcite malé) — přidává vzduch, ne zkreslení.
 4. **Fázové/group-delay zarovnání:** per-pásmové zpoždění **LOW ~2,5 ms / MID ~0,5 ms / HIGH 0** (integer-sample delay linky, alokované v `prepare`). Přímo reprodukuje Naganovovu naměřenou group-delay křivku. (Pozn.: alternativa all-pass ~700 Hz — ale s adoptovaným 3-pásmovým splitem je per-pásmové zpoždění přesnější a přímočařejší; finální realizaci potvrdí validační harness.)
 
 **RT:** všechny crossover/filtr stavy, delay buffery (max ~2,5 ms ≈ 120 framů @48k) a smoothing stav alokované/nulované v `prepare`; `process` bez alokací. `enabled=false` → čistý bypass.
@@ -54,10 +65,11 @@ input ─┬─ [broadband PEAK level monitor] (attack ~5ms / release ~80ms) →
    - CONTOUR: gain @ 100 Hz roste s CONTOUR, **nezávislé na úrovni**; corner ~250 Hz.
    - PROCESS: gain @ ~4–6 kHz roste s PROCESS a **závisí na úrovni** (high-level > low-level; delta @ ~6 kHz ≥ ~3 dB) — autentická dynamika.
    - MID: gain @ ~1 kHz reaguje na MID (±).
+   - **Exciter:** při silném vstupu (sinus ~3 kHz) se v outputu objeví **nové horní harmonické** (~6 kHz, ~9 kHz) — měřitelný nárůst HF obsahu/THD s úrovní (FFT bin energie na 2×/3× freq vyšší při high-level než low-level a vyšší než bypass). Potvrzuje, že exciter generuje obsah, ne jen EQ.
    - HF horní mez: boost @ >12 kHz výrazně omezený (rolloff po ~10 kHz).
-   - group delay: ~2,5/0,5/0 ms napříč pásmy ±tolerance; stabilita (žádné NaN/blow-up).
+   - group delay: monotónně klesá s frekvencí; stabilita (žádné NaN/blow-up).
 
-**Limit:** reference = analog HW → ověřujeme **charakteristickou shodu** (rohy, dB, ms, level-závislost), ne bit-exact.
+**Účel = charakterizace našeho efektu** (ne shoda s konkrétní jednotkou). Naganovovy grafy jsou **volná reference** pro zdravý rozum (řád dB/ms, level-závislost), ne pass/fail cíl — neděláme klon.
 
 ## Soubory (vč. rename BBE → Enhancer)
 - **Create/Rename:** `engine/dsp/bbe.{h,cpp}` → `engine/dsp/enhancer.{h,cpp}`; třída `BBE`→`Enhancer`; `name()="ENHANCER"`; nová hybridní implementace; `DspStage` API.
