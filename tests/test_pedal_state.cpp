@@ -52,12 +52,24 @@ TEST_CASE("PedalState: spojita zmena CC se promita lineárne") {
     }
 }
 
-TEST_CASE("PedalState: isUndamped pouziva epsilon prah") {
+TEST_CASE("PedalState: dolni lost-motion dead-zona — pod kDamperBiteCC damping 0") {
     PedalState p;
-    p.setSustainCC(0);
-    CHECK_FALSE(p.isUndamped(50));     // damping = 0
-    p.setSustainCC(1);                  // ~0.008 — slabe lize
-    CHECK(p.isUndamped(50));           // > 0.001 epsilon
+    for (int cc = 0; cc <= (int)kDamperBiteCC; ++cc) {
+        p.setSustainCC((uint8_t)cc);
+        CHECK(p.dampingFor(50) == doctest::Approx(0.0f));   // dead-zone → plne tlumeno
+        CHECK_FALSE(p.isUndamped(50));
+    }
+    p.setSustainCC((uint8_t)(kDamperBiteCC + 1));            // tesne nad zonou
+    CHECK(p.dampingFor(50) > 0.f);                           // uz lize struny
+    CHECK(p.isUndamped(50));
+}
+
+TEST_CASE("PedalState: nad dead-zonou spojite cc/127 (half-pedal feel)") {
+    PedalState p;
+    for (int cc : {16, 32, 48, 64, 96, 127}) {              // vse > kDamperBiteCC
+        p.setSustainCC((uint8_t)cc);
+        CHECK(p.dampingFor(50) == doctest::Approx((float)cc / 127.f).epsilon(0.001));
+    }
 }
 
 TEST_CASE("PedalState: helper isPedalDown / sustainCC pro half-pedal release scaling") {

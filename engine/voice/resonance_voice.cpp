@@ -120,11 +120,15 @@ void ResonanceVoice::addExcitation(float excitation_gain) {
 void ResonanceVoice::setTargetGain(float target) {
     if (!active_) return;
     if (target < 0.f) target = 0.f;
-    target_gain_ = target;
-    if (target_gain_ <= kResonanceTargetEpsilon) {
-        // Prakticky cilime na 0 — naplanovat fade-out a po dosazeni 0 deaktivovat.
+    if (target <= kResonanceTargetEpsilon) {
+        // Pod prahem cilime na PRAVOU nulu (ne na zbytkovou hodnotu). Jinak by se
+        // gain_ ustalil mezi kResonanceGainEpsilon (1e-5) a kResonanceTargetEpsilon
+        // (1e-4) — oznaceny jako fading-out, ale nad deaktivacnim prahem → hlas by
+        // se NIKDY nedeaktivoval (stuck voice / leak). Fade na 0 → deaktivace.
+        target_gain_   = 0.f;
         is_fading_out_ = true;
     } else {
+        target_gain_   = target;
         is_fading_out_ = false;
     }
     recomputeGainStep();

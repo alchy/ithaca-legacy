@@ -7,8 +7,15 @@
 // doznivani i rezonance (half-pedal).
 //
 // Vzorec per strunu N:
-//   damping_[N] = 1.0           pokud N je drzena (held)
-//   damping_[N] = cc64_ / 127.0 pokud N neni drzena
+//   damping_[N] = 1.0                pokud N je drzena (held)
+//   damping_[N] = 0.0                pokud cc64_ <= kDamperBiteCC (lost-motion zona)
+//   damping_[N] = cc64_ / 127.0      jinak (spojity half-pedal)
+//
+// `kDamperBiteCC` = dolni "lost-motion" dead-zona: dokud pedal neprekroci tento
+// prah, dusitka jeste lezi na strunach (damping 0). Pohlti zbytkovou/klidovou
+// hodnotu kontinualniho pedalu (nedojede uplne na 0) i sum/0 on/off pedalu —
+// po uvolneni pedalu se rezonance spolehlive zatlumi (per-blok target → 0).
+// Nad prahem zustava klasicke spojite cc/127 (half-pedal feel zachovan).
 //
 // Resonance engine pouzije damping_[N] jako multiplikator excitacniho gainu:
 //   excite = (vel/127) × harm × strength × damping_[N]
@@ -24,6 +31,10 @@ namespace ithaca {
 // Prah CC64 podle MIDI konvence (>=64 = pedal dolu); slouzi jen pro helper
 // `isPedalDown()` a release-time scaling (5.4). Damping je VZDY spojite.
 constexpr uint8_t kPedalDownThreshold = 64;
+
+// Dolni "lost-motion" dead-zona pedalu: cc64 <= prah → struny tlumeny (damping 0).
+// Nad nim spojite cc/127. Viz hlavickovy komentar (oba typy pedalu, anti-residual).
+constexpr uint8_t kDamperBiteCC = 8;
 
 // Epsilon prah pro `isUndamped()` eligibility check — pod nim je rezonance
 // tak slaba, ze ji povazujeme za prakticky ztlumenou.

@@ -245,16 +245,13 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 pedal_.setSustainCC(e.data1);
                 const bool now_down = pedal_.isPedalDown();
                 // Pri prechodu DOWN → UP: aplikuj release na vsechny pending
-                // hlasy, jejichz nota neni aktualne drzena, a STRIKTNE muteni
-                // rezonance na nedrzenych strunach (rychly fadeOut). Drive se
-                // rezonance spolehala jen na per-blok target (pomaly 30ms ramp
-                // az pristi blok) → nektere hlasy slysitelne dohravaly.
+                // hlasy, jejichz nota neni aktualne drzena. Rezonanci NEMUTUJEME
+                // explicitne — per-blok target = last_excite * dampingFor(N) ji
+                // korektne stahne na 0 (damping pri uvolnenem pedalu = 0 diky
+                // lost-motion dead-zone v PedalState; hlas dohaje na pravou nulu
+                // a deaktivuje se, viz ResonanceVoice::setTargetGain).
                 if (was_down && !now_down) {
                     pool_->releasePendingNotes(pedal_, scaledReleaseMs(), sr);
-                    const int faded = resonance_->dampOnPedalUp(pedal_, sr);
-                    log::Logger::default_().log("resonance", log::Severity::Info,
-                        "pedal UP → mute rezonance: faded=%d aktivnich_zbylo=%d",
-                        faded, resonance_->activeCount());
                 }
                 break;
             }
@@ -272,7 +269,20 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     // 2. Render hlasu (caller buffery vynuloval).
     pool_->processBlock(out_l, out_r, n_samples, sr);
     // 2b. Pricti sympatickou rezonanci do L/R (sleduje pedal per-blok).
-    if (resonance_) resonance_->processBlock(out_l, out_r, n_samples, pedal_);
+    if (resonance_) {
+        resonance_->processBlock(out_l, out_r, n_samples, pedal_);
+        // DIAG: loguj zmenu poctu aktivnich rezonanci + cc64 (jen pri zmene).
+        // Po uvolneni pedalu pocet spadne na 0 (mute pres per-blok damping) —
+        // uzitecne pro ladeni pedalu/rezonance. Pozn.: audio-thread log, pri
+        // velmi malem block_size muze prispet k latenci (viz buffer doporuceni).
+        static int dbg_reso_last = -1;
+        const int rc = resonance_->activeCount();
+        if (rc != dbg_reso_last) {
+            dbg_reso_last = rc;
+            log::Logger::default_().log("resonance", log::Severity::Info,
+                "active rezonance = %d (cc64=%d)", rc, (int)pedal_.sustainCC());
+        }
+    }
 
     // 3. Master gain post-mix.
     float g = master_gain_.load(std::memory_order_relaxed);

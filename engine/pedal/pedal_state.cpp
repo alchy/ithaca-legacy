@@ -26,8 +26,11 @@ void PedalState::allNotesOff() {
 }
 
 void PedalState::recompute() {
-    // Spojita damping mapa: drzena klavesa vzdy 1.0, ne-drzena = cc64/127.
-    const float lift = (float)cc64_ / 127.f;
+    // Spojita damping mapa: drzena klavesa vzdy 1.0. Ne-drzena: dolni lost-motion
+    // dead-zona (cc64 <= kDamperBiteCC → 0, dusitka jeste na strunach), nad ni
+    // spojite cc64/127. Dead-zona zarucuje, ze po uvolneni pedalu (i kdyz
+    // kontinualni pedal nedojede presne na 0) se ne-drzene struny zatlumi.
+    const float lift = (cc64_ <= kDamperBiteCC) ? 0.f : (float)cc64_ / 127.f;
     for (int n = 0; n < 128; ++n) {
         damping_[n] = held_[(size_t)n] ? 1.f : lift;
     }

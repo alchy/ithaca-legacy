@@ -238,6 +238,24 @@ TEST_CASE("ResonanceEngine: pedal UP -> rezonance ne-drzenych not fade") {
     CHECK_FALSE(res.isResonating(72));
 }
 
+TEST_CASE("ResonanceVoice: sub-epsilon target -> deaktivace (zadny stuck voice)") {
+    // Root cause regrese: setTargetGain s targetem mezi kResonanceGainEpsilon
+    // (1e-5) a kResonanceTargetEpsilon (1e-4) drive oznacil hlas jako fading-out,
+    // ale gain_ se ustalil na te male hodnote (> gain epsilon) → hlas se NIKDY
+    // nedeaktivoval (stuck voice / leak). Po fixu musi dohajet na 0 a zhasnout.
+    SampleAsset asset = makeAsset(0.5f, 48000);   // 1 s FullyLoaded (sample nedojede)
+    const MicLayer* mic = &asset.mics[0];
+    ResonanceVoice v;
+    v.start(60, mic, 1.0f, 0.5f, 0.5f, 48000.f);
+    float bl[256], br[256];
+    auto render = [&]{ for (int i=0;i<256;++i){bl[i]=0.f;br[i]=0.f;} return v.process(bl, br, 256); };
+    for (int b = 0; b < 8; ++b) render();        // gain vystoupa k 1.0
+    REQUIRE(v.active());
+    v.setTargetGain(5e-5f);                        // do "mrtveho pasma" mezi epsilony
+    for (int b = 0; b < 30 && v.active(); ++b) render();  // ~30 bloku >> 30ms ramp
+    CHECK_FALSE(v.active());                        // MUSI se deaktivovat
+}
+
 TEST_CASE("ResonanceEngine: setMaxVoices / maxVoices round-trip + clamp") {
     ithaca::ResonanceEngine re(32);
     CHECK(re.maxVoices() == 32);
