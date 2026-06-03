@@ -201,3 +201,33 @@ TEST_CASE("loadBank vrati prazdnou banku pro neexistujici adresar") {
     CHECK(bank.loaded_samples == 0);
     CHECK_FALSE(bank.notes[60].recorded);
 }
+
+TEST_CASE("loadBank: RAM budget (OOM guard) preruseni nacitani bez padu") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_budget_bank";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    // 24 not, kazda ~112 KB rezidentne (FullyLoaded 0.3 s stereo float) → ~2.7 MB.
+    const int kNotes = 24;
+    char name[80];
+    for (int n = 41; n < 41 + kNotes; ++n) {
+        std::snprintf(name, sizeof(name), "%s/m%03d-vel3-f48.wav", dir.c_str(), n);
+        writeConstWav(name, 0.3f);
+    }
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+
+    // Budget 0 = vypnuto → nactou se vsechny noty.
+    Bank full = loadBank(dir, L, /*cache_budget_mb=*/0);
+    CHECK(full.loaded_samples == kNotes);
+    const size_t full_bytes = full.total_bytes;
+    REQUIRE(full_bytes > 1u * 1024 * 1024);   // fixture > 1 MB (jinak by 1MB budget netriggernul)
+
+    // Budget 1 MB → nacitani se PRERUSI driv; neuplna banka, ZADNY pad/vyjimka.
+    Bank capped = loadBank(dir, L, /*cache_budget_mb=*/1);
+    CHECK(capped.loaded_samples > 0);          // neco se nacetlo
+    CHECK(capped.loaded_samples < kNotes);     // ale ne vse → budget zabral (graceful abort)
+    CHECK(capped.total_bytes <= full_bytes);
+
+    fs::remove_all(dir);
+}
