@@ -8,6 +8,7 @@
 - Naganov 282i měření: pásma dělená 150/1200 Hz; group delay ~2,5 ms low / ~0,5 ms mid / 0 high; HF shelf ~5 kHz (max +12 dB) **dynamický dle vstupní úrovně** (boost klesá při tichu); bass contour ~150 Hz (max +12 dB) **konstantní**.
 - Naganov/melp242 802 měření: HF boost = **bump ~4 kHz** (spíš peak než nekonečný shelf), výrazný **rolloff po 10 kHz**; „compressor-like" dynamika (při tichu HF boost mizí); **level-delta @ 6 kHz ≈ 4 dB** mezi nízkou a vysokou úrovní. (802 „Processing" na minimu i řeže HF −6 dB — varianta staršího modelu, mimo náš rozsah; děláme boost-only.)
 - DOA 482i obvod: fázové zarovnání **all-pass** (~700 Hz) → spojitý group delay (delší pro nízké); HF boost shora omezený ~10 kHz; „dynamic program-driven restoration".
+- GroupDIY / AionFX Lumin (reverse-engineering proprietárního NJM2150AD/NJM2153): band split = **state-variable filter** (LP/BP/HP → mix); HF dynamika = **VCA řízený PEAK detektorem** (rychlý attack, compressor-like). → náš `out = dry + scale·(wet−dry)` s peak-envelope `scale` = funkční ekvivalent VCA-by-peak-detector. SVF je autentický split; náš all-pass-na-fázi + HF blend je zjednodušení se stejným měřitelným výsledkem (arbituje validační harness).
 - **Syntéza:** HF boost = peak/shelf se středem **~4–5 kHz**, omezený shora **~10 kHz**; dynamický rozsah (level-delta) **řádu ~4 dB+** v HF; bass konstantní; fáze all-pass.
 
 ---
@@ -34,7 +35,7 @@ input ─┬─ [broadband level monitor]  (peak/RMS env, attack ~5ms / release 
 ```
 
 **Komponenty:**
-1. **Level monitor** — broadband envelope vstupu (max(|L|,|R|) → smoothed, `gain_envelope_smooth` vzor jako AGC; attack rychlý ~5 ms, release ~80 ms). Mapuje na `scale∈[0,1]` přes práh/křivku (`scale = smoothstep(env, lo, hi)`; konstanty laděné). Linkovaný (sdílený pro L i R → stabilní stereo obraz).
+1. **Level monitor** — broadband **PEAK** detektor vstupu (max(|L|,|R|) → smoothed; rychlý attack ~5 ms, release ~80 ms, „compressor-like" jako VCA peak-detektor v reálném obvodu). Mapuje na `scale∈[0,1]` přes práh/křivku (`scale = smoothstep(env, lo, hi)`; konstanty laděné). Linkovaný (sdílený pro L i R → stabilní stereo obraz). Pozn.: detektor je broadband (dle Naganova „overall input level"); VCA-ekvivalent (`scale`) působí na HF blend.
 2. **All-pass align** — kaskáda 1.–2. řádu all-pass biquadů kolem ~700 Hz; cíl: group delay ~2,5 ms @ low, ~0,5 ms @ mid, ~0 @ high. Počet/řád sekcí + f0 vyladit na Naganovovu křivku (validace níže). Per kanál (stavy v `prepare`).
 3. **Bass contour** — `rbj_low_shelf(~150 Hz, BASS dB)`, konstantní (nezávislé na úrovni). Per kanál.
 4. **HF dynamický boost** — `wet` = signál po HF boost filtru na **plném** `DEFINITION` zisku; výstup `out = dry + scale·(wet−dry)` (per-sample smoothed scale → boost-when-loud, bez zipperu). HF boost filtr = **peak/bell se středem ~4–5 kHz** (Q tak, aby pásmo ~3–10 kHz), případně high-shelf ~5 kHz + 1-pól LP ~10–12 kHz pro horní mez (rolloff po 10 kHz dle měření). Přesný tvar/střed vyladit dle Naganova. Per kanál. Cíl: level-delta v HF (nízká vs vysoká úroveň) **alespoň ~3–4 dB** (síla dynamiky dle 802).
