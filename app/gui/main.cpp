@@ -261,6 +261,8 @@ int main(int argc, char* argv[]) {
             ctx.state.convolver_enabled = cv.enabled();
             ctx.state.convolver_mix     = cv.get(0);
             ctx.state.convolver_choice  = cv.currentChoice();
+            ctx.state.convolver_decay = cv.get(1);
+            ctx.state.convolver_tone  = cv.get(2);
             ctx.state.agc_enabled = agc.enabled();
             ctx.state.agc_target = agc.get(0); ctx.state.agc_release_ms = agc.get(1); ctx.state.agc_floor = agc.get(2);
             ctx.state.enhancer_enabled = enh.enabled();
@@ -306,7 +308,9 @@ int main(int argc, char* argv[]) {
             last_saved.audio_block_size    != ctx.state.audio_block_size ||
             last_saved.convolver_enabled   != ctx.state.convolver_enabled ||
             last_saved.convolver_mix       != ctx.state.convolver_mix ||
-            last_saved.convolver_choice    != ctx.state.convolver_choice;
+            last_saved.convolver_choice    != ctx.state.convolver_choice ||
+            last_saved.convolver_decay != ctx.state.convolver_decay ||
+            last_saved.convolver_tone  != ctx.state.convolver_tone;
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }

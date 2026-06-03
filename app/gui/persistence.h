@@ -30,8 +30,10 @@ struct GuiState {
     bool  enhancer_enabled = false; float enhancer_process = 0.f; float enhancer_contour = 0.f; float enhancer_mid = 0.f;
     bool  limiter_enabled = false; float limiter_threshold_db = 0.f; float limiter_release_ms = 200.f;
     bool   convolver_enabled = false;
-    float  convolver_mix     = 0.25f;
+    float  convolver_mix     = 0.15f;
     int    convolver_choice  = 0;
+    float  convolver_decay   = 0.5f;
+    float  convolver_tone    = 0.6f;
     int   config_page = 0;         // 0 = VOICE, 1 = AGC, 2 = ENHANCER, 3 = LIMITER
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
