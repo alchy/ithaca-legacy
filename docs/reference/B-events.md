@@ -1,6 +1,6 @@
 # Zpracování eventů
 
-MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlastním vlákně), jsou okamžitě převedeny na strukturu `MidiEvent` a zapsány do lock-free SPSC fronty `MidiQueue`. Audio thread ji vyprazdňuje na začátku každého volání `Engine::processBlock` (viz [A — Jádro enginu](A-core.md)), kde přeloží každou událost na volání `VoicePool`, `PedalState` a `ResonanceEngine`. Stav pedálu udržuje `PedalState`: CC64 (0–127) se ukládá jako spojitá hodnota a z ní se per-strunu přepočítává `damping_[128]` — koeficient tlumení pro half-pedal model. Plně sešlápnutý pedál nastaví damping každé nedržené struny na 1,0 (žádné tlumení), uvolněný pedál na 0,0 (plné tlumení); přechodné hodnoty odpovídají polovičnímu sešlápnutí. Tok eventů je proto: **MIDI vlákno → MidiQueue → audio vlákno → PedalState + VoicePool + ResonanceEngine**.
+MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlastním vlákně), jsou okamžitě převedeny na strukturu `MidiEvent` a zapsány do lock-free SPSC fronty `MidiQueue`. Audio thread ji vyprazdňuje na začátku každého volání `Engine::processBlock` (viz [A — Jádro enginu](A-core.md)), kde přeloží každou událost na volání `VoicePool`, `PedalState` a `ResonanceEngine`. Stav pedálu udržuje `PedalState`: CC64 (0–127) se ukládá jako spojitá hodnota a z ní se per-strunu přepočítává `damping_[128]` — koeficient tlumení pro half-pedal model. Plně sešlápnutý pedál nastaví damping každé nedržené struny na 1,0 (žádné tlumení), uvolněný pedál na 0,0 (plné tlumení); přechodné hodnoty odpovídají polovičnímu sešlápnutí. Tok eventů je proto: **MIDI vlákno → MidiQueue → audio vlákno → PedalState + VoicePool + ResonanceEngine**. Note-on/off nesou MIDI kanál a procházejí přes `NoteHoldTracker` (cross-channel hold): tlumítko/voice se uvolní teprve když pustí poslední kanál držící danou výšku — viz `note_hold.h` níže.
 
 ---
 
@@ -11,6 +11,7 @@ MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlast
 | `engine/midi/midi_input.h` | Deklarace `MidiInput` — RtMidi wrapper, channel filter | `MidiInput` |
 | `engine/midi/midi_input.cpp` | Implementace otevření portů + RtMidi callbacku | `MidiInput` |
 | `engine/midi/midi_queue.h` | Lock-free SPSC fronta MIDI událostí | `MidiQueue`, `MidiEvent` |
+| `engine/midi/note_hold.h` | Per-pitch maska kanálů držících notu (cross-channel hold) | `NoteHoldTracker` |
 | `engine/pedal/pedal_state.h` | Deklarace `PedalState` — damping mapa, half-pedal API | `PedalState` |
 | `engine/pedal/pedal_state.cpp` | Implementace recompute a per-strunu damping výpočtu | `PedalState` |
 
@@ -26,7 +27,7 @@ MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlast
 | `bool open(Engine& engine, int port_index)` | off-RT | `port_index` → otevřený port nebo `false` při chybě | `app/cli/main.cpp`, `app/gui/app_context.cpp` | `close()`, `RtMidiIn::openPort()`, `RtMidiIn::ignoreTypes()`, `RtMidiIn::setCallback()` | `port_index`: index portu (< 0 nebo mimo rozsah → 0). | Nejprve zavolá `close()` (idempotentní). Pokud nejsou k dispozici žádné porty, zaloguje varování a vrátí `false`. Nastaví `ignoreTypes(false, true, true)` — přijímá SysEx, ignoruje MIDI timing a active sensing. Zaregistruje `MidiInput::callback` s `this` jako `user_data`. |
 | `bool openVirtual(Engine& engine, const std::string& name)` | off-RT | `name` → virtuální port nebo `false` | `app/cli/main.cpp` | `close()`, `RtMidiIn::openVirtualPort()`, `RtMidiIn::ignoreTypes()`, `RtMidiIn::setCallback()` | `name`: název virtuálního portu (výchozí `"ithaca-cli"`). | Pouze macOS / Linux — umožňuje DAW posílat MIDI dovnitř bez fyzického zařízení. Jinak totožné nastavení jako `open()`. |
 | `void close()` | off-RT | — → uvolní RtMidiIn | destruktor, `open()`, `openVirtual()` | `RtMidiIn::closePort()`, `delete midi_` | — | Idempotentní. Pokud je port otevřen, zavře ho; poté uvolní `midi_` a vynuluje `engine_` a `port_name_`. Destruktor třídy volá `close()` automaticky. |
-| `static void callback(double ts, std::vector<unsigned char>* msg, void* user_data)` | MIDI vlákno (RtMidi) | surová MIDI zpráva → volání `Engine` API | RtMidi runtime | `channelAccepts()`, `engine_->noteOn()`, `engine_->noteOff()`, `engine_->sustainPedal()`, `engine_->allNotesOff()` | `ts`: časové razítko (nevyužito). `msg`: vektor bytů. `user_data`: ukazatel na `MidiInput`. | **Jádro MIDI vstupu.** Bežní na RtMidi vláknu, nikoli na audio threadu. Ochranné podmínky: `msg` nesmí být null, musí mít alespoň 2 bajty, `self` a `self->engine_` nesmí být null. **Channel filter:** zavolá `channelAccepts(self->channel_, status)` — pokud neodpovídá, zpráva se tiše zahodí. Dekódování typu: horní nibble `status & 0xF0` určuje typ zprávy. `0x90` NoteOn: vel > 0 → `engine_->noteOn(data1, data2)`; vel == 0 → `engine_->noteOff(data1)` (MIDI konvence). `0x80` NoteOff → `engine_->noteOff(data1)`. `0xB0` CC: CC64 (Sustain) → `engine_->sustainPedal(data2)` se spojitou hodnotou; CC120 nebo CC123 → `engine_->allNotesOff()`. Ostatní CC a ostatní typy zpráv jsou ignorovány. `Engine` API okamžitě vloží event do `MidiQueue` (`push` je thread-safe), callback tedy nikdy neblokuje. |
+| `static void callback(double ts, std::vector<unsigned char>* msg, void* user_data)` | MIDI vlákno (RtMidi) | surová MIDI zpráva → volání `Engine` API | RtMidi runtime | `channelAccepts()`, `engine_->noteOn()`, `engine_->noteOff()`, `engine_->sustainPedal()`, `engine_->allNotesOff()` | `ts`: časové razítko (nevyužito). `msg`: vektor bytů. `user_data`: ukazatel na `MidiInput`. | **Jádro MIDI vstupu.** Bežní na RtMidi vláknu, nikoli na audio threadu. Ochranné podmínky: `msg` nesmí být null, musí mít alespoň 2 bajty, `self` a `self->engine_` nesmí být null. **Channel filter:** zavolá `channelAccepts(self->channel_, status)` — pokud neodpovídá, zpráva se tiše zahodí. Dekódování typu: horní nibble `status & 0xF0` určuje typ zprávy. Kanál `ch = status & 0x0F` se předává do Engine API pro cross-channel hold. `0x90` NoteOn: vel > 0 → `engine_->noteOn(data1, data2, ch)`; vel == 0 → `engine_->noteOff(data1, ch)` (MIDI konvence). `0x80` NoteOff → `engine_->noteOff(data1, ch)`. `0xB0` CC: CC64 (Sustain) → `engine_->sustainPedal(data2)` se spojitou hodnotou; CC120 nebo CC123 → `engine_->allNotesOff()`. Ostatní CC a ostatní typy zpráv jsou ignorovány. `Engine` API okamžitě vloží event do `MidiQueue` (`push` je thread-safe), callback tedy nikdy neblokuje. |
 
 ---
 
@@ -51,13 +52,31 @@ Páry acquire/release zajišťují správné happens-before vztahy bez mutexu:
 ```cpp
 struct MidiEvent {
     enum Type : uint8_t { NoteOn, NoteOff, Sustain, AllNotesOff };
-    Type    type  = NoteOn;
-    uint8_t data1 = 0;   // MIDI nota (NoteOn/Off) nebo CC hodnota (Sustain)
-    uint8_t data2 = 0;   // velocity (NoteOn)
+    Type    type    = NoteOn;
+    uint8_t data1   = 0;   // MIDI nota (NoteOn/Off) nebo CC hodnota (Sustain)
+    uint8_t data2   = 0;   // velocity (NoteOn)
+    uint8_t channel = 0;   // MIDI kanál 0..15 (NoteOn/Off; cross-channel hold)
 };
 ```
 
+Pole `channel` nese 0-based MIDI kanál události a slouží **cross-channel hold** logice (`NoteHoldTracker`, viz níže): při OMNI příjmu (více kanálů, např. Synthesia levá ruka = ch0, pravá = ch1) musí engine vědět, který kanál notu drží, aby note-off jednoho kanálu nezhasl stejnou výšku drženou druhým.
+
 Kapacita fronty: `MIDI_Q_SIZE = 1024` eventů. Překročení → tichý drop (viz Nálezy revize).
+
+---
+
+## `engine/midi/note_hold.h`
+
+`NoteHoldTracker` řeší **cross-channel hold**. Skutečný klavír má na každou výšku jedno tlumítko — spadne až když je puštěna *poslední* klávesa té výšky. Vícekanálové MIDI (Synthesia: levá ruka ch0, pravá ch1) může stejnou výšku držet více kanály současně nebo si ji předávat; channel-blind engine nechával note-off jednoho kanálu zhasnout notu druhého → **výpadek noty** (typicky C uprostřed klaviatury). Tracker drží pro každou ze 128 not 16-bitovou masku kanálů, které ji právě drží. Stav je vlastněn a měněn **výhradně audio threadem** při drainu MIDI fronty → bez atomik/zámků.
+
+| Metoda | Vstup → výstup | Volá ji | Vysvětlení |
+|---|---|---|---|
+| `bool noteOn(int note, int ch)` | nota + kanál → `true` pokud **první** držitel | `Engine::processBlock()` drain, case `NoteOn` | Nastaví bit `ch` v masce `note`. `true` = předtím notu nedržel žádný kanál (key-down transition → `PedalState::noteOn`). Voice se ale (re)striká vždy (re-artikulace). Neplatná nota/kanál → `false`, no-op. |
+| `bool noteOff(int note, int ch)` | nota + kanál → `true` pokud **poslední** držitel | drain, case `NoteOff` a `NoteOn` s vel=0 | Smaže bit `ch`. `true` = už ji nedrží žádný jiný kanál (→ teprve teď `PedalState::noteOff` + `VoicePool::noteOffWithPedal`). Off od kanálu který notu nedržel → `false`, no-op (žádný falešný release). |
+| `bool held(int note) const` | nota → bool | — | Drží notu aspoň jeden kanál? |
+| `void allNotesOff()` | — | drain, case `AllNotesOff` | Všechny masky na 0 (panika / reload). |
+
+Verifikace: `tests/test_note_hold.cpp` (cross-channel hand-off, idempotence opakovaného on téhož kanálu, no-op off, hranice).
 
 ---
 
@@ -66,8 +85,8 @@ Kapacita fronty: `MIDI_Q_SIZE = 1024` eventů. Překročení → tichý drop (vi
 | Funkce (signatura) | Vlákno | Vstup → výstup | Volá ji | Volá (proč) | Parametry | Vysvětlení |
 |---|---|---|---|---|---|---|
 | `void setSustainCC(uint8_t cc)` | audio | `cc` (0–127) → aktualizuje `cc64_` + `damping_[]` | `Engine::processBlock()` (drain, case `Sustain`) | `recompute()` | `cc`: hodnota CC64 z MIDI. | Uloží `cc` do `cc64_` a ihned zavolá `recompute()`, která přepočítá celý `damping_[128]`. Jde o O(128) přepočet — viz `recompute()`. |
-| `void noteOn(int midi)` | audio | `midi` → nastaví bit v `held_` + `damping_[midi]` na 1,0 | `Engine::processBlock()` (drain, case `NoteOn`) | `recompute()` | `midi`: 0–127; mimo rozsah → ignoruje. | Nastaví `held_[midi]` a zavolá `recompute()`. Po recompute bude `damping_[midi] == 1.0f` bez ohledu na CC64. |
-| `void noteOff(int midi)` | audio | `midi` → resetuje bit v `held_` + přepočítá `damping_[midi]` | `Engine::processBlock()` (drain, case `NoteOff` a `NoteOn` s vel=0) | `recompute()` | `midi`: 0–127; mimo rozsah → ignoruje. | Resetuje `held_[midi]` a zavolá `recompute()`. Po recompute bude `damping_[midi] == cc64_ / 127.f`. Volá se **před** `VoicePool::noteOffWithPedal()`, aby VoicePool viděl aktuální stav pedálu (struna už není held → pedal ji drží nebo ne). |
+| `void noteOn(int midi)` | audio | `midi` → nastaví bit v `held_` + `damping_[midi]` na 1,0 | `Engine::processBlock()` (drain, case `NoteOn`) | `recompute()` | `midi`: 0–127; mimo rozsah → ignoruje. | Nastaví `held_[midi]` a zavolá `recompute()`. Po recompute bude `damping_[midi] == 1.0f` bez ohledu na CC64. **Volá se jen na PRVNÍ držitel výšky** (`NoteHoldTracker::noteOn` vrátil `true`) — opakovaný on z dalšího kanálu už `held_[midi]` nemění. |
+| `void noteOff(int midi)` | audio | `midi` → resetuje bit v `held_` + přepočítá `damping_[midi]` | `Engine::processBlock()` (drain, case `NoteOff` a `NoteOn` s vel=0) | `recompute()` | `midi`: 0–127; mimo rozsah → ignoruje. | Resetuje `held_[midi]` a zavolá `recompute()`. Po recompute bude `damping_[midi] == cc64_ / 127.f`. **Volá se jen na POSLEDNÍ release výšky** (`NoteHoldTracker::noteOff` vrátil `true`), **před** `VoicePool::noteOffWithPedal()`, aby VoicePool viděl aktuální stav pedálu. |
 | `void allNotesOff()` | audio | — → reset celého `held_` + recompute | `Engine::processBlock()` (drain, case `AllNotesOff`) | `recompute()` | — | `held_.reset()` smaže všechny bity najednou (`std::bitset`), pak `recompute()` nastaví `damping_[n] = cc64_ / 127.f` pro všechna `n`. |
 | `void recompute()` | audio | — → přepočítá `damping_[0..127]` | `setSustainCC()`, `noteOn()`, `noteOff()`, `allNotesOff()`, konstruktor | — | — | **Jádro damping modelu.** Vypočítá `lift = (float)cc64_ / 127.f`. Pro každé `n` v rozsahu 0–127: pokud `held_[n]` → `damping_[n] = 1.f`; jinak `damping_[n] = lift`. Výsledek: dražená klávesa má vždy damping 1,0 (zcela nedampovaná) bez ohledu na pedál. Nedražená klávesa má damping rovný aktuálnímu CC64 normalizovanému do [0, 1]. Při CC64 = 0 (pedál uvolněn) jsou všechny nedražené struny plně dampovány (damping = 0). Při CC64 = 127 jsou nedampovány (damping = 1). Half-pedal = CC64 = 63 → `lift ≈ 0,496`. Složitost O(128) — konstantní čas pro pevnou velikost. |
 | `float dampingFor(int midi) const` | audio (resonance, voice pool) | `midi` → damping koeficient [0,0 – 1,0] | `ResonanceEngine::processBlock()`, `ResonanceEngine::onPlayedNoteOn()`, `ResonanceEngine::onSelfNoteOn()`, `VoicePool::noteOn()` | — | `midi`: 0–127; mimo rozsah → vrátí `0.f` (plně dampováno). | Prostý přístup do pole `damping_[]` po hraničním testu. Hodnota je platná okamžitě po posledním `recompute()`. ResonanceEngine ji používá jako multiplikátor excitačního gainu: `excite = (vel/127) × harm × strength × dampingFor(N)`. |

@@ -13,9 +13,10 @@ namespace ithaca {
 
 struct MidiEvent {
     enum Type : uint8_t { NoteOn, NoteOff, Sustain, AllNotesOff };
-    Type    type  = NoteOn;
-    uint8_t data1 = 0;     // midi nota (NoteOn/Off) nebo hodnota (Sustain)
-    uint8_t data2 = 0;     // velocity (NoteOn)
+    Type    type    = NoteOn;
+    uint8_t data1   = 0;   // midi nota (NoteOn/Off) nebo hodnota (Sustain)
+    uint8_t data2   = 0;   // velocity (NoteOn)
+    uint8_t channel = 0;   // MIDI kanal 0..15 (NoteOn/Off; cross-channel hold)
 };
 
 class MidiQueue {

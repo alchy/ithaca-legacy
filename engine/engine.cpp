@@ -120,16 +120,17 @@ uint64_t nowMicros() {
 }
 } // namespace
 
-void Engine::noteOn(int midi, int velocity) {
-    if (velocity <= 0) { noteOff(midi); return; }
+void Engine::noteOn(int midi, int velocity, int channel) {
+    if (velocity <= 0) { noteOff(midi, channel); return; }
     last_note_on_us_.store(nowMicros(), std::memory_order_relaxed);
-    if (!midi_q_.push({MidiEvent::NoteOn, (uint8_t)midi, (uint8_t)velocity}))
+    if (!midi_q_.push({MidiEvent::NoteOn, (uint8_t)midi, (uint8_t)velocity,
+                       (uint8_t)channel}))
         log::Logger::default_().log("midi", log::Severity::Warning,
             "MIDI fronta plna — NoteOn midi=%d ZAHOZEN", midi);
 }
-void Engine::noteOff(int midi) {
+void Engine::noteOff(int midi, int channel) {
     last_note_off_us_.store(nowMicros(), std::memory_order_relaxed);
-    if (!midi_q_.push({MidiEvent::NoteOff, (uint8_t)midi, 0}))
+    if (!midi_q_.push({MidiEvent::NoteOff, (uint8_t)midi, 0, (uint8_t)channel}))
         log::Logger::default_().log("midi", log::Severity::Warning,
             "MIDI fronta plna — NoteOff midi=%d ZAHOZEN", midi);
 }
@@ -181,22 +182,31 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
             case MidiEvent::NoteOn: {
                 int m = (int)e.data1;
                 int v = (int)e.data2;
+                int ch = (int)e.channel;
                 if (v == 0) {
-                    // MIDI konvence: NoteOn s vel=0 = NoteOff.
-                    pedal_.noteOff(m);
-                    pool_->noteOff(m, scaledReleaseMs(), sr);
+                    // MIDI konvence: NoteOn s vel=0 = NoteOff. Stejna cesta jako
+                    // 0x80 vc. cross-channel hold (viz NoteOff case).
+                    if (hold_.noteOff(m, ch)) {
+                        pedal_.noteOff(m);
+                        pool_->noteOffWithPedal(m, pedal_, scaledReleaseMs(), sr);
+                    }
                 } else {
-                    pedal_.noteOn(m);
+                    // Cross-channel hold: tlumitko (pedal_.noteOn) zapnout jen na
+                    // PRVNI drzitel vysky m. Voice ale (re)strike vzdy — opakovany
+                    // uder / re-artikulace stejne noty ma znit.
+                    const bool first = hold_.noteOn(m, ch);
+                    if (first) pedal_.noteOn(m);
                     // Pravidlo B PRED voice noteOn: pokud N uz rezonuje,
                     // zafade rezonanci.
                     resonance_->onSelfNoteOn(m, sr);
                     VoiceSpec spec = selectVoice(bank_, m, v, rr_);
-                    // DIAG: log kazdy NoteOn na drainu — m, vel, jestli se nasel
-                    // asset (spec.asset==NULL = nota nema namapovany sample → tise
-                    // se zahodi = "vypadava"), a kolik hlasu je aktivnich (steal).
+                    // DIAG: log kazdy NoteOn na drainu — m, vel, kanal, jestli se
+                    // nasel asset (spec.asset==NULL = nota nema namapovany sample
+                    // → tise se zahodi), a kolik hlasu je aktivnich (steal).
                     log::Logger::default_().log("midi_on", log::Severity::Info,
-                        "noteOn midi=%d vel=%d asset=%s active_voices=%d",
-                        m, v, spec.asset ? "yes" : "NULL", pool_->activeCount());
+                        "noteOn midi=%d vel=%d ch=%d first=%d asset=%s active_voices=%d",
+                        m, v, ch, (int)first, spec.asset ? "yes" : "NULL",
+                        pool_->activeCount());
                     if (spec.asset)
                         pool_->noteOn(m, spec, sr, cfg_.keyboard_spread, &pedal_);
                     // PO voice noteOn: spusti rezonance harmonicky pribuznych
@@ -207,11 +217,17 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
             }
             case MidiEvent::NoteOff: {
                 int m = (int)e.data1;
+                int ch = (int)e.channel;
                 float rms = scaledReleaseMs();
+                // Cross-channel hold: release teprve kdyz pusti POSLEDNI kanal,
+                // ktery vysku m drzel. Drzi-li ji jeste jiny kanal (druha ruka v
+                // Synthesia), note-off se ignoruje a nota zni dal.
+                const bool last = hold_.noteOff(m, ch);
                 const bool sustained = pedal_.isUndamped(m);
                 log::Logger::default_().log("midi_off", log::Severity::Info,
-                    "noteOff midi=%d release_ms=%.0f cc64=%d sustained=%d",
-                    m, rms, (int)pedal_.sustainCC(), (int)sustained);
+                    "noteOff midi=%d ch=%d last=%d release_ms=%.0f cc64=%d sustained=%d",
+                    m, ch, (int)last, rms, (int)pedal_.sustainCC(), (int)sustained);
+                if (!last) break;   // jiny kanal porad drzi → neni release
                 // Pedal nejdriv noteOff (snizi held_), pak voice off s pedalem
                 // — VoicePool si overi pedal.isUndamped(m): pokud pedal drzi
                 // strunu, sample bude hrat dal jako pending_release; jinak
@@ -238,6 +254,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
             case MidiEvent::AllNotesOff: {
                 log::Logger::default_().log("midi_off", log::Severity::Info,
                     "AllNotesOff");
+                hold_.allNotesOff();
                 pedal_.allNotesOff();
                 pool_->allNotesOff(cfg_.release_ms, sr);
                 break;

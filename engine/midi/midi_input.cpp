@@ -110,13 +110,14 @@ void MidiInput::callback(double ts,
 
     if (!channelAccepts(self->channel_, status)) return;
 
+    const int ch = (int)(status & 0x0F);
     switch (type) {
         case 0x90:  // Note On (vel=0 == Note Off dle MIDI konvence)
-            if (data2 > 0) self->engine_->noteOn((int)data1, (int)data2);
-            else           self->engine_->noteOff((int)data1);
+            if (data2 > 0) self->engine_->noteOn((int)data1, (int)data2, ch);
+            else           self->engine_->noteOff((int)data1, ch);
             break;
         case 0x80:  // Note Off
-            self->engine_->noteOff((int)data1);
+            self->engine_->noteOff((int)data1, ch);
             break;
         case 0xB0:  // Control Change
             switch (data1) {

@@ -11,6 +11,7 @@
 #include "voice/voice_pool.h"
 #include "voice/patch_manager.h"
 #include "midi/midi_queue.h"
+#include "midi/note_hold.h"
 #include "pedal/pedal_state.h"
 #include "resonance/resonance_engine.h"
 #include "dsp/dsp_chain.h"
@@ -72,8 +73,10 @@ public:
     bool reloadBank(const std::string& dir);
 
     // -- Thread-safe MIDI vstup (volat z MIDI/GUI threadu) --
-    void noteOn(int midi, int velocity);
-    void noteOff(int midi);
+    // `channel` = MIDI kanal 0..15 (default 0 pro non-MIDI callery: CLI ton,
+    // offline batch render, testy). Cross-channel hold: viz NoteHoldTracker.
+    void noteOn(int midi, int velocity, int channel = 0);
+    void noteOff(int midi, int channel = 0);
     void allNotesOff();
     // Sustain pedal CC64 — spojita hodnota 0..127. Promita se do PedalState
     // a per-blok do rezonanci (viz spec 5.4 + 5.5). Thread-safe (jen vlozi
@@ -184,6 +187,7 @@ private:
     std::unique_ptr<VoicePool>        pool_;
     RoundRobinState                   rr_;
     MidiQueue                         midi_q_;
+    NoteHoldTracker                   hold_;   // per-pitch maska kanalu (audio thread)
     std::unique_ptr<StreamEngine>     stream_main_;
     std::unique_ptr<StreamEngine>     stream_resonance_;
     PedalState                        pedal_;
