@@ -241,6 +241,21 @@ bool ResonanceEngine::processBlock(float* out_l, float* out_r, int n_samples,
     return any;
 }
 
+int ResonanceEngine::dampOnPedalUp(const PedalState& pedal, float engine_sr) noexcept {
+    // Striktni mute pri zvednuti pedalu: rychly fadeOut kazdeho aktivniho
+    // rezonancniho hlasu na strune, ktera uz neni undamped (damping <= eps).
+    // Drzene struny (klavesa dole → damping=1) NEfade-ujeme — zni dal spravne.
+    // Per-blok target by je stejne stahl, ale az pristi blok a pres pomalejsi
+    // kResonanceRampMs; tady je to okamzite a strme (kResonanceFadeOutMs).
+    int faded = 0;
+    for (int N = 0; N < 128; ++N) {
+        auto& slot = voices_[(size_t)N];
+        if (!slot || !slot->active() || slot->fadingOut()) continue;
+        if (!pedal.isUndamped(N)) { slot->fadeOut(engine_sr); ++faded; }
+    }
+    return faded;
+}
+
 int ResonanceEngine::activeCount() const noexcept {
     int n = 0;
     for (const auto& slot : voices_) {

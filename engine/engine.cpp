@@ -245,9 +245,16 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 pedal_.setSustainCC(e.data1);
                 const bool now_down = pedal_.isPedalDown();
                 // Pri prechodu DOWN → UP: aplikuj release na vsechny pending
-                // hlasy, jejichz nota neni aktualne drzena.
+                // hlasy, jejichz nota neni aktualne drzena, a STRIKTNE muteni
+                // rezonance na nedrzenych strunach (rychly fadeOut). Drive se
+                // rezonance spolehala jen na per-blok target (pomaly 30ms ramp
+                // az pristi blok) → nektere hlasy slysitelne dohravaly.
                 if (was_down && !now_down) {
                     pool_->releasePendingNotes(pedal_, scaledReleaseMs(), sr);
+                    const int faded = resonance_->dampOnPedalUp(pedal_, sr);
+                    log::Logger::default_().log("resonance", log::Severity::Info,
+                        "pedal UP → mute rezonance: faded=%d aktivnich_zbylo=%d",
+                        faded, resonance_->activeCount());
                 }
                 break;
             }

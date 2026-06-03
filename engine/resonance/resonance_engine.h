@@ -106,6 +106,13 @@ public:
     bool processBlock(float* out_l, float* out_r, int n_samples,
                       const PedalState& pedal) noexcept;
 
+    // Pedal DOWN→UP: striktni mute. Rychle (kResonanceFadeOutMs) fadeOut vsech
+    // aktivnich rezonancnich hlasu, jejichz struna uz NENI undamped (tj. neni
+    // drzena klavesa) — analogie k VoicePool::releasePendingNotes pro hlavni
+    // hlasy. Drzene struny (damping=1) zni dal (spravna klavirni fyzika). Vraci
+    // pocet zafadeovanych hlasu (diagnostika). Volat z audio threadu (drain).
+    int dampOnPedalUp(const PedalState& pedal, float engine_sr) noexcept;
+
     // RAM cache rezonance: per-nota true = cilova vrstva ma naplneny preload_resonance
     // (cache mod). false = stream mod (ring). Psano off-RT (loadBank/rebuild), cteno
     // audio threadem v onPlayedNoteOn.
