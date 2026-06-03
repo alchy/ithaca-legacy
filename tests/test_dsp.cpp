@@ -212,3 +212,18 @@ TEST_CASE("Engine ma oddelene main + resonance stream pooly") {
     CHECK(eng.mainStreamUnderrunRecent(1000.f) == false);
     CHECK(eng.resonanceStreamUnderrunRecent(1000.f) == false);
 }
+
+TEST_CASE("dsp_math: lowpass/highpass DC + smoothstep") {
+    using namespace ithaca::dsp;
+    auto lp = rbj_lowpass(1000.f, 0.707f, 48000.f);
+    auto hp = rbj_highpass(1000.f, 0.707f, 48000.f);
+    BiquadState sl{}, sh{};
+    float yl=0, yh=0;
+    for (int i=0;i<4096;++i){ yl=biquad_tick(1.f,lp,sl); yh=biquad_tick(1.f,hp,sh); }
+    CHECK(yl == doctest::Approx(1.f).epsilon(0.02));   // lowpass passes DC
+    CHECK(std::fabs(yh) < 0.02f);                       // highpass blocks DC
+    CHECK(smoothstep(0.0f,0.2f,0.8f) == doctest::Approx(0.f));
+    CHECK(smoothstep(1.0f,0.2f,0.8f) == doctest::Approx(1.f));
+    CHECK(smoothstep(0.5f,0.2f,0.8f) > 0.f);
+    CHECK(smoothstep(0.5f,0.2f,0.8f) < 1.f);
+}

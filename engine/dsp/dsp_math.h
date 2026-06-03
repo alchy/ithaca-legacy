@@ -63,6 +63,40 @@ inline BiquadCoeffs rbj_low_shelf(float fc, float gain_db, float sr) {
     return c;
 }
 
+// RBJ low-pass (Audio EQ Cookbook). fc [Hz], q (0.707 = Butterworth), sr.
+inline BiquadCoeffs rbj_lowpass(float fc, float q, float sr) {
+    float w0 = TAU * fc / sr, cosw = std::cos(w0), sinw = std::sin(w0);
+    float al = sinw / (2.f * q);
+    float a0 = 1.f + al, ia = 1.f / a0;
+    BiquadCoeffs c;
+    c.b0 = ((1.f - cosw) * 0.5f) * ia;
+    c.b1 = ( 1.f - cosw)         * ia;
+    c.b2 = ((1.f - cosw) * 0.5f) * ia;
+    c.a1 = (-2.f * cosw)         * ia;
+    c.a2 = ( 1.f - al)           * ia;
+    return c;
+}
+// RBJ high-pass.
+inline BiquadCoeffs rbj_highpass(float fc, float q, float sr) {
+    float w0 = TAU * fc / sr, cosw = std::cos(w0), sinw = std::sin(w0);
+    float al = sinw / (2.f * q);
+    float a0 = 1.f + al, ia = 1.f / a0;
+    BiquadCoeffs c;
+    c.b0 = ((1.f + cosw) * 0.5f) * ia;
+    c.b1 = (-(1.f + cosw))       * ia;
+    c.b2 = ((1.f + cosw) * 0.5f) * ia;
+    c.a1 = (-2.f * cosw)         * ia;
+    c.a2 = ( 1.f - al)           * ia;
+    return c;
+}
+// Hermite smoothstep: 0 pod edge0, 1 nad edge1, hladce mezi.
+inline float smoothstep(float x, float edge0, float edge1) {
+    if (edge1 <= edge0) return x < edge0 ? 0.f : 1.f;
+    float t = (x - edge0) / (edge1 - edge0);
+    t = t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
+    return t * t * (3.f - 2.f * t);
+}
+
 // Vyhlazeni gain obalky: rychly attack (snizovani), pomaly release (zotaveni).
 inline float gain_envelope_smooth(float current, float target,
                                   float attack_coeff, float release_coeff) {
