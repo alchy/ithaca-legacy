@@ -43,6 +43,78 @@ TEST_CASE("Persistence round-trip") {
     std::filesystem::remove(p);
 }
 
+TEST_CASE("Persistence round-trip — DSP + engine-tuning pole (vsechna)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_test_state_full.json";
+
+    GuiState s;
+    // Vsem polim dame NE-default hodnoty → kdyby nekterou save/load vynechal,
+    // nactena hodnota = struct default ≠ nastavena → test selze.
+    s.bank_search_dir      = "/banks/scan/dir";
+    s.resonance_window_ms  = 8000;     // default 12000
+    s.preload_ms           = 300;      // default 150
+    s.cache_budget_mb      = 2048;     // default 0
+    s.agc_enabled = true;  s.agc_target = 0.2f;  s.agc_release_ms = 150.f; s.agc_floor = 0.1f;
+    s.enhancer_enabled = true; s.enhancer_process = 6.f; s.enhancer_contour = 3.f; s.enhancer_mid = -2.f;
+    s.limiter_enabled = true; s.limiter_threshold_db = -3.f; s.limiter_release_ms = 100.f;
+    s.convolver_enabled = true; s.convolver_mix = 0.4f; s.convolver_choice = 1;
+    s.convolver_decay = 0.3f; s.convolver_tone = 0.7f; s.convolver_size = 0.55f;
+    s.config_page = 4;
+    s.audio_block_size = 128; s.audio_sample_rate = 44100;
+
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+
+    CHECK(l->bank_search_dir == s.bank_search_dir);
+    CHECK(l->resonance_window_ms == 8000);
+    CHECK(l->preload_ms == 300);
+    CHECK(l->cache_budget_mb == 2048);
+    CHECK(l->agc_enabled == true);
+    CHECK(l->agc_target == doctest::Approx(0.2f));
+    CHECK(l->agc_release_ms == doctest::Approx(150.f));
+    CHECK(l->agc_floor == doctest::Approx(0.1f));
+    CHECK(l->enhancer_enabled == true);
+    CHECK(l->enhancer_process == doctest::Approx(6.f));
+    CHECK(l->enhancer_contour == doctest::Approx(3.f));
+    CHECK(l->enhancer_mid == doctest::Approx(-2.f));
+    CHECK(l->limiter_enabled == true);
+    CHECK(l->limiter_threshold_db == doctest::Approx(-3.f));
+    CHECK(l->limiter_release_ms == doctest::Approx(100.f));
+    CHECK(l->convolver_enabled == true);
+    CHECK(l->convolver_mix == doctest::Approx(0.4f));
+    CHECK(l->convolver_choice == 1);
+    CHECK(l->convolver_decay == doctest::Approx(0.3f));
+    CHECK(l->convolver_tone == doctest::Approx(0.7f));
+    CHECK(l->convolver_size == doctest::Approx(0.55f));
+    CHECK(l->config_page == 4);
+    CHECK(l->audio_block_size == 128);
+    CHECK(l->audio_sample_rate == 44100);
+
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Persistence — chybejici nova pole spadnou na default (obranne cteni)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_partial_v4.json";
+    {
+        // v4 soubor BEZ novych klicu (preload_ms / cache_budget_mb / resonance_window_ms)
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 4,\n  \"bank_path\": \"/x\",\n"
+             "  \"master_gain_db\": 0,\n  \"release_ms\": 200,\n"
+             "  \"excite_decay_ms\": 5000,\n  \"max_resonance_voices\": 32,\n"
+             "  \"window_x\": 100,\n  \"window_y\": 100,\n"
+             "  \"window_w\": 1280,\n  \"window_h\": 720\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->resonance_window_ms == 12000);  // default
+    CHECK(l->preload_ms == 150);             // default
+    CHECK(l->cache_budget_mb == 0);          // default (auto)
+    CHECK(l->convolver_enabled == false);    // default
+    std::filesystem::remove(p);
+}
+
 TEST_CASE("Persistence missing file") {
     using namespace ithaca::gui;
     auto p = std::filesystem::temp_directory_path() / "ithaca_nonexistent_xyz.json";
