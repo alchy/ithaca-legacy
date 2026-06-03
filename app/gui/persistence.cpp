@@ -133,6 +133,9 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.limiter_threshold_db = readF("limiter_threshold_db", s.limiter_threshold_db);
         s.limiter_release_ms   = readF("limiter_release_ms", s.limiter_release_ms);
         s.config_page          = readI("config_page", s.config_page);
+        s.convolver_enabled = readB("convolver_enabled", s.convolver_enabled);
+        s.convolver_mix     = readF("convolver_mix", s.convolver_mix);
+        s.convolver_choice  = readI("convolver_choice", s.convolver_choice);
         s.resonance_enabled  = readB("resonance_enabled", s.resonance_enabled);
         s.resonance_gain_db  = readF("resonance_gain_db", s.resonance_gain_db);
         s.resonance_layer_db = readF("resonance_layer_db", s.resonance_layer_db);
@@ -184,6 +187,9 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"limiter_threshold_db\": " << s.limiter_threshold_db << ",\n";
         f << "  \"limiter_release_ms\": " << s.limiter_release_ms   << ",\n";
         f << "  \"config_page\": "        << s.config_page          << ",\n";
+        f << "  \"convolver_enabled\": " << (s.convolver_enabled ? "true":"false") << ",\n";
+        f << "  \"convolver_mix\": "     << s.convolver_mix     << ",\n";
+        f << "  \"convolver_choice\": "  << s.convolver_choice  << ",\n";
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate    << "\n";
         f << "}\n";

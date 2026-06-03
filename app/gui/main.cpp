@@ -182,14 +182,15 @@ int main(int argc, char* argv[]) {
     // CONFIG stranky: VOICE (engine voice params) + 3 DSP stage z chainu.
     MasterPage    master_page(ctx);
     ResonancePage resonance_page(ctx);
-    ithaca::dsp::IParamPage* pages[5] = {
+    ithaca::dsp::IParamPage* pages[6] = {
         &master_page,
         &resonance_page,
-        &ctx.engine.dspChain().stage(0),   // AGC
-        &ctx.engine.dspChain().stage(1),   // ENHANCER
-        &ctx.engine.dspChain().stage(2),   // LIMITER
+        &ctx.engine.dspChain().stage(0),   // CONVOLVER
+        &ctx.engine.dspChain().stage(1),   // AGC
+        &ctx.engine.dspChain().stage(2),   // ENHANCER
+        &ctx.engine.dspChain().stage(3),   // LIMITER
     };
-    if (ctx.state.config_page < 0 || ctx.state.config_page > 4) ctx.state.config_page = 0;
+    if (ctx.state.config_page < 0 || ctx.state.config_page > 5) ctx.state.config_page = 0;
 
     while (!glfwWindowShouldClose(w)) {
         glfwPollEvents();
@@ -248,12 +249,18 @@ int main(int argc, char* argv[]) {
         ImGui::EndChild();
         ImGui::SameLine(0,0);
         ImGui::BeginChild("##config", {COL3, main_h}, false);
-            renderConfigPanel(ctx, pages, 5, ctx.state.config_page);
+            renderConfigPanel(ctx, pages, 6, ctx.state.config_page);
         ImGui::EndChild();
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci).
         {
             auto& ch = ctx.engine.dspChain();
-            auto& agc = ch.stage(0); auto& enh = ch.stage(1); auto& lim = ch.stage(2);
+            auto& cv  = ch.stage(0);   // CONVOLVER
+            auto& agc = ch.stage(1);   // AGC
+            auto& enh = ch.stage(2);   // ENHANCER
+            auto& lim = ch.stage(3);   // LIMITER
+            ctx.state.convolver_enabled = cv.enabled();
+            ctx.state.convolver_mix     = cv.get(0);
+            ctx.state.convolver_choice  = cv.currentChoice();
             ctx.state.agc_enabled = agc.enabled();
             ctx.state.agc_target = agc.get(0); ctx.state.agc_release_ms = agc.get(1); ctx.state.agc_floor = agc.get(2);
             ctx.state.enhancer_enabled = enh.enabled();
@@ -296,7 +303,10 @@ int main(int argc, char* argv[]) {
             last_saved.limiter_release_ms  != ctx.state.limiter_release_ms ||
             last_saved.config_page         != ctx.state.config_page ||
             last_saved.max_resonance_voices != ctx.state.max_resonance_voices ||
-            last_saved.audio_block_size    != ctx.state.audio_block_size;
+            last_saved.audio_block_size    != ctx.state.audio_block_size ||
+            last_saved.convolver_enabled   != ctx.state.convolver_enabled ||
+            last_saved.convolver_mix       != ctx.state.convolver_mix ||
+            last_saved.convolver_choice    != ctx.state.convolver_choice;
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }

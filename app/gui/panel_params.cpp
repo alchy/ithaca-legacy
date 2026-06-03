@@ -34,6 +34,22 @@ void renderParamPage(AppContext& ctx, ithaca::dsp::IParamPage& page) {
         ImGui::Dummy({0, L::Dims::row_gap});
     }
 
+    if (page.choiceCount() > 0) {
+        ImGui::Dummy({0, L::Dims::row_gap});
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
+        ImGui::TextUnformatted(page.choiceLabel());
+        ImGui::PopStyleColor();
+        int cur = page.currentChoice();
+        const char* curName = (cur >= 0) ? page.choiceName(cur) : "(none)";
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - L::Dims::pad_panel);
+        if (ImGui::BeginCombo("##choice", curName)) {
+            for (int i = 0; i < page.choiceCount(); ++i)
+                if (ImGui::Selectable(page.choiceName(i), i == cur) && i != cur)
+                    page.selectChoice(i);
+            ImGui::EndCombo();
+        }
+    }
+
     float mv; const char* ml;
     if (page.meter(mv, ml)) {
         char buf[32]; std::snprintf(buf, sizeof(buf), "%.2f", mv);
