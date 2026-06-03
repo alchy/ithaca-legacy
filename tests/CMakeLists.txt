@@ -125,3 +125,7 @@ add_test(NAME test_resonance_cache_build COMMAND test_resonance_cache_build)
 add_executable(test_enhancer_response test_enhancer_response.cpp)
 target_link_libraries(test_enhancer_response PRIVATE ithaca_core doctest)
 add_test(NAME test_enhancer_response COMMAND test_enhancer_response)
+
+add_executable(test_ir_wav test_ir_wav.cpp)
+target_link_libraries(test_ir_wav PRIVATE ithaca_core doctest)
+add_test(NAME test_ir_wav COMMAND test_ir_wav)
