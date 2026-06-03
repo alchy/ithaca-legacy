@@ -45,6 +45,7 @@ add_library(ithaca_core STATIC
     engine/dsp/agc.cpp
     engine/dsp/dsp_chain.cpp
     engine/dsp/ir_wav.cpp
+    engine/dsp/ir_modal.cpp
     engine/render/batch_renderer.cpp
     engine/miniaudio_impl.cpp
 )
