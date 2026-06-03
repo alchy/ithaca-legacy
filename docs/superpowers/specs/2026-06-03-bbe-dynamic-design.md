@@ -1,6 +1,8 @@
-# Dynamic BBE Sonic Maximizer — Design
+# Dynamic Enhancer (ex-BBE) — Design
 
-**Goal:** Nahradit zjednodušené statické 2-shelf BBE věrnější dynamickou implementací (program-dependent HF boost + fázové zarovnání), aby zapnutí/vypnutí dělalo slyšitelnou změnu charakteru a model odpovídal měřením reálného BBE.
+**Naming (rozhodnutí):** Modul se přejmenuje z „BBE" na **„Enhancer"** — všude: třída `Enhancer`, soubory `enhancer.{h,cpp}`, GUI label „ENHANCER", persistence klíče `enhancer_*` (s defensivní migrací starých `bbe_*`, aby se zachovaly vyladěné hodnoty). Funkčně jde o BBE-style Sonic Maximizer; značku „BBE" v UI/kódu nepoužíváme. (V tomto specu „BBE" označuje referenční hardware/model, ne náš modul.)
+
+**Goal:** Nahradit zjednodušené statické 2-shelf BBE věrnější dynamickou implementací (program-dependent HF boost + fázové zarovnání), aby zapnutí/vypnutí dělalo slyšitelnou změnu charakteru a model odpovídal měřením reálného BBE. Modul se jmenuje **Enhancer**.
 
 **Proč:** Měřením jsme prokázali, že statické BBE pracuje korektně (+5 dB shelvy), ale je nedramatické: dva statické EQ shelvy postrádají (1) **programově závislou dynamiku HF** a (2) **fázové/group-delay zarovnání**, což jsou dvě věci, které dělají charakter pravého BBE Sonic Maximizeru.
 
@@ -43,7 +45,7 @@ input ─┬─ [broadband level monitor]  (peak/RMS env, attack ~5ms / release 
 **RT:** všechny biquad/all-pass stavy + smoothing stav alokované/nulované v `prepare`; žádné alokace v `process`. `enabled=false` → čistý bypass (return).
 
 ## Parametry / GUI / persistence
-- `kParams`: `{"definition","DEFINITION",0..12,def 0}`, `{"bass","BASS",0..12,def 0}` (bump max bass na 12). `paramCount()=2` beze změny → BBE GUI stránka i `bbe_definition`/`bbe_bass` v `state.json` fungují bez migrace.
+- `kParams`: `{"definition","DEFINITION",0..12,def 0}`, `{"bass","BASS",0..12,def 0}` (bump max bass na 12). `paramCount()=2`. Persistence v `state.json` přes `enhancer_definition`/`enhancer_bass`/`enhancer_enabled` (migrace ze starých `bbe_*`).
 - Vnitřní konstanty (all-pass f0, level prahy, attack/release, HF horní cut) jsou neexponované konstanty v `.cpp` (laditelné).
 
 ## Validační harness (nahradí `tests/test_bbe_measure.cpp`)
@@ -60,11 +62,14 @@ Cíl: objektivně porovnat naši odezvu s Naganovem.
 
 **Limit:** Naganov měřil analogový hardware → ověřujeme **charakteristickou shodu** (polohy rohů, dB úrovně, ms zpoždění, level-závislost), ne bit-exact křivku.
 
-## Soubory
-- **Rewrite:** `engine/dsp/bbe.{h,cpp}` (nová dynamická implementace; zachovat `DspStage` API, `kParams` ids).
+## Soubory (vč. rename BBE → Enhancer)
+- **Create/Rename:** `engine/dsp/bbe.{h,cpp}` → `engine/dsp/enhancer.{h,cpp}`; třída `BBE` → `Enhancer`; `name()` vrací `"ENHANCER"`; nová dynamická implementace; zachovat `DspStage` API.
+- **Modify:** `engine/dsp/dsp_chain.h` (member `bbe_` → `enhancer_`, include, komentář „AGC → ENHANCER → Limiter", stage(1)); root `CMakeLists.txt` (`bbe.cpp` → `enhancer.cpp` v `ithaca_core`).
 - **Možná přidat:** `engine/dsp/dsp_math.h` — all-pass koeficient helper (`rbj_allpass(fc, q, sr)`) a/nebo smoothstep, pokud chybí.
-- **Rewrite test:** `tests/test_bbe_measure.cpp` → `tests/test_bbe_response.cpp` (sweep + group delay + CSV + asserty); registrace v `tests/CMakeLists.txt`.
-- **Docs:** `docs/reference/G-dsp.md` (BBE sekce — nová topologie), průběžně.
+- **Persistence (`app/gui/persistence.{h,cpp}`):** `GuiState` pole `bbe_enabled/bbe_definition/bbe_bass` → `enhancer_enabled/enhancer_definition/enhancer_bass`; save zapíše `enhancer_*`; load čte `enhancer_*`, a když chybí, **defensivně přečte staré `bbe_*`** (migrace vyladěných hodnot). `app/gui/app_context.cpp` (mapování state → stage), `app/gui/main.cpp` (debounce watched fields).
+- **GUI label:** „ENHANCER" se zobrazí přes `name()` v config panelu + param page (žádný extra kód; ověřit, že nikde není natvrdo „BBE").
+- **Rewrite test:** `tests/test_bbe_measure.cpp` → `tests/test_enhancer_response.cpp` (sweep + group delay + CSV + asserty); registrace v `tests/CMakeLists.txt`.
+- **Docs:** `docs/reference/G-dsp.md` + `H-gui.md` (BBE → Enhancer, nová topologie), průběžně.
 
 ## Edge cases
 - Velmi tichý vstup → scale→0 → HF boost ≈ 0 (žádné zesílení šumu); bass + all-pass stále aktivní (konstantní).
