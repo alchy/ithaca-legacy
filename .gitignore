@@ -1,6 +1,8 @@
 # build artifacts
 /build/
 /build-test/
+/build-asan/
+/build-tsan/
 compile_commands.json
 
 # ImGui runtime layout (per-machine okno/panel stav, negeneruje se do repa)

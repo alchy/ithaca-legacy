@@ -16,9 +16,23 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Sanitizery (opt-in, jednorazovy audit): -DITHACA_SANITIZE=address,undefined
+# nebo =thread. Prazdne = vypnuto. Pridava -g + frame pointery pro citelne stacky.
+set(ITHACA_SANITIZE "" CACHE STRING "Sanitizer: address | thread | undefined | kombinace (carkou)")
+if(ITHACA_SANITIZE)
+    message(STATUS "Sanitizer: ${ITHACA_SANITIZE}")
+    add_compile_options(-fsanitize=${ITHACA_SANITIZE} -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=${ITHACA_SANITIZE})
+endif()
+
 # Default build type = Release (RT audio engine — bez optimalizaci nepouzitelny).
+# Pri zapnutem sanitizeru radeji Debug (citelne stacky, bez LTO).
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    if(ITHACA_SANITIZE)
+        set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+    else()
+        set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    endif()
 endif()
 
 # ARM (Raspberry Pi 5 / aarch64): tune na nativni CPU (Cortex-A76 + NEON).
