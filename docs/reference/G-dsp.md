@@ -176,7 +176,7 @@ Attack time je fixní 5 ms (vypočten v `prepare()`): `atk_ = 1 − exp(−1/(0.
 
 **IR zdroje** (dropdown přes IParamPage choice-rozšíření `choiceCount/choiceName/currentChoice/selectChoice/choiceLabel`):
 - **Modální presety** (`ir_modal`): `Body soft` / `Body bright` — syntetický soundboard IR = součet tlumených modů kalibrovaný na fyziku desky (Chabassier/RR_9530): modální frekvence (seed 27/42/63/121/164/289 Hz… + fill do ~5 kHz), per-mód decay `τ = 2/f_ve(f)`, `f_ve(f)=2·10⁻⁵·f²+7·10⁻²·f`, spektrální obálka koncentrovaná <~800 Hz (Bright přidává presence ~2,5 kHz), náhodná fáze (noiselike).
-- **WAV IR** (`ir_wav`, port z icr): mono float32/int16, resample na engine SR, cap na `kMaxIr`. Assety v `banks/ir/`.
+- **WAV IR** (`ir_wav`, port z icr): mono float32/int16, resample na engine SR, cap na `kMaxIr`. Loader existuje, ale **zatím není zapojen do dropdownu** (dropdown nabízí jen modální presety). Ukázkové WAV assety leží mimo repo u samplů v `/Users/j/SoundBanks/Ithaca/IR/` (`grand-soundboard-{a,b}.wav`); načítání IR z disku je future rozšíření.
 
 Param: index 0 = `MIX` (0..1). `hasEnable=true`. Reference: RR_9530 (kalibrace `f_ve`), Bank & Chabassier 2019 (soundboard IR je šumovité, krátký doznív → FIR), Teng 2012 (caveat: broadband IR přebíjí vysoké tóny → subtilní MIX). Verifikace: `tests/test_ir_modal.cpp` (decay-vs-f, obálka), `tests/test_convolver.cpp` (impulz→IR, identity→průchod, MIX bypass).
 
