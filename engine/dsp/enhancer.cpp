@@ -5,9 +5,11 @@
 namespace ithaca::dsp {
 
 namespace {
-constexpr float kXoverLow  = 250.f;    // low/mid
-constexpr float kXoverHigh = 3000.f;   // mid/high
+constexpr float kXoverLow  = 250.f;    // LOW (CONTOUR) low-pass
+constexpr float kXoverHigh = 3000.f;   // HIGH (PROCESS) high-pass
 constexpr float kHfCap     = 11000.f;  // horni mez HIGH (rolloff po ~10k)
+constexpr float kMidLo     = 1800.f;   // MID presence bell — dolni hrana
+constexpr float kMidHi     = 4000.f;   // MID presence bell — horni hrana (stred ~2.7 kHz)
 constexpr float kQ         = 0.707f;
 constexpr float kApFreq    = 700.f;    // 1.-radovy all-pass (fazove zarovnani, BBE jadro)
 constexpr float kAtkMs = 5.f, kRelMs = 80.f;
@@ -25,10 +27,10 @@ const Param Enhancer::kParams[3] = {
 };
 
 void Enhancer::computeCoeffs_() {
-    lp_lo_  = rbj_lowpass (kXoverLow,  kQ, sr_);
-    hp_lo_  = rbj_highpass(kXoverLow,  kQ, sr_);
-    lp_mid_ = rbj_lowpass (kXoverHigh, kQ, sr_);
-    hp_hi_  = rbj_highpass(kXoverHigh, kQ, sr_);
+    lp_lo_  = rbj_lowpass (kXoverLow,  kQ, sr_);   // LOW (CONTOUR)
+    hp_mid_ = rbj_highpass(kMidLo,     kQ, sr_);   // MID presence bell (dolni)
+    lp_mid_ = rbj_lowpass (kMidHi,     kQ, sr_);   // MID presence bell (horni)
+    hp_hi_  = rbj_highpass(kXoverHigh, kQ, sr_);   // HIGH (PROCESS)
     lp_cap_ = rbj_lowpass (kHfCap,     kQ, sr_);
     hp_exc_ = rbj_highpass(kExcHp,     kQ, sr_);
     // 1.-radovy all-pass H(z)=(c+z^-1)/(1+c z^-1); c=(tan(πf/sr)-1)/(tan(πf/sr)+1).
@@ -46,7 +48,7 @@ void Enhancer::prepare(float sr, int /*max_block*/) {
 
 void Enhancer::reset() {
     for (auto& c : ch_) {
-        c.s_lp_lo = c.s_hp_lo = c.s_lp_mid = c.s_hp_hi = c.s_lp_cap = c.s_hp_exc = BiquadState{};
+        c.s_lp_lo = c.s_hp_mid = c.s_lp_mid = c.s_hp_hi = c.s_lp_cap = c.s_hp_exc = BiquadState{};
         c.ap_x1 = c.ap_y1 = 0.f;
     }
     env_ = 0.f;
@@ -74,22 +76,23 @@ void Enhancer::process(float* L, float* R, int n) {
             Chan& c = ch_[chi];
             float x = (chi == 0) ? xL : xR;
 
-            // Band-filtry z dry. PARALLEL boost (nikdy band-replace) → pri unity
-            // ziscich vystup = aligned dry, takze zadny comb notch ve stredech.
-            float low  = biquad_tick(x, lp_lo_, c.s_lp_lo);
-            float rest = biquad_tick(x, hp_lo_, c.s_hp_lo);
-            float mid  = biquad_tick(rest, lp_mid_, c.s_lp_mid);
-            float high = biquad_tick(x, hp_hi_, c.s_hp_hi);
+            // Fazove zarovnani PRVNI: 1.-radovy all-pass na dry (magnitudove ploche).
+            // Pasma se odvozuji z `xa` (NE z `x`) → fazove KOHERENTNI s dry, ktere se
+            // pricita → cisty parallel boost bez kancelace (jinak xa vs band-z-x rusi
+            // v passbandu: napr. MID @2.7kHz dalo -6 dB misto +6 dB).
+            float xa = ap_c_ * x + c.ap_x1 - ap_c_ * c.ap_y1;
+            c.ap_x1 = x; c.ap_y1 = xa;
+
+            float low  = biquad_tick(xa, lp_lo_, c.s_lp_lo);          // LOW (CONTOUR)
+            float mid  = biquad_tick(xa, hp_mid_, c.s_hp_mid);        // MID presence bell:
+            mid        = biquad_tick(mid, lp_mid_, c.s_lp_mid);       //   HP1800 → LP4000 (~2.7 kHz)
+            float high = biquad_tick(xa, hp_hi_, c.s_hp_hi);          // HIGH (PROCESS)
             high       = biquad_tick(high, lp_cap_, c.s_lp_cap);
 
             // Harmonicky exciter z HIGH, navazany na PROCESS+scale. high*high je
             // suda nelinearita → generuje 2. harmonickou (+ DC, ktere hp_exc_ odrizne).
             float exc = high + kSat * high * high;
             exc       = biquad_tick(exc, hp_exc_, c.s_hp_exc);
-
-            // Fazove zarovnani: 1.-radovy all-pass na dry (magnitudove ploche).
-            float xa = ap_c_ * x + c.ap_x1 - ap_c_ * c.ap_y1;
-            c.ap_x1 = x; c.ap_y1 = xa;
 
             // Parallel boost: aligned dry + (g-1)*band (+exciter). Unity → xa.
             float out = xa

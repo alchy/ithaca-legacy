@@ -47,6 +47,12 @@ TEST_CASE("Enhancer response: bypass / contour / dynamic process / exciter") {
       MESSAGE("PROCESS 6kHz low-lvl="<<lo<<" high-lvl="<<hi);
       CHECK(hi > lo + 3.f); }
 
+    // MID: presence bell ~2.7 kHz reaguje na MID param
+    { Enhancer e; e.prepare(48000.f,512); e.setEnabled(true); e.set(2,6.f);  // MID +6
+      float g = gainDb(e, 2700.f, 0.3f);
+      MESSAGE("MID 2.7kHz @+6dB = "<<g<<" dB");
+      CHECK(g > 1.5f); }   // presence boost slyšitelný
+
     // EXCITER: čistý 3 kHz sinus → output má NOVOU 2. harmonickou (6 kHz)
     auto bin = [](const std::vector<float>& y, float f, float sr){
         double re=0,im=0; int N=(int)y.size();

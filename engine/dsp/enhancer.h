@@ -36,13 +36,13 @@ private:
     std::atomic<bool>  enabled_{false};
     float sr_ = 48000.f;
 
-    // Band filtry (sdilene koef pres kanaly): LOW=LP250, MID=BP(HP250→LP3k),
-    // HIGH=HP3k→LPcap. hp_exc_ = exciter high-pass.
-    BiquadCoeffs lp_lo_{}, hp_lo_{}, lp_mid_{}, hp_hi_{}, lp_cap_{}, hp_exc_{};
+    // Band filtry (sdilene koef pres kanaly): LOW=LP250 (CONTOUR), HIGH=HP3k→LPcap
+    // (PROCESS), MID=presence bell HP1800→LP4000 (~2.7 kHz, klarita). hp_exc_=exciter HP.
+    BiquadCoeffs lp_lo_{}, hp_mid_{}, lp_mid_{}, hp_hi_{}, lp_cap_{}, hp_exc_{};
     float ap_c_ = 0.f;   // 1.-radovy all-pass koef (fazove zarovnani)
 
     struct Chan {
-        BiquadState s_lp_lo, s_hp_lo, s_lp_mid, s_hp_hi, s_lp_cap, s_hp_exc;
+        BiquadState s_lp_lo, s_hp_mid, s_lp_mid, s_hp_hi, s_lp_cap, s_hp_exc;
         float ap_x1 = 0.f, ap_y1 = 0.f;   // all-pass stav
     } ch_[2];
 
