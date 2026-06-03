@@ -1,84 +1,82 @@
 # Dynamic Enhancer (ex-BBE) — Design
 
-**Naming (rozhodnutí):** Modul se přejmenuje z „BBE" na **„Enhancer"** — všude: třída `Enhancer`, soubory `enhancer.{h,cpp}`, GUI label „ENHANCER", persistence klíče `enhancer_*` (s defensivní migrací starých `bbe_*`, aby se zachovaly vyladěné hodnoty). Funkčně jde o BBE-style Sonic Maximizer; značku „BBE" v UI/kódu nepoužíváme. (V tomto specu „BBE" označuje referenční hardware/model, ne náš modul.)
+**Naming:** Modul se jmenuje **Enhancer** (ex-„BBE") — všude: třída `Enhancer`, soubory `enhancer.{h,cpp}`, GUI label „ENHANCER", persistence klíče `enhancer_*` (migrace ze starých `bbe_*`). „BBE" v tomto specu = referenční hardware, ne náš modul.
 
-**Goal:** Nahradit zjednodušené statické 2-shelf BBE věrnější dynamickou implementací (program-dependent HF boost + fázové zarovnání), aby zapnutí/vypnutí dělalo slyšitelnou změnu charakteru a model odpovídal měřením reálného BBE. Modul se jmenuje **Enhancer**.
+**Goal:** Nahradit statické 2-shelf BBE **hybridním** modelem podle reálného obvodu BBE Sonic Stomp / Lumin (3-pásmová sumační topologie: PROCESS/CONTOUR/MID) **plus** programově závislá dynamika (boost-when-loud) na PROCESS pásmu — aby zapnutí/vypnutí dělalo slyšitelnou změnu a model odpovídal měřením i schématu.
 
-**Proč:** Měřením jsme prokázali, že statické BBE pracuje korektně (+5 dB shelvy), ale je nedramatické: dva statické EQ shelvy postrádají (1) **programově závislou dynamiku HF** a (2) **fázové/group-delay zarovnání**, což jsou dvě věci, které dělají charakter pravého BBE Sonic Maximizeru.
-
-**Reference (web research):**
-- Naganov 282i měření: pásma dělená 150/1200 Hz; group delay ~2,5 ms low / ~0,5 ms mid / 0 high; HF shelf ~5 kHz (max +12 dB) **dynamický dle vstupní úrovně** (boost klesá při tichu); bass contour ~150 Hz (max +12 dB) **konstantní**.
-- Naganov/melp242 802 měření: HF boost = **bump ~4 kHz** (spíš peak než nekonečný shelf), výrazný **rolloff po 10 kHz**; „compressor-like" dynamika (při tichu HF boost mizí); **level-delta @ 6 kHz ≈ 4 dB** mezi nízkou a vysokou úrovní. (802 „Processing" na minimu i řeže HF −6 dB — varianta staršího modelu, mimo náš rozsah; děláme boost-only.)
-- DOA 482i obvod: fázové zarovnání **all-pass** (~700 Hz) → spojitý group delay (delší pro nízké); HF boost shora omezený ~10 kHz; „dynamic program-driven restoration".
-- GroupDIY / AionFX Lumin (reverse-engineering proprietárního NJM2150AD/NJM2153): band split = **state-variable filter** (LP/BP/HP → mix); HF dynamika = **VCA řízený PEAK detektorem** (rychlý attack, compressor-like). → náš `out = dry + scale·(wet−dry)` s peak-envelope `scale` = funkční ekvivalent VCA-by-peak-detector. SVF je autentický split; náš all-pass-na-fázi + HF blend je zjednodušení se stejným měřitelným výsledkem (arbituje validační harness).
-- **Syntéza:** HF boost = peak/shelf se středem **~4–5 kHz**, omezený shora **~10 kHz**; dynamický rozsah (level-delta) **řádu ~4 dB+** v HF; bass konstantní; fáze all-pass.
-
----
+## Reference (web + schéma)
+- **AionFX Lumin / BBE Sonic Stomp schéma** (uživatelem dodané): 3× TL072, 3 ovladače **PROCESS / CONTOUR / MID** (50kB), sumační mix. HIGH pásmo (IC2A): caps 3n3/1n5 @ 22k → rohy ≈ **2,2 / 4,8 kHz** (HIFREQ switch). LOW pásmo (IC3A): caps 47n/22n @ 15k/10k → ≈ **226/339/482 Hz** (LOFREQ switch). Výstup R17 56k + C6 100p. **Statická** verze (bez VCA).
+- Naganov 282i/802: HF boost ~4–5 kHz dynamický dle úrovně; rolloff po ~10 kHz; bass ~150 Hz konstantní; group delay ~2,5 ms low / ~0,5 ms mid / 0 high; level-delta @ 6 kHz ≈ 4 dB.
+- DOA 482i + GroupDIY: state-variable split (LP/BP/HP) + mix; HF dynamika = VCA řízený **peak detektorem** (rackmount, čip NJM2150AD).
 
 ## Rozhodnutí (brainstorming)
-- Implementovat **HF dynamiku + fázové zarovnání**.
-- HF zákon = **autentický „boost-when-loud"**: HF boost škálován broadband level-monitorem vstupu (víc když silný signál, míň/nic v tichu).
-- Fázové zarovnání = **all-pass kaskáda (~700 Hz)** (dle obvodu; bez delay bufferů), vyladěná na ~2,5/0,5/0 ms.
-- HF boost = pásmo **~5–10 kHz** (ne nekonečný shelf).
-- Bass contour = **konstantní** low-shelf ~150 Hz.
-- Parametry GUI beze změny: `DEFINITION` (0..12 dB) = max HF, `BASS` rozšířit **0..10 → 0..12 dB**. Persistence klíče `bbe_definition`/`bbe_bass` beze změny (žádná migrace).
+- **Hybrid:** 3-pásmová topologie + hodnoty ze schématu **+** dynamika boost-when-loud na PROCESS (HIGH) pásmu.
+- **3 parametry:** `PROCESS` (HIGH, 0..12 dB, **dynamický**), `CONTOUR` (LOW, 0..12 dB, konstantní), `MID` (−6..+6 dB, konstantní, default 0).
+- Dynamika = **peak** level-monitor vstupu (rychlý attack, compressor-like) škáluje PROCESS pásmo: víc boostu když silný signál, míň/nic v tichu.
+- HF pásmo shora omezené ~10 kHz (rolloff dle měření).
 - Zachovat `DspStage` rozhraní + `enabled` gate.
 
-## Architektura (signal path, per blok, alloc-free)
+## Architektura (per blok, alloc-free)
 
 ```
-input ─┬─ [broadband level monitor]  (peak/RMS env, attack ~5ms / release ~80ms) → scale∈[0,1]
+input ─┬─ [broadband PEAK level monitor] (attack ~5ms / release ~80ms) → scale∈[0,1]
        │
-       └→ [all-pass kaskáda ~700 Hz]      (fázové/group-delay zarovnání, vždy on)
-          → [bass low-shelf ~150 Hz, +BASS dB konstantní]
-          → [HF dynamický boost]:  wet = peak/shelf(~5–10 kHz, +DEFINITION dB)(signal)
-                                    out = signal + scale·(wet − signal)
-          → out
+       └→ 3-pásmový split (crossover):
+            LOW  (< ~250 Hz)        → × CONTOUR_gain (konstantní)        → delay ~2,5 ms
+            MID  (~250 Hz–3 kHz)    → × MID_gain     (konstantní)        → delay ~0,5 ms
+            HIGH (> ~3 kHz, cut ~10 kHz) → × PROCESS_gain × scale (DYNAMICKÝ) → delay 0
+          → sum(LOW,MID,HIGH) → out
 ```
 
 **Komponenty:**
-1. **Level monitor** — broadband **PEAK** detektor vstupu (max(|L|,|R|) → smoothed; rychlý attack ~5 ms, release ~80 ms, „compressor-like" jako VCA peak-detektor v reálném obvodu). Mapuje na `scale∈[0,1]` přes práh/křivku (`scale = smoothstep(env, lo, hi)`; konstanty laděné). Linkovaný (sdílený pro L i R → stabilní stereo obraz). Pozn.: detektor je broadband (dle Naganova „overall input level"); VCA-ekvivalent (`scale`) působí na HF blend.
-2. **All-pass align** — kaskáda 1.–2. řádu all-pass biquadů kolem ~700 Hz; cíl: group delay ~2,5 ms @ low, ~0,5 ms @ mid, ~0 @ high. Počet/řád sekcí + f0 vyladit na Naganovovu křivku (validace níže). Per kanál (stavy v `prepare`).
-3. **Bass contour** — `rbj_low_shelf(~150 Hz, BASS dB)`, konstantní (nezávislé na úrovni). Per kanál.
-4. **HF dynamický boost** — `wet` = signál po HF boost filtru na **plném** `DEFINITION` zisku; výstup `out = dry + scale·(wet−dry)` (per-sample smoothed scale → boost-when-loud, bez zipperu). HF boost filtr = **peak/bell se středem ~4–5 kHz** (Q tak, aby pásmo ~3–10 kHz), případně high-shelf ~5 kHz + 1-pól LP ~10–12 kHz pro horní mez (rolloff po 10 kHz dle měření). Přesný tvar/střed vyladit dle Naganova. Per kanál. Cíl: level-delta v HF (nízká vs vysoká úroveň) **alespoň ~3–4 dB** (síla dynamiky dle 802).
+1. **3-pásmový split** — crossovery ~**250 Hz** (low/mid) a ~**3 kHz** (mid/high), Linkwitz-Riley 2. řádu (nebo SVF LP/BP/HP). HIGH navíc 1-pól LP ~**10–12 kHz** (rolloff dle měření). Per kanál.
+2. **Per-pásmové zisky:** `LOW × 10^(CONTOUR/20)`, `MID × 10^(MID/20)`, `HIGH × 10^(PROCESS/20) × scale`. Zisk 1.0 (0 dB) = pásmo prochází neutrálně → součet ≈ originál (transparentní při všech 0).
+3. **Dynamika HIGH (boost-when-loud):** broadband **peak** detektor vstupu → smoothed env → `scale∈[0,1]` (`scale = smoothstep(env, lo, hi)`). HIGH zisk se škáluje `scale` per-sample (smoothed, bez zipperu). Silný signál → plný PROCESS boost; ticho → boost mizí (šetří šum). Linkovaný detektor (max L/R) → stabilní stereo.
+4. **Fázové/group-delay zarovnání:** per-pásmové zpoždění **LOW ~2,5 ms / MID ~0,5 ms / HIGH 0** (integer-sample delay linky, alokované v `prepare`). Přímo reprodukuje Naganovovu naměřenou group-delay křivku. (Pozn.: alternativa all-pass ~700 Hz — ale s adoptovaným 3-pásmovým splitem je per-pásmové zpoždění přesnější a přímočařejší; finální realizaci potvrdí validační harness.)
 
-**RT:** všechny biquad/all-pass stavy + smoothing stav alokované/nulované v `prepare`; žádné alokace v `process`. `enabled=false` → čistý bypass (return).
+**RT:** všechny crossover/filtr stavy, delay buffery (max ~2,5 ms ≈ 120 framů @48k) a smoothing stav alokované/nulované v `prepare`; `process` bez alokací. `enabled=false` → čistý bypass.
 
 ## Parametry / GUI / persistence
-- `kParams`: `{"definition","DEFINITION",0..12,def 0}`, `{"bass","BASS",0..12,def 0}` (bump max bass na 12). `paramCount()=2`. Persistence v `state.json` přes `enhancer_definition`/`enhancer_bass`/`enhancer_enabled` (migrace ze starých `bbe_*`).
-- Vnitřní konstanty (all-pass f0, level prahy, attack/release, HF horní cut) jsou neexponované konstanty v `.cpp` (laditelné).
+- `Enhancer::paramCount()=3`, `kParams`:
+  - `{"process","PROCESS", 0..12 dB, def 0}` (HIGH, dynamický)
+  - `{"contour","CONTOUR", 0..12 dB, def 0}` (LOW, konstantní)
+  - `{"mid","MID", -6..+6 dB, def 0}` (MID, konstantní)
+- `name()="ENHANCER"`, `hasEnable()=true`. GUI config stránka vykreslí 3 slidery + ON/OFF (generický `renderParamPage`).
+- **Persistence (`GuiState`):** `enhancer_enabled` (bool), `enhancer_process` (float dB), `enhancer_contour` (float dB), `enhancer_mid` (float dB). Save zapíše `enhancer_*`. Load čte `enhancer_*`; **migrace:** chybí-li, čte staré `bbe_enabled`→enabled, `bbe_definition`→process, `bbe_bass`→contour (mid default 0). `app_context.cpp` mapuje state → stage settery; `main.cpp` debounce watched fields.
+- Vnitřní konstanty (crossover freq, delay ms, peak attack/release, scale prahy, HF horní cut) = neexponované konstanty v `.cpp`.
 
-## Validační harness (nahradí `tests/test_bbe_measure.cpp`)
-Cíl: objektivně porovnat naši odezvu s Naganovem.
-1. **Magnitudový sweep** — log-spaced sinusy 20 Hz–20 kHz, ustálený RMS → `gain_dB(freq)`. Měřeno při **dvou vstupních úrovních** (nízká ~−40 dBFS, vysoká ~−6 dBFS) → dvě křivky.
-2. **Group delay** — impulz → výstup → FFT → unwrap fáze → `−dφ/dω` → `group_delay_ms(freq)`. (Jednoduchá DFT na log mřížce stačí; nebo měření zpoždění band-limited pulzů.)
-3. **CSV výstup** `freq, gain_db_low, gain_db_high, group_delay_ms` → uživatel overlayuje na Naganovovy grafy (gnuplot/sheet).
-4. **doctest asserty** na cílové charakteristiky (s tolerancí):
-   - bypass (enabled=false) → gain ≈ 0 dB napříč, group delay ≈ 0.
-   - bass shelf: gain @ 60 Hz roste s `BASS`, corner ~150 Hz; **nezávislé na úrovni** (low/high křivka stejná v bассu).
-   - HF: gain @ ~4–6 kHz roste s `DEFINITION` a **závisí na úrovni** (high-level křivka > low-level v HF) — autentická dynamika. Konkrétní cíl: level-delta @ ~6 kHz **≥ ~3 dB** (dle 802 ~4 dB).
-   - HF horní mez: boost @ >12 kHz výrazně omezený / rolloff po ~10 kHz (ne plný shelf donekonečna).
-   - group delay: monotónně klesá s frekvencí, ~low/mid/high ≈ Naganov ±tolerance; stabilita (žádné NaN/blow-up).
+## Validační harness (nahradí `tests/test_bbe_measure.cpp` → `test_enhancer_response.cpp`)
+1. **Magnitudový sweep** 20 Hz–20 kHz (ustálený RMS) → `gain_dB(freq)`, při **dvou úrovních** (nízká ~−40 dBFS, vysoká ~−6 dBFS) → dvě křivky.
+2. **Group delay** z impulzní odezvy (FFT → unwrap → `−dφ/dω`).
+3. **CSV** `freq, gain_db_low, gain_db_high, group_delay_ms` → overlay na Naganovovy grafy.
+4. **doctest asserty** (tolerance):
+   - bypass (enabled=false) → gain ≈ 0 dB, group delay ≈ 0.
+   - CONTOUR: gain @ 100 Hz roste s CONTOUR, **nezávislé na úrovni**; corner ~250 Hz.
+   - PROCESS: gain @ ~4–6 kHz roste s PROCESS a **závisí na úrovni** (high-level > low-level; delta @ ~6 kHz ≥ ~3 dB) — autentická dynamika.
+   - MID: gain @ ~1 kHz reaguje na MID (±).
+   - HF horní mez: boost @ >12 kHz výrazně omezený (rolloff po ~10 kHz).
+   - group delay: ~2,5/0,5/0 ms napříč pásmy ±tolerance; stabilita (žádné NaN/blow-up).
 
-**Limit:** Naganov měřil analogový hardware → ověřujeme **charakteristickou shodu** (polohy rohů, dB úrovně, ms zpoždění, level-závislost), ne bit-exact křivku.
+**Limit:** reference = analog HW → ověřujeme **charakteristickou shodu** (rohy, dB, ms, level-závislost), ne bit-exact.
 
 ## Soubory (vč. rename BBE → Enhancer)
-- **Create/Rename:** `engine/dsp/bbe.{h,cpp}` → `engine/dsp/enhancer.{h,cpp}`; třída `BBE` → `Enhancer`; `name()` vrací `"ENHANCER"`; nová dynamická implementace; zachovat `DspStage` API.
-- **Modify:** `engine/dsp/dsp_chain.h` (member `bbe_` → `enhancer_`, include, komentář „AGC → ENHANCER → Limiter", stage(1)); root `CMakeLists.txt` (`bbe.cpp` → `enhancer.cpp` v `ithaca_core`).
-- **Možná přidat:** `engine/dsp/dsp_math.h` — all-pass koeficient helper (`rbj_allpass(fc, q, sr)`) a/nebo smoothstep, pokud chybí.
-- **Persistence (`app/gui/persistence.{h,cpp}`):** `GuiState` pole `bbe_enabled/bbe_definition/bbe_bass` → `enhancer_enabled/enhancer_definition/enhancer_bass`; save zapíše `enhancer_*`; load čte `enhancer_*`, a když chybí, **defensivně přečte staré `bbe_*`** (migrace vyladěných hodnot). `app/gui/app_context.cpp` (mapování state → stage), `app/gui/main.cpp` (debounce watched fields).
-- **GUI label:** „ENHANCER" se zobrazí přes `name()` v config panelu + param page (žádný extra kód; ověřit, že nikde není natvrdo „BBE").
-- **Rewrite test:** `tests/test_bbe_measure.cpp` → `tests/test_enhancer_response.cpp` (sweep + group delay + CSV + asserty); registrace v `tests/CMakeLists.txt`.
-- **Docs:** `docs/reference/G-dsp.md` + `H-gui.md` (BBE → Enhancer, nová topologie), průběžně.
+- **Create/Rename:** `engine/dsp/bbe.{h,cpp}` → `engine/dsp/enhancer.{h,cpp}`; třída `BBE`→`Enhancer`; `name()="ENHANCER"`; nová hybridní implementace; `DspStage` API.
+- **Modify:** `engine/dsp/dsp_chain.h` (member `bbe_`→`enhancer_`, include, komentář „AGC → ENHANCER → Limiter"); root `CMakeLists.txt` (`bbe.cpp`→`enhancer.cpp`).
+- **Možná přidat:** `engine/dsp/dsp_math.h` — `smoothstep`, crossover (LR) helper, pokud chybí (jinak složit z `rbj_*` / biquad).
+- **Persistence (`app/gui/persistence.{h,cpp}`):** pole `bbe_*` → `enhancer_enabled/process/contour/mid`; save `enhancer_*`; load + migrace z `bbe_*`. `app/gui/app_context.cpp` (mapování 3 paramů na `enhancer.set(0/1/2,…)` + setEnabled), `app/gui/main.cpp` (debounce: nahradit `bbe_*` za `enhancer_*` × 4 pole).
+- **GUI label:** „ENHANCER" přes `name()` (ověřit, že nikde natvrdo „BBE").
+- **Rewrite test:** `tests/test_bbe_measure.cpp` → `tests/test_enhancer_response.cpp` (+ registrace v `tests/CMakeLists.txt`).
+- **Docs:** `docs/reference/G-dsp.md` + `H-gui.md` (BBE → Enhancer, hybridní 3-pásmová topologie).
 
 ## Edge cases
-- Velmi tichý vstup → scale→0 → HF boost ≈ 0 (žádné zesílení šumu); bass + all-pass stále aktivní (konstantní).
-- `DEFINITION=0` / `BASS=0` → příslušná složka neutrální; all-pass stále zarovnává fázi (jemné). Pozn.: i s param=0 bude enabled BBE měnit fázi (group delay) — to je správně (alignment je vždy on), ale magnitudově ~plochá → toggle při param=0 bude slyšet jen jako fázový/transientní rozdíl. Akceptováno.
-- Změna SR (`prepare`) → přepočet všech koeficientů + delay/all-pass dle nového sr.
-- Mono kompatibilita: linkovaný level monitor → bez stereo image shiftu.
+- Velmi tichý vstup → scale→0 → PROCESS (HIGH) boost ≈ 0 (žádné zesílení šumu); CONTOUR/MID konstantní.
+- Všechny parametry 0 (PROCESS=CONTOUR=MID=0 dB) → pásma procházejí na 0 dB → součet ≈ originál; **ale per-pásmové delaye jsou stále aktivní** → enabled Enhancer i s param=0 dělá fázové/group-delay zarovnání (jemné), to je správně. Toggle při param=0 = fázový rozdíl.
+- `MID` je ±: default 0 = bez změny středů; +/− boost/cut.
+- Změna SR (`prepare`) → přepočet crossover/filtr koeficientů + delay framů dle sr.
+- Mono kompat: linkovaný peak detektor → bez stereo image shiftu.
 
 ## Mimo rozsah
-- Subharmonic synth / „Lo Contour" rozšíření nad rámec bass shelfu.
-- Konfigurovatelné all-pass f0 / prahy v GUI (interní konstanty).
-- Lineárně-fázová varianta (BBE je záměrně minimum-phase/all-pass).
-- Oversampling.
+- HIFREQ/LOFREQ přepínače rohů ze schématu (volíme fixní rohy; ne GUI switch).
+- Statická-only verze (jdeme hybrid s dynamikou).
+- Subharmonics / oversampling / lineárně-fázová varianta.
+- Konfigurovatelné delay/crossover/prahy v GUI (interní konstanty).
