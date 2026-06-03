@@ -82,6 +82,7 @@ bool AppContext::initFromState(const GuiState& s) {
         cv.set(0, state.convolver_mix);
         cv.set(1, state.convolver_decay);
         cv.set(2, state.convolver_tone);
+        cv.set(3, state.convolver_size);
         if (state.convolver_choice > 0) cv.selectChoice(state.convolver_choice);
         cv.setEnabled(state.convolver_enabled);
         agc.set(0, state.agc_target); agc.set(1, state.agc_release_ms); agc.set(2, state.agc_floor);

@@ -38,14 +38,16 @@ TEST_CASE("Convolver: MIX=0 dry; choice list (modal presety)") {
     CHECK_NOTHROW(c.selectChoice(1));
     CHECK(c.irLength() > 0);
 }
-TEST_CASE("Convolver: paramCount 3 (MIX/DECAY/TONE) + defaults") {
+TEST_CASE("Convolver: paramCount 4 (MIX/DECAY/TONE/SIZE) + defaults") {
     Convolver c; c.prepare(48000.f, 256);
-    CHECK(c.paramCount() == 3);
+    CHECK(c.paramCount() == 4);
     CHECK(c.get(0) == doctest::Approx(0.15f));   // MIX default
     CHECK(c.get(1) == doctest::Approx(0.50f));   // DECAY
     CHECK(c.get(2) == doctest::Approx(0.60f));   // TONE
+    CHECK(c.get(3) == doctest::Approx(0.50f));   // SIZE
     CHECK(std::string(c.param(1).label) == "DECAY");
     CHECK(std::string(c.param(2).label) == "TONE");
+    CHECK(std::string(c.param(3).label) == "SIZE");
 }
 TEST_CASE("Convolver: nizsi DECAY zkrati IR energii (pozdni cast)") {
     auto tailEnergy = [](Convolver& c){
@@ -66,4 +68,18 @@ TEST_CASE("Convolver: nizsi TONE = tmavsi IR (mensi HF energie)") {
     Convolver br; br.prepare(48000.f, 8192); br.setEnabled(true); br.set(0,1.f); br.set(2,1.0f);  // bright
     Convolver dk; dk.prepare(48000.f, 8192); dk.setEnabled(true); dk.set(0,1.f); dk.set(2,0.0f);  // dark
     CHECK(hfE(dk) < hfE(br));
+}
+TEST_CASE("Convolver: SIZE posouva telo (vetsi → nizsi spektralni teziste)") {
+    CHECK([]{ Convolver c; c.prepare(48000.f,8192); return c.paramCount(); }() == 4);
+    auto centroid = [](Convolver& c){
+        std::vector<float> L(8192,0.f), R(8192,0.f); L[0]=1.f; R[0]=1.f;
+        c.process(L.data(), R.data(), 8192);
+        double num=0, den=0;
+        for (float f=100.f; f<=8000.f; f+=100.f){ double re=0,im=0,w=2.0*M_PI*f/48000.0;
+            for(int i=0;i<8192;++i){re+=L[(size_t)i]*std::cos(w*i);im+=L[(size_t)i]*std::sin(w*i);}
+            double mag=std::sqrt(re*re+im*im); num+=f*mag; den+=mag; }
+        return den>0? num/den : 0.0; };
+    Convolver big;   big.prepare(48000.f,8192);   big.setEnabled(true);   big.set(0,1.f);   big.set(3,1.0f);  // velke telo
+    Convolver small; small.prepare(48000.f,8192); small.setEnabled(true); small.set(0,1.f); small.set(3,0.0f); // male telo
+    CHECK(centroid(big) < centroid(small));   // vetsi telo → nizsi teziste
 }

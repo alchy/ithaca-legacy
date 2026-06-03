@@ -34,6 +34,7 @@ struct GuiState {
     int    convolver_choice  = 0;
     float  convolver_decay   = 0.5f;
     float  convolver_tone    = 0.6f;
+    float  convolver_size    = 0.5f;
     int   config_page = 0;         // 0 = VOICE, 1 = AGC, 2 = ENHANCER, 3 = LIMITER
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)

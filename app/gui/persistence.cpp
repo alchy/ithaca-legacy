@@ -138,6 +138,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.convolver_choice  = readI("convolver_choice", s.convolver_choice);
         s.convolver_decay = readF("convolver_decay", s.convolver_decay);
         s.convolver_tone  = readF("convolver_tone",  s.convolver_tone);
+        s.convolver_size  = readF("convolver_size",  s.convolver_size);
         s.resonance_enabled  = readB("resonance_enabled", s.resonance_enabled);
         s.resonance_gain_db  = readF("resonance_gain_db", s.resonance_gain_db);
         s.resonance_layer_db = readF("resonance_layer_db", s.resonance_layer_db);
@@ -194,6 +195,7 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"convolver_choice\": "  << s.convolver_choice  << ",\n";
         f << "  \"convolver_decay\": " << s.convolver_decay << ",\n";
         f << "  \"convolver_tone\": "  << s.convolver_tone  << ",\n";
+        f << "  \"convolver_size\": "  << s.convolver_size  << ",\n";
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate    << "\n";
         f << "}\n";

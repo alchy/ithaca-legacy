@@ -6,10 +6,11 @@
 
 namespace ithaca::dsp {
 
-const Param Convolver::kParams[3] = {
+const Param Convolver::kParams[4] = {
     {"mix",   "MIX",   0.f, 1.f, 0.15f, "%.2f", false},
     {"decay", "DECAY", 0.f, 1.f, 0.50f, "%.2f", false},
     {"tone",  "TONE",  0.f, 1.f, 0.60f, "%.2f", false},
+    {"size",  "SIZE",  0.f, 1.f, 0.50f, "%.2f", false},
 };
 
 void Convolver::prepare(float sr, int /*max_block*/) {
@@ -87,7 +88,25 @@ void Convolver::rebuildIr() {
     if (base_ir_.empty()) return;
     const float decay = decay_.load(std::memory_order_relaxed);
     const float tone  = tone_.load(std::memory_order_relaxed);
-    std::vector<float> tmp = base_ir_;
+    // SIZE: time-resample IR (vetsi telo → roztazeni = nizsi rezonance + delsi).
+    // size=0.5 → scale 1.0 neutral; 0.6 (male) .. 1.4 (velke).
+    const float size = size_.load(std::memory_order_relaxed);
+    const float scale = 0.6f + size * 0.8f;
+    std::vector<float> tmp;
+    {
+        int nl = (int)((float)base_ir_.size() * scale);
+        if (nl < 2) nl = 2;
+        if (nl > kMaxIr) nl = kMaxIr;
+        tmp.resize((size_t)nl);
+        // linearni interpolace: tmp[i] = base_ir_[i/scale]
+        for (int i = 0; i < nl; ++i) {
+            float sp = (float)i / scale;
+            int idx = (int)sp; float fr = sp - (float)idx;
+            if (idx + 1 < (int)base_ir_.size()) tmp[(size_t)i] = base_ir_[(size_t)idx]*(1.f-fr) + base_ir_[(size_t)(idx+1)]*fr;
+            else if (idx < (int)base_ir_.size()) tmp[(size_t)i] = base_ir_[(size_t)idx]*(1.f-fr);
+            else tmp[(size_t)i] = 0.f;
+        }
+    }
     // DECAY: extra exponencialni okno (nizsi = kratsi/subtilnejsi); decay=1 → beze zmeny
     const float k = (1.f - decay) * (1.f / (0.01f * sr_));
     if (k > 0.f) for (size_t t = 0; t < tmp.size(); ++t) tmp[t] *= std::exp(-k * (float)t);

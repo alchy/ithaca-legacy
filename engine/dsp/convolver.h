@@ -17,12 +17,13 @@ public:
     void prepare(float sr, int max_block) override;
     void reset() override;
 
-    int paramCount() const override { return 3; }
+    int paramCount() const override { return 4; }
     const Param& param(int i) const override { return kParams[i]; }
     float get(int i) const override {
         switch (i) {
             case 1:  return decay_.load(std::memory_order_relaxed);
             case 2:  return tone_.load(std::memory_order_relaxed);
+            case 3:  return size_.load(std::memory_order_relaxed);
             default: return mix_.load(std::memory_order_relaxed);
         }
     }
@@ -30,6 +31,7 @@ public:
         v = (v < 0.f) ? 0.f : (v > 1.f ? 1.f : v);
         if (i == 1)      { decay_.store(v, std::memory_order_relaxed); rebuildIr(); }
         else if (i == 2) { tone_.store(v, std::memory_order_relaxed);  rebuildIr(); }
+        else if (i == 3) { size_.store(v, std::memory_order_relaxed);  rebuildIr(); }
         else             { mix_.store(v, std::memory_order_relaxed); }
     }
     bool hasEnable() const override { return true; }
@@ -50,10 +52,11 @@ public:
 
 private:
     void rebuildIr();
-    static const Param kParams[3];
+    static const Param kParams[4];
     std::atomic<float> mix_{0.15f};
     std::atomic<float> decay_{0.5f};
     std::atomic<float> tone_{0.6f};
+    std::atomic<float> size_{0.5f};
     std::vector<float> base_ir_;
     std::atomic<bool>  enabled_{false};
     float sr_ = 48000.f;
