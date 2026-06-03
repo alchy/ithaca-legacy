@@ -25,6 +25,7 @@ struct GuiState {
     float       release_ms          = 200.f;
     float       excite_decay_ms     = 5000.f;
     int         max_resonance_voices = 32;
+    int         resonance_window_ms  = 12000; // RAM cache rezonance [ms]; jen JSON (ne GUI)
     // -- DSP chain (defaulty = zadna zmena chovani: vsechny stage vyplé) --
     bool  agc_enabled = false;     float agc_target = 0.15f;  float agc_release_ms = 200.f;  float agc_floor = 0.05f;
     bool  enhancer_enabled = false; float enhancer_process = 0.f; float enhancer_contour = 0.f; float enhancer_mid = 0.f;

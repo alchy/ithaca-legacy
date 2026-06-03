@@ -124,7 +124,7 @@ Krátký audio gap při přepnutí je očekávaný (uživatelská akce). Hodnoty
 - `VoicePool::setStreamEngine(StreamEngine*)` předá ukazatel na `stream_main_` všem `Voice` instancím.
 
 **Rezonance (`ResonanceVoice` / `ResonanceEngine`) — kdo žádá refill:**
-- POZN. (fáze 8): rezonance hraje primárně z **RAM cache** (`preload_resonance`, 6 s, jen cílová vrstva — viz oblast F). `stream_resonance_` se použije jen jako fallback: (a) když rezonance přežije 6 s okno, (b) ve **stream módu** (`ResonanceVoice` `use_cache=false`) během background přestavby cache po změně „Resonance Layer" slideru. Za normálu tedy `stream_resonance_` většinou nemá práci → mizí dřívější underruny.
+- POZN. (fáze 8): rezonance hraje primárně z **RAM cache** (`preload_resonance`, 12 s, jen cílová vrstva — viz oblast F). `stream_resonance_` se použije jen jako fallback: (a) když rezonance přežije 12 s okno, (b) ve **stream módu** (`ResonanceVoice` `use_cache=false`) během background přestavby cache po změně „Resonance Layer" slideru. Za normálu tedy `stream_resonance_` většinou nemá práci → mizí dřívější underruny.
 - `ResonanceVoice::start` → `stream_resonance_->acquireRing()` + `stream_resonance_->requestRead(...)`.
 - `ResonanceVoice::processBlock` → analogický refill threshold check + `requestRead`.
 - `ResonanceVoice::processBlock` → `stream_resonance_->noteUnderrun()` při underrunu.

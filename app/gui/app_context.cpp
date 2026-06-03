@@ -64,6 +64,7 @@ bool AppContext::initFromState(const GuiState& s) {
     cfg.release_ms           = state.release_ms;
     cfg.excite_decay_ms      = state.excite_decay_ms;
     cfg.max_resonance_voices = state.max_resonance_voices;
+    cfg.resonance_window_ms  = state.resonance_window_ms;  // jen JSON, ne GUI
     if (!engine.init(cfg)) {
         log::Logger::default_().log("gui", log::Severity::Error,
             "Engine init selhal");

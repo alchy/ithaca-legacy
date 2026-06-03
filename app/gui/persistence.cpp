@@ -142,6 +142,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.resonance_enabled  = readB("resonance_enabled", s.resonance_enabled);
         s.resonance_gain_db  = readF("resonance_gain_db", s.resonance_gain_db);
         s.resonance_layer_db = readF("resonance_layer_db", s.resonance_layer_db);
+        s.resonance_window_ms = readI("resonance_window_ms", s.resonance_window_ms);
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
         s.schema_version = 4;   // po nacteni vzdy ulozime jako v4
@@ -174,6 +175,7 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"release_ms\": "         << s.release_ms                 << ",\n";
         f << "  \"excite_decay_ms\": "    << s.excite_decay_ms            << ",\n";
         f << "  \"max_resonance_voices\": " << s.max_resonance_voices     << ",\n";
+        f << "  \"resonance_window_ms\": " << s.resonance_window_ms       << ",\n";
         f << "  \"window_x\": " << s.window_x << ",\n";
         f << "  \"window_y\": " << s.window_y << ",\n";
         f << "  \"window_w\": " << s.window_w << ",\n";
