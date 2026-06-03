@@ -63,7 +63,20 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
                   ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal());
     std::snprintf(gbuf, sizeof(gbuf), "%d/%d",
                   ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
-    std::snprintf(dbuf, sizeof(dbuf), "%.0f%%", ctx.engine.dspLoadPeak() * 100.f);
+    // DSP LOAD: sample-and-hold okno 400 ms. Engine uz dela peak-hold s decay,
+    // ale cteni kazdy frame (60 fps) → cislo na liste necitelne blika. Drzime
+    // max za poslednich 400 ms a prekreslujeme jen jednou za okno.
+    constexpr float kLoadWindowS = 0.4f;
+    static float load_shown = 0.f, load_winmax = 0.f, load_t0 = 0.f;
+    const float cur_load = ctx.engine.dspLoadPeak();
+    if (cur_load > load_winmax) load_winmax = cur_load;
+    const float now_s = (float)ImGui::GetTime();
+    if (now_s - load_t0 >= kLoadWindowS) {
+        load_shown = load_winmax;
+        load_winmax = 0.f;
+        load_t0 = now_s;
+    }
+    std::snprintf(dbuf, sizeof(dbuf), "%.0f%%", load_shown * 100.f);
     float fifth = center_w / 5.f;
     ImGui::BeginChild("##t_v", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("VOICES", vbuf, Colors::gold, 0.f, pad);
