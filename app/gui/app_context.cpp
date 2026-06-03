@@ -75,7 +75,16 @@ bool AppContext::initFromState(const GuiState& s) {
     // LIMITER[threshold_db,release_ms]).
     {
         auto& ch = engine.dspChain();
-        auto& agc = ch.stage(0); auto& enh = ch.stage(1); auto& lim = ch.stage(2);
+        auto& cv  = ch.stage(0);   // CONVOLVER
+        auto& agc = ch.stage(1);   // AGC
+        auto& enh = ch.stage(2);   // ENHANCER
+        auto& lim = ch.stage(3);   // LIMITER
+        cv.set(0, state.convolver_mix);
+        cv.set(1, state.convolver_decay);
+        cv.set(2, state.convolver_tone);
+        cv.set(3, state.convolver_size);
+        if (state.convolver_choice > 0) cv.selectChoice(state.convolver_choice);
+        cv.setEnabled(state.convolver_enabled);
         agc.set(0, state.agc_target); agc.set(1, state.agc_release_ms); agc.set(2, state.agc_floor);
         agc.setEnabled(state.agc_enabled);
         enh.set(0, state.enhancer_process); enh.set(1, state.enhancer_contour); enh.set(2, state.enhancer_mid);

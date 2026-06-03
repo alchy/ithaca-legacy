@@ -159,25 +159,27 @@ TEST_CASE("AGC: disabled bypass + param round-trip") {
 
 TEST_CASE("DspChain: vsechny stage disabled = identita") {
     dsp::DspChain ch; ch.prepare(48000.f, 256);
-    CHECK(ch.stageCount()==3);
+    CHECK(ch.stageCount()==4);
     float L[4]={0.3f,-0.4f,0.5f,-0.6f}, R[4]={0.1f,0.2f,-0.2f,0.4f};
     float L0[4]; for(int i=0;i<4;++i) L0[i]=L[i];
     ch.process(L,R,4);
     for(int i=0;i<4;++i) CHECK(L[i]==L0[i]);
 }
 
-TEST_CASE("DspChain: poradi stage je AGC, ENHANCER, LIMITER") {
+TEST_CASE("DspChain: poradi stage je CONVOLVER, AGC, ENHANCER, LIMITER") {
     dsp::DspChain ch; ch.prepare(48000.f, 256);
-    CHECK(std::string(ch.stage(0).name())=="AGC");
-    CHECK(std::string(ch.stage(1).name())=="ENHANCER");
-    CHECK(std::string(ch.stage(2).name())=="LIMITER");
+    CHECK(ch.stageCount() == 4);
+    CHECK(std::string(ch.stage(0).name())=="CONVOLVER");
+    CHECK(std::string(ch.stage(1).name())=="AGC");
+    CHECK(std::string(ch.stage(2).name())=="ENHANCER");
+    CHECK(std::string(ch.stage(3).name())=="LIMITER");
 }
 
 TEST_CASE("DspChain: enabled limiter omezi spicku") {
     dsp::DspChain ch; ch.prepare(48000.f, 4800);
-    ch.stage(2).setEnabled(true);       // LIMITER
-    ch.stage(2).set(0, -12.f);          // threshold
-    ch.stage(2).set(1, 50.f);
+    ch.stage(3).setEnabled(true);       // LIMITER
+    ch.stage(3).set(0, -12.f);          // threshold
+    ch.stage(3).set(1, 50.f);
     float L[4800], R[4800];
     for(int i=0;i<4800;++i){ L[i]=0.9f; R[i]=0.9f; }
     ch.process(L,R,4800);
@@ -189,10 +191,10 @@ TEST_CASE("Engine vystavuje DSP chain se 3 stage") {
     ithaca::Engine eng;
     REQUIRE(eng.init(cfg));
     auto& ch = eng.dspChain();
-    CHECK(ch.stageCount() == 3);
-    CHECK(std::string(ch.stage(2).name()) == "LIMITER");
-    ch.stage(2).setEnabled(true);
-    CHECK(ch.stage(2).enabled());
+    CHECK(ch.stageCount() == 4);
+    CHECK(std::string(ch.stage(3).name()) == "LIMITER");
+    ch.stage(3).setEnabled(true);
+    CHECK(ch.stage(3).enabled());
 }
 
 TEST_CASE("Engine ma oddelene main + resonance stream pooly") {
