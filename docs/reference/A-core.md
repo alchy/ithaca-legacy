@@ -96,7 +96,9 @@ pod pedalem.
 
 Jde o centrální audio-RT funkci. Volá ji callback `AudioDevice` (~48 000/256 ≈ 187× za sekundu). Funkce musí být `noexcept` a nesmí alokovat ani zamykat mutex.
 
-**Krok 0 — bank reload guard:** Pokud `bank_loading_.load(acquire)` je `true`, oba buffery se vynulují (`memset`), peak metr se resetuje na 0 a funkce se okamžitě vrátí. Kontrakt výstupu je tak vždy platný (nulová data místo náhodného obsahu).
+**Krok 0a — denormal flush:** Jednou per audio thread (`thread_local` guard) se zavolá `enableFlushDenormals()` (`util/denormals.h`) — zapne FTZ/DAZ na FPU. Doznívající denormaly (release/decay/IIR stav) by jinak shazovaly CPU na pomalou cestu → spike → underrun. Cross-platform (x86 MXCSR / ARM FPCR), na neznámé arch no-op.
+
+**Krok 0b — bank reload guard:** Pokud `bank_loading_.load(acquire)` je `true`, oba buffery se vynulují (`memset`), peak metr se resetuje na 0 a funkce se okamžitě vrátí. Kontrakt výstupu je tak vždy platný (nulová data místo náhodného obsahu).
 
 **Krok 1 — drain MIDI fronty:** Iteruje `midi_q_.pop(e)` dokud jsou události. Note-on/off prochází přes `hold_` (`NoteHoldTracker`) — **cross-channel hold** (viz [B-events.md](B-events.md)): tlumítko/voice se uvolní teprve když pustí *poslední* kanál držící danou výšku, takže note-off jedné ruky nezhasne stejnou výšku držené druhou (Synthesia L=ch0/P=ch1, dříve výpadek C). Pořadí zpracování odpovídá spec 5.5.1:
 - `NoteOn (vel=0)` → MIDI konvence NoteOff: `hold_.noteOff(m, ch)`; **jen pokud byl poslední držitel** → `pedal_.noteOff(m)`, `pool_->noteOffWithPedal(...)`.

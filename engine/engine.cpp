@@ -4,6 +4,7 @@
 #include "sample/sample_store.h"
 #include "util/log.h"
 #include "util/sysinfo.h"
+#include "util/denormals.h"
 
 #include <algorithm>
 #include <chrono>
@@ -196,6 +197,11 @@ void Engine::sustainPedal(uint8_t cc) {
 }
 
 void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
+    // Denormal flush (FTZ/DAZ) per audio thread — jednou. Brani CPU spike z
+    // doznivajicich denormalu (release/decay/IIR) → underrun "z niceho".
+    static thread_local bool denorm_set = false;
+    if (!denorm_set) { enableFlushDenormals(); denorm_set = true; }
+
     if (!initialized_ || !pool_) return;
     // Bank reload v progressu? Vrat ticho — nesahej na bank_ (race s reloadBank
     // na non-RT threadu) a preskoc drain MIDI / voice render. Resetneme i peak
