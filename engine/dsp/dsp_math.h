@@ -1,6 +1,6 @@
 #pragma once
 // engine/dsp/dsp_math.h — sdilene DSP primitivy (stateless, inline, RT-safe).
-// Portovano z icr/engine/dsp/dsp_math.h. Pouziva BBE, Limiter, AGC.
+// Portovano z icr/engine/dsp/dsp_math.h. Pouziva Enhancer, Limiter, AGC.
 #include <cmath>
 #include <algorithm>
 
