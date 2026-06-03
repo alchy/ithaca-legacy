@@ -1,12 +1,12 @@
 #pragma once
 // engine/dsp/enhancer.h — Enhancer (BBE-style Sonic Maximizer) jako DspStage.
-// Hybrid: 3-pasmovy split (LOW/MID/HIGH) + per-pasmove group-delay zarovnani
-// + dynamicky boost-when-loud na HIGH (PROCESS) + jemny harmonicky exciter.
-// Viz spec 2026-06-03. Original piano enhancer (ne klon BBE).
+// Original piano enhancer (NE klon BBE). Parallel-boost model: pasma se PRICITAJI
+// jako boosty na dry (transparentni pri unity → zadny comb notch), fazove
+// zarovnani jemnym 1.-radovym all-passem (~700 Hz), dynamicky boost-when-loud na
+// HIGH (PROCESS) + jemny harmonicky exciter. Viz spec 2026-06-03.
 #include "dsp/dsp_stage.h"
 #include "dsp/dsp_math.h"
 #include <atomic>
-#include <vector>
 
 namespace ithaca::dsp {
 
@@ -36,25 +36,19 @@ private:
     std::atomic<bool>  enabled_{false};
     float sr_ = 48000.f;
 
+    // Band filtry (sdilene koef pres kanaly): LOW=LP250, MID=BP(HP250→LP3k),
+    // HIGH=HP3k→LPcap. hp_exc_ = exciter high-pass.
     BiquadCoeffs lp_lo_{}, hp_lo_{}, lp_mid_{}, hp_hi_{}, lp_cap_{}, hp_exc_{};
+    float ap_c_ = 0.f;   // 1.-radovy all-pass koef (fazove zarovnani)
 
     struct Chan {
         BiquadState s_lp_lo, s_hp_lo, s_lp_mid, s_hp_hi, s_lp_cap, s_hp_exc;
-        std::vector<float> dl_low, dl_mid;
-        int wl = 0, wm = 0;
+        float ap_x1 = 0.f, ap_y1 = 0.f;   // all-pass stav
     } ch_[2];
-    int   delay_low_n_ = 0, delay_mid_n_ = 0;
 
-    float env_ = 0.f, atk_ = 0.f, rel_ = 0.f;
+    float env_ = 0.f, atk_ = 0.f, rel_ = 0.f;   // broadband peak monitor (linkovany)
 
     void computeCoeffs_();
-    static float pushDelay_(std::vector<float>& dl, int& w, int n, float x) {
-        if (n <= 0) return x;
-        float y = dl[(size_t)w];
-        dl[(size_t)w] = x;
-        w = (w + 1) % n;
-        return y;
-    }
 };
 
 } // namespace ithaca::dsp

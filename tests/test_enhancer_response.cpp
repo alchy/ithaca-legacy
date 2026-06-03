@@ -23,6 +23,15 @@ TEST_CASE("Enhancer response: bypass / contour / dynamic process / exciter") {
     { Enhancer e; e.prepare(48000.f,512); e.setEnabled(false); e.set(0,12.f);
       CHECK(std::fabs(gainDb(e,5000.f,0.5f)) < 0.5f); }
 
+    // FLAT-AT-UNITY: enabled, vsechny parametry 0 → magnitudove ploche (all-pass
+    // nemeni magnitudu). Strazi regresi comb-notche ve stredech.
+    { Enhancer e; e.prepare(48000.f,512); e.setEnabled(true);  // process=contour=mid=0
+      for (float f : {120.f, 500.f, 1000.f, 2000.f, 5000.f}) {
+          e.reset(); float g = gainDb(e, f, 0.3f);
+          MESSAGE("unity @"<<f<<"Hz = "<<g<<" dB");
+          CHECK(std::fabs(g) < 1.5f);   // ploche ±1.5 dB (zadny notch/peak)
+      } }
+
     // CONTOUR: bass roste, ~NEzávislé na úrovni
     { Enhancer e; e.prepare(48000.f,512); e.setEnabled(true); e.set(1,12.f);
       float lo = gainDb(e,100.f,0.02f); e.reset();
