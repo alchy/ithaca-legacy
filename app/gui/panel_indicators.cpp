@@ -14,6 +14,16 @@ namespace ithaca::gui {
 namespace {
 float toDb(float lin) { return lin < 1e-6f ? -120.f : 20.f * std::log10(lin); }
 float dbTo01(float db) { float t=(db+60.f)/60.f; return t<0?0:(t>1?1:t); }
+
+// Sample-and-hold: drzi max za posledni okno (default 400 ms) a vraci ji,
+// prekreslena hodnota se meni jen jednou za okno. Bez toho ciselne indikatory
+// pri 60 fps necitelne blikaji. Stav drzi volajici (static instance na tile).
+struct Hold { float shown = 0.f, winmax = 0.f, t0 = 0.f; };
+float holdMax(Hold& s, float cur, float now_s, float win = 0.4f) {
+    if (cur > s.winmax) s.winmax = cur;
+    if (now_s - s.t0 >= win) { s.shown = s.winmax; s.winmax = 0.f; s.t0 = now_s; }
+    return s.shown;
+}
 } // namespace
 
 void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
@@ -57,26 +67,21 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     const bool overload = ctx.engine.overloadRecent(4000.f);
     const ImU32 ring_red = IM_COL32(0xd0, 0x5a, 0x4a, 255);
     char vbuf[8], rbuf[8], mbuf[16], gbuf[16], dbuf[8];
-    std::snprintf(vbuf, sizeof(vbuf), "%d", ctx.engine.activeVoices());
-    std::snprintf(rbuf, sizeof(rbuf), "%d", ctx.engine.resonanceVoices());
-    std::snprintf(mbuf, sizeof(mbuf), "%d/%d",
-                  ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal());
-    std::snprintf(gbuf, sizeof(gbuf), "%d/%d",
-                  ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
-    // DSP LOAD: sample-and-hold okno 400 ms. Engine uz dela peak-hold s decay,
-    // ale cteni kazdy frame (60 fps) → cislo na liste necitelne blika. Drzime
-    // max za poslednich 400 ms a prekreslujeme jen jednou za okno.
-    constexpr float kLoadWindowS = 0.4f;
-    static float load_shown = 0.f, load_winmax = 0.f, load_t0 = 0.f;
-    const float cur_load = ctx.engine.dspLoadPeak();
-    if (cur_load > load_winmax) load_winmax = cur_load;
+    // Vsechny ciselne dlazdice jedou pres sample-and-hold (max za 400ms okno),
+    // aby cisla pri 60 fps necitelne neblikalа. Lampy (event blik) a PEAK bary
+    // (spojity level metr s decay) zustavaji beze zmeny. now_s spolecny pro okno.
     const float now_s = (float)ImGui::GetTime();
-    if (now_s - load_t0 >= kLoadWindowS) {
-        load_shown = load_winmax;
-        load_winmax = 0.f;
-        load_t0 = now_s;
-    }
-    std::snprintf(dbuf, sizeof(dbuf), "%.0f%%", load_shown * 100.f);
+    static Hold h_v, h_r, h_mu, h_gu, h_load;
+    const int v_max  = (int)holdMax(h_v,  (float)ctx.engine.activeVoices(),    now_s);
+    const int r_max  = (int)holdMax(h_r,  (float)ctx.engine.resonanceVoices(), now_s);
+    const int mu_max = (int)holdMax(h_mu, (float)ctx.engine.mainRingsUsed(),   now_s);
+    const int gu_max = (int)holdMax(h_gu, (float)ctx.engine.resonanceRingsUsed(), now_s);
+    std::snprintf(vbuf, sizeof(vbuf), "%d", v_max);
+    std::snprintf(rbuf, sizeof(rbuf), "%d", r_max);
+    std::snprintf(mbuf, sizeof(mbuf), "%d/%d", mu_max, ctx.engine.mainRingsTotal());
+    std::snprintf(gbuf, sizeof(gbuf), "%d/%d", gu_max, ctx.engine.resonanceRingsTotal());
+    std::snprintf(dbuf, sizeof(dbuf), "%.0f%%",
+                  holdMax(h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
     float fifth = center_w / 5.f;
     ImGui::BeginChild("##t_v", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("VOICES", vbuf, Colors::gold, 0.f, pad);
