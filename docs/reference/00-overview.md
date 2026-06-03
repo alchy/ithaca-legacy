@@ -25,7 +25,7 @@ celého zdrojáku.
     2. VoicePool.processBlock      → součet hlavních hlasů  ┐
     3. ResonanceEngine.processBlock→ + sympatická rezonance ├─ čte z RAM head +
     4. × master_gain                                        │   streaming ringů
-    5. DspChain.process (AGC→BBE→Limiter)                   │   (stream workeři)
+    5. DspChain.process (CONVOLVER→AGC→ENHANCER→Limiter)    │   (stream workeři)
     6. peak metr + DSP load metr (atomic)                   ┘
        → interleave → AudioDevice → zvuk
 
@@ -38,12 +38,12 @@ celého zdrojáku.
 | # | Oblast | Dokument | Soubory (primárně) |
 |---|--------|----------|--------------------|
 | A | Core / scaffold | [A-core.md](A-core.md) | `engine/engine.{h,cpp}`, `util/log.{h,cpp}`, `util/version.h`, `app/cli/main.cpp`, `render/batch_renderer.{h,cpp}` |
-| B | Zpracování eventů | [B-events.md](B-events.md) | `midi/midi_input.{h,cpp}`, `midi/midi_queue.h`, `pedal/pedal_state.{h,cpp}` |
+| B | Zpracování eventů | [B-events.md](B-events.md) | `midi/midi_input.{h,cpp}`, `midi/midi_queue.h`, `midi/note_hold.h`, `pedal/pedal_state.{h,cpp}` |
 | C | Zpracování bufferu | [C-buffers.md](C-buffers.md) | `io/audio_device.{h,cpp}`, `stream/stream_engine.{h,cpp}` |
 | D | Polyfonie | [D-polyphony.md](D-polyphony.md) | `voice/voice.{h,cpp}`, `voice_pool.{h,cpp}`, `patch_manager.{h,cpp}` |
 | E | Rezonance | [E-resonance.md](E-resonance.md) | `resonance/resonance_engine.{h,cpp}`, `harmonic_proximity.{h,cpp}`, `voice/resonance_voice.{h,cpp}` |
 | F | Loader | [F-loader.md](F-loader.md) | `sample/bank_index.{h,cpp}`, `sample_loader.{h,cpp}`, `sample_store.{h,cpp}`, `sample_types.h`, `io/wav_reader.{h,cpp}`, `io/wav_writer.{h,cpp}` |
-| G | DSP | [G-dsp.md](G-dsp.md) | `dsp/dsp_stage.h`, `dsp_math.h`, `dsp_chain.{h,cpp}`, `agc.{h,cpp}`, `bbe.{h,cpp}`, `limiter.{h,cpp}` |
+| G | DSP | [G-dsp.md](G-dsp.md) | `dsp/dsp_stage.h`, `dsp_math.h`, `dsp_chain.{h,cpp}`, `convolver.{h,cpp}`, `ir_modal.{h,cpp}`, `ir_wav.{h,cpp}`, `agc.{h,cpp}`, `enhancer.{h,cpp}`, `limiter.{h,cpp}` |
 | H | GUI | [H-gui.md](H-gui.md) | `app/gui/main.cpp`, `app_context.{h,cpp}`, `persistence.{h,cpp}`, `log_subscriber.{h,cpp}`, `voice_page.h`, `theme.h`, `layout.h`, `widgets.h`, `panel_*.{h,cpp}` |
 | I | Multithreading | [I-multithreading.md](I-multithreading.md) | *cross-cutting* — vlákna + synchronizace napříč A–H |
 

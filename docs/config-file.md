@@ -3,8 +3,9 @@
 ## 1. Overview
 
 `state.json` is the persisted configuration for **ithaca-gui** (the F8 GUI front-end).
-It stores window geometry, the selected bank and MIDI port, voice parameters, the
-DSP-chain settings, the active CONFIG page, and the log level.
+It stores window geometry, the selected bank and MIDI port, voice/resonance
+parameters, the full DSP-chain settings (Convolver, AGC, Enhancer, Limiter), the
+active CONFIG page, the audio device settings, and the log level.
 
 The file is **auto-managed** by ithaca-gui — you normally never edit it by hand:
 
@@ -22,7 +23,8 @@ Writes are atomic: the GUI writes to `state.json.tmp` and then renames it over
 
 The format is a flat JSON object (no nested objects or arrays). It is parsed by a
 minimal hand-written parser, not a full JSON library, so keep it flat if you do
-edit it manually.
+edit it manually. Key order does not matter to the parser (it looks up keys by
+name); the order below matches what `saveState` emits.
 
 ## 2. Location
 
@@ -45,28 +47,36 @@ save.
 - The current schema is **`schema_version` 4**.
 - `loadState()` accepts files with `schema_version` **3 or 4**; any other value
   (or a missing `schema_version`) causes the load to fail and the GUI starts from
-  defaults.
-- **v3 → v4 migration is implicit and lossless.** A v3 file simply lacks the DSP
-  keys (`agc_*`, `bbe_*`, `limiter_*`, `config_page`). Those keys are read
-  **defensively**: a missing key falls back to the struct default (DSP stages off,
-  `config_page` 0). After a successful load, `schema_version` is unconditionally
-  set to `4` in memory, so the **next save rewrites the file as v4** while keeping
-  all existing values. No v3 data is lost.
-- **Missing keys → defaults.** The defensive read also applies within v4: any DSP
-  key that is absent (e.g. a hand-trimmed file) is replaced by its default. Note
-  that the *non-DSP* numeric keys (`master_gain_db`, `window_x`, etc.) are **not**
-  read defensively — if those keys are missing or non-numeric, `std::stof`/`std::stoi`
-  throws and the whole load fails, dropping you back to all defaults.
-- `log_level` is special-cased: if the key is empty/absent it defaults to `"info"`.
-- `midi_channel` is special-cased: if the key is empty/absent it defaults to `-1`.
+  defaults. After a successful load, `schema_version` is unconditionally set to
+  `4` in memory, so the **next save rewrites the file as v4**.
+- **Most keys are read defensively** — a missing key falls back to the `GuiState`
+  struct default. This is what makes old files forward-compatible: the schema has
+  grown well beyond the original v4 (Convolver, Enhancer, the resonance gain/layer
+  split, `resonance_window_ms`, the audio device fields), yet a file that predates
+  those keys still loads, with each absent key taking its default. Defensively-read
+  keys: all `agc_*`, `enhancer_*`, `limiter_*`, `convolver_*`, `resonance_enabled`,
+  `resonance_gain_db`, `resonance_layer_db`, `resonance_window_ms`, `config_page`,
+  `audio_block_size`, `audio_sample_rate`.
+- **BBE → Enhancer migration.** The old "BBE" stage was renamed to "Enhancer".
+  The `enhancer_*` keys fall back to the legacy `bbe_*` keys when absent:
+  `enhancer_process` ← `bbe_definition`, `enhancer_contour` ← `bbe_bass`,
+  `enhancer_enabled` ← `bbe_enabled`. So a file written before the rename migrates
+  its old BBE values into the Enhancer on first load, then is rewritten with the
+  new keys.
+- **Non-defensive keys throw on absence.** `master_gain_db`, `release_ms`,
+  `excite_decay_ms`, `max_resonance_voices` and the four `window_*` keys are read
+  with `std::stof`/`std::stoi` directly — if any is missing or non-numeric the
+  whole load fails and the GUI drops back to all defaults.
+- `log_level` defaults to `"info"` if empty/absent; `midi_channel` defaults to
+  `-1` if empty/absent.
 
 ## 4. Field Reference
 
 Every field of the `GuiState` struct (`app/gui/persistence.h`) is listed below.
-Ranges/units for the voice and DSP fields come from the `Param` tables in
-`app/gui/voice_page.h` and `engine/dsp/{agc,bbe,limiter}.cpp`; the GUI clamps
-values to these ranges when set via a control, and the DSP stages additionally
-clamp on `set()`.
+Ranges/units for the voice/resonance and DSP fields come from the `Param` tables
+in `app/gui/master_page.h`, `resonance_page.h` and `engine/dsp/{convolver,agc,
+enhancer,limiter}.cpp`; the GUI clamps values to these ranges when set via a
+control, and the DSP stages additionally clamp on `set()`.
 
 ### Meta
 
@@ -81,7 +91,7 @@ clamp on `set()`.
 | `window_x` | int  | `100`   | any (off-screen clamped) | Window X position (screen px) | GUI (tracked every frame) |
 | `window_y` | int  | `100`   | any (off-screen clamped) | Window Y position (screen px) | GUI (tracked every frame) |
 | `window_w` | int  | `1280`  | any | Window width (px) | GUI (tracked every frame) |
-| `window_h` | int  | `820`   | any | Window height (px) | GUI (tracked every frame) |
+| `window_h` | int  | `720`   | any | Window height (px). Default targets a 1280×720 HW display. | GUI (tracked every frame) |
 
 Window geometry is updated into the in-memory state every frame and is persisted
 on exit (and via the debounce if other fields change). See the off-screen clamp
@@ -99,25 +109,49 @@ note in section 7.
 | JSON key         | Type   | Default | Range/values | Meaning | Set by |
 |------------------|--------|---------|--------------|---------|--------|
 | `midi_port_name` | string | `""`    | substring of a real port name | MIDI input port. Matched as a substring against the live port list at startup; on a match the exact port label is written back. No match → warning, no port opened. | GUI / init |
-| `midi_channel`   | int    | `-1`    | `-1` = OMNI, `0`–`15` = channel (0-based) | MIDI receive channel | GUI / init |
+| `midi_channel`   | int    | `-1`    | `-1` = OMNI, `0`–`15` = channel (0-based) | MIDI receive channel. OMNI accepts all channels — required for multi-channel material (e.g. Synthesia left/right hand on ch0/ch1). | GUI / init |
 
-### Voice parameters
+### Voice & resonance parameters
 
-These are applied to the engine at init via `EngineConfig` and adjustable live on
-the **VOICE** CONFIG page. Ranges from `VoicePage::kParams` (`app/gui/voice_page.h`).
+Applied to the engine at init via `EngineConfig`; the live-adjustable ones are on
+the **MASTER** and **RESONANCE** CONFIG pages.
 
 | JSON key               | Type  | Default  | Range          | Unit | Meaning | Set by |
 |------------------------|-------|----------|----------------|------|---------|--------|
-| `master_gain_db`       | float | `0.0`    | `-60` … `6`    | dB   | Master output gain (converted to linear via `10^(dB/20)`) | GUI (VOICE) |
-| `resonance_strength`   | float | `0.5`    | `0` … `1`      | —    | Resonance strength | GUI (VOICE) |
-| `release_ms`           | float | `200.0`  | `50` … `2000`  | ms   | Voice release time | GUI (VOICE) |
-| `excite_decay_ms`      | float | `5000.0` | `500` … `30000`| ms   | Excitation decay time | GUI (VOICE) |
-| `max_resonance_voices` | int   | `32`     | `1` … `64`     | —    | Max resonance voice count. **Read-only / init-only** — the VOICE "MAX RESONANCE" control is read-only; the value is applied at engine init and cannot be changed live. | init only |
+| `master_gain_db`       | float | `0.0`    | `-60` … `6`    | dB   | Master output gain (converted to linear `10^(dB/20)`) | GUI (MASTER) |
+| `release_ms`           | float | `200.0`  | `50` … `2000`  | ms   | Voice release time | GUI (MASTER) |
+| `resonance_enabled`    | bool  | `true`   | `true`/`false` | —    | Enable sympathetic resonance engine | GUI (RESONANCE / topbar) |
+| `resonance_gain_db`    | float | `-12.0`  | `-60` … `0`    | dB   | Resonance output gain | GUI (RESONANCE) |
+| `resonance_layer_db`   | float | `-30.0`  | `-60` … `0`    | dB   | Target velocity-layer (peak RMS) the resonance picks per note (`nearestSlotByRms`) | GUI (RESONANCE) |
+| `excite_decay_ms`      | float | `5000.0` | `500` … `30000`| ms   | Excitation decay time | GUI (RESONANCE) |
+| `max_resonance_voices` | int   | `32`     | `1` … `64`     | —    | Max resonance voice count. **Init-only** — the RESONANCE "MAX RESONANCE" control is read-only; applied at engine init. | init only |
+| `resonance_window_ms`  | int   | `12000`  | ≥ 0 (ms)       | ms   | RAM-cache window of the resonance target layer per note. **JSON-only — there is intentionally no GUI control**; edit by hand. Larger = longer resonance tails held in RAM (more memory). | JSON only |
 
-### DSP chain — AGC (stage 0)
+### DSP chain
 
-Ranges from `AGC::kParams` (`engine/dsp/agc.cpp`). All defaults match the
-`GuiState` defaults.
+The DSP chain processes the post-mix stereo buffer in this fixed audio order:
+**Convolver → AGC → Enhancer → Limiter**. Each stage has an `enabled` flag
+(all default **off**, so a fresh config is audibly transparent) plus its own
+parameters. (Note: the JSON *key* order differs from the chain order because the
+Convolver keys were added later — see the example. The parser is order-independent.)
+
+#### Convolver — cabinet/body simulation (chain stage 0)
+
+Adds the instrument body to close-miked samples via a short FIR convolution.
+Ranges from `Convolver::kParams` (`engine/dsp/convolver.cpp`).
+
+| JSON key            | Type  | Default | Range          | Meaning | Set by |
+|---------------------|-------|---------|----------------|---------|--------|
+| `convolver_enabled` | bool  | `false` | `true`/`false` | Enable Convolver stage | GUI (CONVOLVER page) |
+| `convolver_mix`     | float | `0.15`  | `0` … `1`      | Wet/dry mix (low = subtle body) | GUI (CONVOLVER) |
+| `convolver_choice`  | int   | `0`     | `0` or `1`     | IR selection: `0` = "Body soft (modal)", `1` = "Body bright (modal)". Both are synthesized procedurally (`ir_modal.cpp`), not files. | GUI (CONVOLVER) |
+| `convolver_decay`   | float | `0.5`   | `0` … `1`      | IR decay shaping (shorter ↔ longer body) | GUI (CONVOLVER) |
+| `convolver_tone`    | float | `0.6`   | `0` … `1`      | IR low-pass tone | GUI (CONVOLVER) |
+| `convolver_size`    | float | `0.5`   | `0` … `1`      | Body size (modal frequency shift: smaller ↔ bigger) | GUI (CONVOLVER) |
+
+#### AGC (chain stage 1)
+
+Ranges from `AGC::kParams` (`engine/dsp/agc.cpp`).
 
 | JSON key          | Type  | Default | Range          | Unit | Meaning | Set by |
 |-------------------|-------|---------|----------------|------|---------|--------|
@@ -126,31 +160,40 @@ Ranges from `AGC::kParams` (`engine/dsp/agc.cpp`). All defaults match the
 | `agc_release_ms`  | float | `200.0` | `10` … `2000`  | ms   | AGC release time (attack is fixed at 5 ms) | GUI (AGC page) |
 | `agc_floor`       | float | `0.05`  | `0` … `1`      | gain (linear) | Minimum gain floor (AGC never attenuates below this) | GUI (AGC page) |
 
-### DSP chain — BBE (stage 1)
+#### Enhancer (chain stage 2) — was "BBE"
 
-Ranges from `BBE::kParams` (`engine/dsp/bbe.cpp`).
+An original piano enhancer (parallel-boost 3-band + dynamic HF + harmonic exciter
++ all-pass phase). Ranges from `Enhancer::kParams` (`engine/dsp/enhancer.cpp`).
 
-| JSON key         | Type  | Default | Range     | Unit | Meaning | Set by |
-|------------------|-------|---------|-----------|------|---------|--------|
-| `bbe_enabled`    | bool  | `false` | `true`/`false` | — | Enable BBE stage | GUI (BBE page) |
-| `bbe_definition` | float | `0.0`   | `0` … `12`| dB   | DEFINITION (high-shelf at 5 kHz) | GUI (BBE page) |
-| `bbe_bass`       | float | `0.0`   | `0` … `10`| dB   | BASS (low-shelf at 180 Hz) | GUI (BBE page) |
+| JSON key            | Type  | Default | Range       | Unit | Meaning | Set by |
+|---------------------|-------|---------|-------------|------|---------|--------|
+| `enhancer_enabled`  | bool  | `false` | `true`/`false` | — | Enable Enhancer stage | GUI (ENHANCER page) |
+| `enhancer_process`  | float | `0.0`   | `0` … `12`  | dB   | PROCESS — dynamic high-band boost + exciter (boost-when-loud) | GUI (ENHANCER) |
+| `enhancer_contour`  | float | `0.0`   | `0` … `12`  | dB   | CONTOUR — low-band boost | GUI (ENHANCER) |
+| `enhancer_mid`      | float | `0.0`   | `-6` … `6`  | dB   | MID — presence bell (~2.7 kHz) | GUI (ENHANCER) |
 
-### DSP chain — Limiter (stage 2)
+#### Limiter (chain stage 3)
 
 Ranges from `Limiter::kParams` (`engine/dsp/limiter.cpp`).
 
 | JSON key               | Type  | Default | Range          | Unit | Meaning | Set by |
 |------------------------|-------|---------|----------------|------|---------|--------|
 | `limiter_enabled`      | bool  | `false` | `true`/`false` | —    | Enable limiter stage | GUI (LIMITER page) |
-| `limiter_threshold_db` | float | `0.0`   | `-40` … `0`    | dB   | Peak threshold | GUI (LIMITER page) |
+| `limiter_threshold_db` | float | `0.0`   | `-40` … `0`    | dB   | Peak threshold (stereo-linked) | GUI (LIMITER page) |
 | `limiter_release_ms`   | float | `200.0` | `10` … `2000`  | ms   | Limiter release time (attack is fixed at 1 ms) | GUI (LIMITER page) |
 
-### DSP chain — CONFIG page selector
+### CONFIG page selector
 
 | JSON key      | Type | Default | Allowed values | Meaning | Set by |
 |---------------|------|---------|----------------|---------|--------|
-| `config_page` | int  | `0`     | `0`–`3`        | Selected CONFIG page: `0`=VOICE, `1`=AGC, `2`=BBE, `3`=LIMITER. Out-of-range values are clamped to `0` at startup. | GUI (CONFIG switch) |
+| `config_page` | int  | `0`     | `0`–`5`        | Selected CONFIG page: `0`=MASTER, `1`=RESONANCE, `2`=CONVOLVER, `3`=AGC, `4`=ENHANCER, `5`=LIMITER. Out-of-range values are clamped to `0` at startup. | GUI (CONFIG switch) |
+
+### Audio device
+
+| JSON key            | Type | Default | Meaning | Set by |
+|---------------------|------|---------|---------|--------|
+| `audio_block_size`  | int  | `256`   | Audio callback block size (latency). Runtime-changeable from the GUI BUFFER combo; clamped to `[32, 8192]`. | GUI (BUFFER combo) |
+| `audio_sample_rate` | int  | `48000` | Engine sample rate. **JSON-only / read-only in GUI** (the GUI displays it but does not change it). A non-positive value falls back to 48000. | JSON only |
 
 ### Log
 
@@ -160,8 +203,7 @@ Ranges from `Limiter::kParams` (`engine/dsp/limiter.cpp`).
 
 The severity strings are parsed by `severity_from_string` (`engine/util/log.h`):
 `debug`, `info`, `warn`/`warning`, `error`, `fatal` (case-insensitive). `Off`
-exists as an internal severity that suppresses all output, and the documented set
-written by the CLI usage text is `debug | info | warn | error | fatal`.
+exists as an internal severity that suppresses all output.
 
 ## 5. CLI Overrides
 
@@ -182,71 +224,83 @@ to pass each flag once.
 
 ## 6. Annotated Example `state.json`
 
-The following is a valid v4 file matching the exact key order and format emitted
-by `saveState`. (JSON does not allow comments; the trailing `//` notes are for
-documentation only — remove them if you paste this into a real file.)
+The following matches the exact key order and format emitted by `saveState`,
+with the built-in default values. (JSON does not allow comments; the trailing
+`//` notes are for documentation only — remove them if you paste this into a real
+file.)
 
 ```json
 {
-  "schema_version": 4,                                  // always 4
-  "bank_search_dir": "/Users/me/banks",                 // dir scanned by bank dropdown
-  "bank_path": "/Users/me/banks/grand.bank",            // bank loaded at startup
-  "midi_port_name": "MPK mini",                          // substring-matched MIDI port
-  "log_level": "info",                                   // debug|info|warn|error|fatal
-  "midi_channel": -1,                                    // -1 = OMNI, 0..15 = channel
-  "master_gain_db": 0,                                   // -60 .. 6 dB
-  "resonance_strength": 0.5,                             // 0 .. 1
-  "release_ms": 200,                                     // 50 .. 2000 ms
-  "excite_decay_ms": 5000,                               // 500 .. 30000 ms
-  "max_resonance_voices": 32,                            // 1 .. 64 (init-only)
-  "window_x": 100,                                       // px (off-screen clamped)
-  "window_y": 100,                                       // px (off-screen clamped)
-  "window_w": 1280,                                      // px
-  "window_h": 820,                                       // px
-  "agc_enabled": false,                                  // AGC stage off by default
-  "agc_target": 0.15,                                    // 0.01 .. 0.5 RMS
-  "agc_release_ms": 200,                                 // 10 .. 2000 ms
-  "agc_floor": 0.05,                                     // 0 .. 1 gain
-  "bbe_enabled": false,                                  // BBE stage off by default
-  "bbe_definition": 0,                                   // 0 .. 12 dB
-  "bbe_bass": 0,                                          // 0 .. 10 dB
-  "limiter_enabled": false,                              // limiter off by default
-  "limiter_threshold_db": 0,                             // -40 .. 0 dB
-  "limiter_release_ms": 200,                             // 10 .. 2000 ms
-  "config_page": 0                                       // 0=VOICE 1=AGC 2=BBE 3=LIMITER
+  "schema_version": 4,                 // always 4
+  "bank_search_dir": "/Users/me/banks",// dir scanned by bank dropdown
+  "bank_path": "",                     // bank loaded at startup ("" = none)
+  "midi_port_name": "",                // substring-matched MIDI port
+  "log_level": "info",                 // debug|info|warn|error|fatal
+  "midi_channel": -1,                  // -1 = OMNI, 0..15 = channel
+  "master_gain_db": 0,                 // -60 .. 6 dB
+  "resonance_enabled": true,           // sympathetic resonance on
+  "resonance_gain_db": -12,            // -60 .. 0 dB
+  "resonance_layer_db": -30,           // -60 .. 0 dB (target layer)
+  "release_ms": 200,                   // 50 .. 2000 ms
+  "excite_decay_ms": 5000,             // 500 .. 30000 ms
+  "max_resonance_voices": 32,          // 1 .. 64 (init-only)
+  "resonance_window_ms": 12000,        // RAM cache window (JSON-only, no GUI)
+  "window_x": 100,                     // px (off-screen clamped)
+  "window_y": 100,                     // px (off-screen clamped)
+  "window_w": 1280,                    // px
+  "window_h": 720,                     // px (1280x720 HW target)
+  "agc_enabled": false,                // AGC stage off by default
+  "agc_target": 0.15,                  // 0.01 .. 0.5 RMS
+  "agc_release_ms": 200,               // 10 .. 2000 ms
+  "agc_floor": 0.05,                   // 0 .. 1 gain
+  "enhancer_enabled": false,           // Enhancer stage off by default
+  "enhancer_process": 0,               // 0 .. 12 dB
+  "enhancer_contour": 0,               // 0 .. 12 dB
+  "enhancer_mid": 0,                   // -6 .. 6 dB
+  "limiter_enabled": false,            // limiter off by default
+  "limiter_threshold_db": 0,           // -40 .. 0 dB
+  "limiter_release_ms": 200,           // 10 .. 2000 ms
+  "config_page": 0,                    // 0=MASTER 1=RESONANCE 2=CONVOLVER 3=AGC 4=ENHANCER 5=LIMITER
+  "convolver_enabled": false,          // convolver off by default
+  "convolver_mix": 0.15,               // 0 .. 1 wet/dry
+  "convolver_choice": 0,               // 0=Body soft, 1=Body bright (modal)
+  "convolver_decay": 0.5,              // 0 .. 1
+  "convolver_tone": 0.6,               // 0 .. 1
+  "convolver_size": 0.5,               // 0 .. 1
+  "audio_block_size": 256,             // 32 .. 8192
+  "audio_sample_rate": 48000           // JSON-only / read-only in GUI
 }
 ```
 
-The values above are exactly the built-in defaults (with example bank/MIDI
-strings filled in). Booleans are written as `true`/`false`; floats are written by
-the default `<<` formatting (e.g. integral floats such as `200` print without a
-decimal point, as shown).
+Booleans are written as `true`/`false`; floats use the default `<<` formatting
+(integral floats such as `200` print without a decimal point).
 
 ## 7. Notes & Caveats
 
-- **DSP defaults = all stages off.** `agc_enabled`, `bbe_enabled` and
-  `limiter_enabled` all default to `false`, so a fresh config produces no change
-  in audio behavior from the DSP chain.
-- **`config_page` index meaning:** `0` = VOICE, `1` = AGC, `2` = BBE,
-  `3` = LIMITER. Values outside `0`–`3` are reset to `0` at startup.
+- **DSP defaults = all stages off.** `convolver_enabled`, `agc_enabled`,
+  `enhancer_enabled` and `limiter_enabled` all default to `false`, so a fresh
+  config produces no change in audio behavior from the DSP chain.
+- **Resonance is on by default** (`resonance_enabled: true`), unlike the DSP
+  stages.
+- **`config_page` index meaning:** `0`=MASTER, `1`=RESONANCE, `2`=CONVOLVER,
+  `3`=AGC, `4`=ENHANCER, `5`=LIMITER. Values outside `0`–`5` are reset to `0`.
+- **`resonance_window_ms` and `audio_sample_rate` have no GUI control** — they are
+  set only via this file. `max_resonance_voices` is editable in the file but its
+  GUI control is read-only (applied at engine init).
 - **Off-screen window clamp.** At startup the GUI restores `window_x`/`window_y`,
   then checks whether at least a 100×100 px region of the window overlaps any
   connected monitor. If not (e.g. a monitor was unplugged since the last save),
-  the window falls back to position `(100, 100)` and that fallback is written
-  back into the state, so the corrected position is persisted on the next save.
-- **`max_resonance_voices` is init-only.** It is applied to the engine at init via
-  `EngineConfig`; the VOICE page "MAX RESONANCE" control is read-only. Changing it
-  requires editing the file (or it being changed by some future control) and
-  restarting.
+  the window falls back to position `(100, 100)` and that fallback is written back.
 - **Bank and MIDI are best-effort.** A non-loadable `bank_path` or an unmatched
   `midi_port_name` only logs a warning; the GUI still starts. A matched MIDI port
   has its exact label written back into `midi_port_name`.
 - **Tracked-for-debounce vs. saved fields.** The debounce change-detection in
-  `main.cpp` watches the bank/MIDI/voice/DSP/log/config-page fields (not the
-  `window_*` fields and not `bank_search_dir`/`max_resonance_voices`). Window
-  geometry and any CLI override are still persisted because the full state is
-  written on exit (and whenever a debounce save fires for any reason).
+  `main.cpp` watches the bank/MIDI/voice/resonance/DSP/log/config-page fields (not
+  the `window_*` fields, not `bank_search_dir`, `max_resonance_voices`,
+  `resonance_window_ms` or `audio_sample_rate`). Those non-tracked fields are still
+  persisted because the full state is written on exit (and whenever any debounce
+  save fires).
 ```
 
-The default ranges in `persistence.h` and the DSP `Param` tables **agree** — see
+The default ranges in `persistence.h` and the `Param` tables **agree** — see
 section 4 (no discrepancies found).

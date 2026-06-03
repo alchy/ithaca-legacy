@@ -126,9 +126,9 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 
 ---
 
-### Atomiky — DSP stage (AGC, BBE, Limiter)
+### Atomiky — DSP stage (Convolver, AGC, Enhancer, Limiter)
 
-Každá DSP stage (`AGC`, `BBE`, `Limiter`) drží parametry jako `atomic<float>`
+Každá DSP stage (`Convolver`, `AGC`, `Enhancer`, `Limiter`) drží parametry jako `atomic<float>`
 a `atomic<bool> enabled_`. Pattern je identický:
 
 - **Producent:** GUI vlákno (`set()`, `setEnabled()`).

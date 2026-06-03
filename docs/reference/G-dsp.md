@@ -1,7 +1,7 @@
 # DSP
 
 Post-mix DSP řetězec zpracovává stereo buffer *po* aplikaci master gainu uvnitř
-`Engine::processBlock()` (krok 5 z 6). Řetězec tvoří tři stupně pevného pořadí:
+`Engine::processBlock()` (krok 5 z 6). Řetězec tvoří čtyři stupně pevného pořadí:
 **CONVOLVER → AGC → ENHANCER → Limiter**; každý stupeň je instancí abstraktní třídy `DspStage` a
 implementuje i GUI-facing rozhraní `IParamPage`, takže jej GUI může přímo ovládat
 generickým panelem parametrů. Parametry každého stupně jsou uloženy v `std::atomic`
@@ -178,7 +178,7 @@ Attack time je fixní 5 ms (vypočten v `prepare()`): `atk_ = 1 − exp(−1/(0.
 - **Modální presety** (`ir_modal`): `Body soft` / `Body bright` — syntetický soundboard IR = součet tlumených modů kalibrovaný na fyziku desky (Chabassier/RR_9530): modální frekvence (seed 27/42/63/121/164/289 Hz… + fill do ~5 kHz), per-mód decay `τ = 2/f_ve(f)`, `f_ve(f)=2·10⁻⁵·f²+7·10⁻²·f`, spektrální obálka koncentrovaná <~800 Hz (Bright přidává presence ~2,5 kHz), náhodná fáze (noiselike).
 - **WAV IR** (`ir_wav`, port z icr): mono float32/int16, resample na engine SR, cap na `kMaxIr`. Loader existuje, ale **zatím není zapojen do dropdownu** (dropdown nabízí jen modální presety). Ukázkové WAV assety leží mimo repo u samplů v `/Users/j/SoundBanks/Ithaca/IR/` (`grand-soundboard-{a,b}.wav`); načítání IR z disku je future rozšíření.
 
-Param: index 0 = `MIX` (0..1). `hasEnable=true`. Reference: RR_9530 (kalibrace `f_ve`), Bank & Chabassier 2019 (soundboard IR je šumovité, krátký doznív → FIR), Teng 2012 (caveat: broadband IR přebíjí vysoké tóny → subtilní MIX). Verifikace: `tests/test_ir_modal.cpp` (decay-vs-f, obálka), `tests/test_convolver.cpp` (impulz→IR, identity→průchod, MIX bypass).
+Parametry (vše 0..1): index 0 = `MIX` (wet/dry, runtime; nízký = subtilní tělo), 1 = `DECAY` (tvarování doznění IR), 2 = `TONE` (low-pass IR), 3 = `SIZE` (posun modálních frekvencí = větší/menší tělo). `MIX` je čistě runtime (wet level), zatímco `DECAY`/`TONE`/`SIZE` se aplikují přestavbou IR (`rebuildIr()` off-RT na GUI threadu: SIZE resample → DECAY okno → TONE LP → `setIR` s 2-slot atomickým swapem). IR výběr přes choice-rozšíření (viz výše). `hasEnable=true`. Reference: RR_9530 (kalibrace `f_ve`), Bank & Chabassier 2019 (soundboard IR je šumovité, krátký doznív → FIR), Teng 2012 (caveat: broadband IR přebíjí vysoké tóny → subtilní MIX). Verifikace: `tests/test_ir_modal.cpp` (decay-vs-f, obálka), `tests/test_convolver.cpp` (impulz→IR, identity→průchod, MIX bypass).
 
 ### `engine/dsp/enhancer.h` + `enhancer.cpp`
 

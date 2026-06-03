@@ -109,7 +109,7 @@ Jde o centrální audio-RT funkci. Volá ji callback `AudioDevice` (~48 000/256 
 
 **Krok 3 — master gain:** Gain se čte atomicky. Aplikuje se pouze pokud `|g − 1| > 0.001` (optimalizace: skip scalar loop pro gain ≈ 1).
 
-**Krok 3b — DSP řetěz:** `dsp_.process(out_l, out_r, n_samples)` — AGC → BBE → Limiter; vypnutá stage = no-op.
+**Krok 3b — DSP řetěz:** `dsp_.process(out_l, out_r, n_samples)` — CONVOLVER → AGC → ENHANCER → Limiter; vypnutá stage = no-op.
 
 **Krok 4 — peak metr:** Najde `abs` peak v bloku, kombinuje s exponenciálně klesajícím předchozím peak: `new = max(peak_now, cur × decay)`, kde `decay = exp(−n_samples / (0.1 × SR))`. Pro 256 vzorků @ 48 kHz ≈ 0.948 na blok (pokles z 1.0 na 0.1 za ~150 ms). Výsledek se uloží atomicky (relaxed) do `master_peak_l_` / `master_peak_r_`.
 
