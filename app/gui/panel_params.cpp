@@ -22,6 +22,19 @@ void renderParamPage(AppContext& ctx, ithaca::dsp::IParamPage& page) {
     if (page.hasEnable()) {
         if (wdg::ToggleChip(page.name(), page.enabled()))
             page.setEnabled(!page.enabled());
+        // Volic (napr. IR typ u Convolveru) hned vedle ON/OFF — kompaktni, setri misto.
+        if (page.choiceCount() > 0) {
+            ImGui::SameLine(0, 12);
+            int cur = page.currentChoice();
+            const char* curName = (cur >= 0) ? page.choiceName(cur) : "(none)";
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - L::Dims::pad_panel);
+            if (ImGui::BeginCombo("##choice", curName)) {
+                for (int i = 0; i < page.choiceCount(); ++i)
+                    if (ImGui::Selectable(page.choiceName(i), i == cur) && i != cur)
+                        page.selectChoice(i);
+                ImGui::EndCombo();
+            }
+        }
         ImGui::Dummy({0, L::Dims::row_gap});
     }
 
@@ -34,7 +47,8 @@ void renderParamPage(AppContext& ctx, ithaca::dsp::IParamPage& page) {
         ImGui::Dummy({0, L::Dims::row_gap});
     }
 
-    if (page.choiceCount() > 0) {
+    // Fallback: stranka s volicem ale bez ON/OFF → volic dole (zadna takova teď neni).
+    if (!page.hasEnable() && page.choiceCount() > 0) {
         ImGui::Dummy({0, L::Dims::row_gap});
         ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
         ImGui::TextUnformatted(page.choiceLabel());
