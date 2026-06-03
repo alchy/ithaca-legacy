@@ -186,7 +186,7 @@ int main(int argc, char* argv[]) {
         &master_page,
         &resonance_page,
         &ctx.engine.dspChain().stage(0),   // AGC
-        &ctx.engine.dspChain().stage(1),   // BBE
+        &ctx.engine.dspChain().stage(1),   // ENHANCER
         &ctx.engine.dspChain().stage(2),   // LIMITER
     };
     if (ctx.state.config_page < 0 || ctx.state.config_page > 4) ctx.state.config_page = 0;
@@ -253,11 +253,11 @@ int main(int argc, char* argv[]) {
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci).
         {
             auto& ch = ctx.engine.dspChain();
-            auto& agc = ch.stage(0); auto& bbe = ch.stage(1); auto& lim = ch.stage(2);
+            auto& agc = ch.stage(0); auto& enh = ch.stage(1); auto& lim = ch.stage(2);
             ctx.state.agc_enabled = agc.enabled();
             ctx.state.agc_target = agc.get(0); ctx.state.agc_release_ms = agc.get(1); ctx.state.agc_floor = agc.get(2);
-            ctx.state.bbe_enabled = bbe.enabled();
-            ctx.state.bbe_definition = bbe.get(0); ctx.state.bbe_bass = bbe.get(1);
+            ctx.state.enhancer_enabled = enh.enabled();
+            ctx.state.enhancer_process = enh.get(0); ctx.state.enhancer_contour = enh.get(1); ctx.state.enhancer_mid = enh.get(2);
             ctx.state.limiter_enabled = lim.enabled();
             ctx.state.limiter_threshold_db = lim.get(0); ctx.state.limiter_release_ms = lim.get(1);
         }
@@ -287,9 +287,10 @@ int main(int argc, char* argv[]) {
             last_saved.agc_target          != ctx.state.agc_target ||
             last_saved.agc_release_ms      != ctx.state.agc_release_ms ||
             last_saved.agc_floor           != ctx.state.agc_floor ||
-            last_saved.bbe_enabled         != ctx.state.bbe_enabled ||
-            last_saved.bbe_definition      != ctx.state.bbe_definition ||
-            last_saved.bbe_bass            != ctx.state.bbe_bass ||
+            last_saved.enhancer_enabled    != ctx.state.enhancer_enabled ||
+            last_saved.enhancer_process    != ctx.state.enhancer_process ||
+            last_saved.enhancer_contour    != ctx.state.enhancer_contour ||
+            last_saved.enhancer_mid        != ctx.state.enhancer_mid ||
             last_saved.limiter_enabled     != ctx.state.limiter_enabled ||
             last_saved.limiter_threshold_db != ctx.state.limiter_threshold_db ||
             last_saved.limiter_release_ms  != ctx.state.limiter_release_ms ||
