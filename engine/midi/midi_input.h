@@ -3,9 +3,9 @@
 // ------------------------
 // Tenky RtMidi wrapper. Otevre MIDI vstupni port a RtMidi callback (bezi na
 // vlastnim threadu) prekladá MIDI zpravy → Engine API:
-//   0x90 NoteOn (vel>0)  → engine.noteOn(midi, vel)
-//   0x90 NoteOn (vel=0)  → engine.noteOff(midi)   (MIDI konvence)
-//   0x80 NoteOff         → engine.noteOff(midi)
+//   0x90 NoteOn (vel>0)  → engine.noteOn(midi, vel, ch)
+//   0x90 NoteOn (vel=0)  → engine.noteOff(midi, ch)   (MIDI konvence)
+//   0x80 NoteOff         → engine.noteOff(midi, ch)
 //   0xB0 CC 64 Sustain   → engine.sustainPedal(cc) (spojite 0..127, half-pedal)
 //   0xB0 CC 123 AllOff   → engine.allNotesOff()
 //   ostatni              → ignore (pridavat dle potreby)
