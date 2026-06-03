@@ -121,3 +121,7 @@ add_test(NAME test_resonance_layer_select COMMAND test_resonance_layer_select)
 add_executable(test_resonance_cache_build test_resonance_cache_build.cpp)
 target_link_libraries(test_resonance_cache_build PRIVATE ithaca_core doctest)
 add_test(NAME test_resonance_cache_build COMMAND test_resonance_cache_build)
+
+add_executable(test_enhancer_response test_enhancer_response.cpp)
+target_link_libraries(test_enhancer_response PRIVATE ithaca_core doctest)
+add_test(NAME test_enhancer_response COMMAND test_enhancer_response)
