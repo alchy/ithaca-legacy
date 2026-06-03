@@ -1,10 +1,10 @@
 #pragma once
-// engine/dsp/dsp_chain.h — pevny modularni DSP retezec: AGC -> BBE -> Limiter.
+// engine/dsp/dsp_chain.h — pevny modularni DSP retezec: AGC -> ENHANCER -> Limiter.
 // process() spusti jen enabled() stage (disabled = no-op passthrough).
-// stage(i) vraci referenci pro GUI (i=0 AGC, 1 BBE, 2 LIMITER).
+// stage(i) vraci referenci pro GUI (i=0 AGC, 1 ENHANCER, 2 LIMITER).
 #include "dsp/dsp_stage.h"
 #include "dsp/agc.h"
-#include "dsp/bbe.h"
+#include "dsp/enhancer.h"
 #include "dsp/limiter.h"
 
 namespace ithaca::dsp {
@@ -22,10 +22,10 @@ public:
     DspStage& stage(int i) { return *stages_[i]; }
 
 private:
-    AGC     agc_;
-    BBE     bbe_;
-    Limiter lim_;
-    DspStage* stages_[3] = { &agc_, &bbe_, &lim_ };
+    AGC      agc_;
+    Enhancer enhancer_;
+    Limiter  lim_;
+    DspStage* stages_[3] = { &agc_, &enhancer_, &lim_ };
 };
 
 } // namespace ithaca::dsp

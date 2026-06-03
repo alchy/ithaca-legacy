@@ -4,12 +4,13 @@
 
 #include "dsp/dsp_math.h"
 #include "dsp/limiter.h"
-#include "dsp/bbe.h"
+#include "dsp/enhancer.h"
 #include "dsp/agc.h"
 #include "dsp/dsp_chain.h"
 #include "engine.h"
 #include <cmath>
 #include <string>
+#include <vector>
 
 using namespace ithaca;
 
@@ -80,42 +81,34 @@ TEST_CASE("Limiter: set klampuje, param round-trip, enable toggle") {
     CHECK(lim.hasEnable());
 }
 
-TEST_CASE("BBE: disabled = bit-identicky bypass") {
-    dsp::BBE bbe; bbe.prepare(48000.f, 256);
-    bbe.setEnabled(false);
-    bbe.set(0, 12.f); bbe.set(1, 10.f);
-    float L[3]={0.4f,-0.5f,0.6f}, R[3]={0.1f,0.2f,-0.3f};
-    float L0[3]; for(int i=0;i<3;++i) L0[i]=L[i];
-    bbe.process(L,R,3);
-    for(int i=0;i<3;++i) CHECK(L[i]==L0[i]);
+TEST_CASE("Enhancer: disabled = bypass") {
+    dsp::Enhancer e; e.prepare(48000.f, 256);
+    e.setEnabled(false); e.set(0, 12.f); e.set(1, 12.f);
+    float L[3]={0.1f,0.2f,0.3f}, R[3]={0.1f,0.2f,0.3f};
+    e.process(L,R,3);
+    CHECK(L[0]==doctest::Approx(0.1f)); CHECK(L[2]==doctest::Approx(0.3f));
 }
-
-TEST_CASE("BBE: oba parametry 0 dB = temer pruhledny na DC") {
-    dsp::BBE bbe; bbe.prepare(48000.f, 256);
-    bbe.setEnabled(true);                 // definition=0, bass=0 (default)
-    float L[256], R[256];
-    for(int i=0;i<256;++i){ L[i]=0.5f; R[i]=0.5f; }
-    bbe.process(L,R,256);
-    CHECK(L[255]==doctest::Approx(0.5f).epsilon(0.03));
+TEST_CASE("Enhancer: vsechny parametry 0 → pruchozi (DC ~unity po ustaleni)") {
+    dsp::Enhancer e; e.prepare(48000.f, 256);
+    e.setEnabled(true);                  // process=contour=mid=0 (default)
+    std::vector<float> L(8192,1.f), R(8192,1.f);
+    e.process(L.data(),R.data(),8192);
+    CHECK(L[8191]==doctest::Approx(1.f).epsilon(0.1));   // DC projde ~unity (volna tolerance kvuli crossover)
 }
-
-TEST_CASE("BBE: bass boost zmeni DC uroven") {
-    dsp::BBE bbe; bbe.prepare(48000.f, 256);
-    bbe.setEnabled(true);
-    bbe.set(1, 10.f);                     // BASS +10 dB (low shelf -> boost DC)
-    float L[2048], R[2048];
-    for(int i=0;i<2048;++i){ L[i]=0.2f; R[i]=0.2f; }
-    bbe.process(L,R,2048);
-    CHECK(std::abs(L[2047]) > 0.2f * 1.5f);   // DC zesilen low-shelfem
+TEST_CASE("Enhancer: CONTOUR boost zvedne DC uroven") {
+    dsp::Enhancer e; e.prepare(48000.f, 256);
+    e.setEnabled(true); e.set(1, 12.f);  // CONTOUR +12 dB (low band na DC)
+    std::vector<float> L(8192,1.f), R(8192,1.f);
+    e.process(L.data(),R.data(),8192);
+    CHECK(L[8191] > 1.5f);               // low pasmo × ~4 → DC nahoru
 }
-
-TEST_CASE("BBE: param round-trip + clamp") {
-    dsp::BBE bbe; bbe.prepare(48000.f, 256);
-    CHECK(bbe.paramCount()==2);
-    bbe.set(0, 99.f);  CHECK(bbe.get(0)==doctest::Approx(12.f));
-    bbe.set(1, -5.f);  CHECK(bbe.get(1)==doctest::Approx(0.f));
-    CHECK(std::string(bbe.name())=="BBE");
-    float v; const char* l; CHECK(bbe.meter(v,l)==false);
+TEST_CASE("Enhancer: param round-trip + clamp") {
+    dsp::Enhancer e; e.prepare(48000.f, 256);
+    CHECK(e.paramCount()==3);
+    e.set(0, 99.f);  CHECK(e.get(0)==doctest::Approx(12.f));
+    e.set(2, -99.f); CHECK(e.get(2)==doctest::Approx(-6.f));
+    CHECK(std::string(e.name())=="ENHANCER");
+    float v; const char* l; CHECK(e.meter(v,l)==false);
 }
 
 TEST_CASE("AGC: hlasity vstup je utlumen k target RMS") {
@@ -173,10 +166,10 @@ TEST_CASE("DspChain: vsechny stage disabled = identita") {
     for(int i=0;i<4;++i) CHECK(L[i]==L0[i]);
 }
 
-TEST_CASE("DspChain: poradi stage je AGC, BBE, LIMITER") {
+TEST_CASE("DspChain: poradi stage je AGC, ENHANCER, LIMITER") {
     dsp::DspChain ch; ch.prepare(48000.f, 256);
     CHECK(std::string(ch.stage(0).name())=="AGC");
-    CHECK(std::string(ch.stage(1).name())=="BBE");
+    CHECK(std::string(ch.stage(1).name())=="ENHANCER");
     CHECK(std::string(ch.stage(2).name())=="LIMITER");
 }
 
@@ -211,4 +204,19 @@ TEST_CASE("Engine ma oddelene main + resonance stream pooly") {
     CHECK(eng.mainRingsTotal() != eng.resonanceRingsTotal());   // dva ruzne pooly
     CHECK(eng.mainStreamUnderrunRecent(1000.f) == false);
     CHECK(eng.resonanceStreamUnderrunRecent(1000.f) == false);
+}
+
+TEST_CASE("dsp_math: lowpass/highpass DC + smoothstep") {
+    using namespace ithaca::dsp;
+    auto lp = rbj_lowpass(1000.f, 0.707f, 48000.f);
+    auto hp = rbj_highpass(1000.f, 0.707f, 48000.f);
+    BiquadState sl{}, sh{};
+    float yl=0, yh=0;
+    for (int i=0;i<4096;++i){ yl=biquad_tick(1.f,lp,sl); yh=biquad_tick(1.f,hp,sh); }
+    CHECK(yl == doctest::Approx(1.f).epsilon(0.02));   // lowpass passes DC
+    CHECK(std::fabs(yh) < 0.02f);                       // highpass blocks DC
+    CHECK(smoothstep(0.0f,0.2f,0.8f) == doctest::Approx(0.f));
+    CHECK(smoothstep(1.0f,0.2f,0.8f) == doctest::Approx(1.f));
+    CHECK(smoothstep(0.5f,0.2f,0.8f) > 0.f);
+    CHECK(smoothstep(0.5f,0.2f,0.8f) < 1.f);
 }

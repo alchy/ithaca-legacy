@@ -71,15 +71,15 @@ bool AppContext::initFromState(const GuiState& s) {
     }
 
     // Aplikuj perzistovane DSP parametry na chain (poradi parametru = Param
-    // tabulky stage: AGC[target,release,floor], BBE[definition,bass],
+    // tabulky stage: AGC[target,release,floor], ENHANCER[process,contour,mid],
     // LIMITER[threshold_db,release_ms]).
     {
         auto& ch = engine.dspChain();
-        auto& agc = ch.stage(0); auto& bbe = ch.stage(1); auto& lim = ch.stage(2);
+        auto& agc = ch.stage(0); auto& enh = ch.stage(1); auto& lim = ch.stage(2);
         agc.set(0, state.agc_target); agc.set(1, state.agc_release_ms); agc.set(2, state.agc_floor);
         agc.setEnabled(state.agc_enabled);
-        bbe.set(0, state.bbe_definition); bbe.set(1, state.bbe_bass);
-        bbe.setEnabled(state.bbe_enabled);
+        enh.set(0, state.enhancer_process); enh.set(1, state.enhancer_contour); enh.set(2, state.enhancer_mid);
+        enh.setEnabled(state.enhancer_enabled);
         lim.set(0, state.limiter_threshold_db); lim.set(1, state.limiter_release_ms);
         lim.setEnabled(state.limiter_enabled);
     }

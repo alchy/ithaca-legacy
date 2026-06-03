@@ -124,9 +124,11 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.agc_target           = readF("agc_target", s.agc_target);
         s.agc_release_ms       = readF("agc_release_ms", s.agc_release_ms);
         s.agc_floor            = readF("agc_floor", s.agc_floor);
-        s.bbe_enabled          = readB("bbe_enabled", s.bbe_enabled);
-        s.bbe_definition       = readF("bbe_definition", s.bbe_definition);
-        s.bbe_bass             = readF("bbe_bass", s.bbe_bass);
+        // Enhancer (ex-BBE): cti enhancer_*, fallback na stare bbe_* (migrace).
+        s.enhancer_enabled = readB("enhancer_enabled", readB("bbe_enabled", s.enhancer_enabled));
+        s.enhancer_process = readF("enhancer_process", readF("bbe_definition", s.enhancer_process));
+        s.enhancer_contour = readF("enhancer_contour", readF("bbe_bass", s.enhancer_contour));
+        s.enhancer_mid     = readF("enhancer_mid", s.enhancer_mid);
         s.limiter_enabled      = readB("limiter_enabled", s.limiter_enabled);
         s.limiter_threshold_db = readF("limiter_threshold_db", s.limiter_threshold_db);
         s.limiter_release_ms   = readF("limiter_release_ms", s.limiter_release_ms);
@@ -174,9 +176,10 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"agc_target\": "         << s.agc_target          << ",\n";
         f << "  \"agc_release_ms\": "     << s.agc_release_ms       << ",\n";
         f << "  \"agc_floor\": "          << s.agc_floor            << ",\n";
-        f << "  \"bbe_enabled\": "        << (s.bbe_enabled ? "true" : "false") << ",\n";
-        f << "  \"bbe_definition\": "     << s.bbe_definition       << ",\n";
-        f << "  \"bbe_bass\": "           << s.bbe_bass             << ",\n";
+        f << "  \"enhancer_enabled\": "   << (s.enhancer_enabled ? "true" : "false") << ",\n";
+        f << "  \"enhancer_process\": "   << s.enhancer_process     << ",\n";
+        f << "  \"enhancer_contour\": "   << s.enhancer_contour     << ",\n";
+        f << "  \"enhancer_mid\": "       << s.enhancer_mid         << ",\n";
         f << "  \"limiter_enabled\": "    << (s.limiter_enabled ? "true" : "false") << ",\n";
         f << "  \"limiter_threshold_db\": " << s.limiter_threshold_db << ",\n";
         f << "  \"limiter_release_ms\": " << s.limiter_release_ms   << ",\n";
