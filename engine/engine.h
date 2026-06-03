@@ -34,17 +34,23 @@ struct EngineConfig {
     int   midi_to        = 127;
     int   preload_ms     = 150;      // preload velikost hlavy samplu v ms; ovlivnuje RAM i streaming bezpecnost
     int   resonance_window_ms = 12000; // RAM cache rezonance: okno [ms] cilove vrstvy
+    // RAM budget pro nacteni banky [MB]. 0 = AUTO (~60% fyzicke RAM dle sysinfo)
+    // → ochrana pred OOM na embedded (RPi5/4GB). >0 = tvrdy strop. Pri prekroceni
+    // se nacitani PRERUSI (neuplna banka + error log), misto pádu na bad_alloc.
+    int   cache_budget_mb     = 0;     // 0 = auto
     // -- Faze 4 streaming --
     // Pocet worker threadu paralelne pres stream queue. Vice workeru = vetsi
     // propustnost disku I/O = mensi sance underrunu pri akordu + rezonanci
-    // v jednom audio bloku. Default 4. Na vice-jadernych systemech zvazit 6-8.
-    int   stream_threads        = 4;
+    // v jednom audio bloku. 0 = AUTO dle hardware_concurrency (viz Engine::init):
+    // ~poloVina jader na main streaming, ~ctvrtina na rezonanci — nechava rezervu
+    // pro audio + GUI thread (napr. 4-jadre RPi5 → 2 main + 1 reso).
+    int   stream_threads        = 0;   // 0 = auto
     int   ring_capacity_frames  = 8192;   // ring per Voice (~170 ms @ 48k)
     // MAIN ring pool (>= max_voices). Oddeleny od rezonancniho poolu.
     int   num_rings             = 256;    // MAIN ring pool (>= max_voices)
     // -- Oddeleny streaming pro rezonanci (izolace od hlavnich hlasu) --
     int   resonance_num_rings      = 48;  // RESONANCE ring pool (>= max_resonance_voices)
-    int   resonance_stream_threads = 4;   // workeri jen pro rezonancni pool
+    int   resonance_stream_threads = 0;   // 0 = auto (viz stream_threads / Engine::init)
     // -- Faze 5 sympaticka rezonance --
     bool  resonance_enabled     = true;
     float resonance_gain_db     = -12.f;  // dB; expose pres CLI/GUI

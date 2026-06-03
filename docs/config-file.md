@@ -55,8 +55,8 @@ save.
   split, `resonance_window_ms`, the audio device fields), yet a file that predates
   those keys still loads, with each absent key taking its default. Defensively-read
   keys: all `agc_*`, `enhancer_*`, `limiter_*`, `convolver_*`, `resonance_enabled`,
-  `resonance_gain_db`, `resonance_layer_db`, `resonance_window_ms`, `config_page`,
-  `audio_block_size`, `audio_sample_rate`.
+  `resonance_gain_db`, `resonance_layer_db`, `resonance_window_ms`, `preload_ms`,
+  `cache_budget_mb`, `config_page`, `audio_block_size`, `audio_sample_rate`.
 - **BBE → Enhancer migration.** The old "BBE" stage was renamed to "Enhancer".
   The `enhancer_*` keys fall back to the legacy `bbe_*` keys when absent:
   `enhancer_process` ← `bbe_definition`, `enhancer_contour` ← `bbe_bass`,
@@ -126,6 +126,8 @@ the **MASTER** and **RESONANCE** CONFIG pages.
 | `excite_decay_ms`      | float | `5000.0` | `500` … `30000`| ms   | Excitation decay time | GUI (RESONANCE) |
 | `max_resonance_voices` | int   | `32`     | `1` … `64`     | —    | Max resonance voice count. **Init-only** — the RESONANCE "MAX RESONANCE" control is read-only; applied at engine init. | init only |
 | `resonance_window_ms`  | int   | `12000`  | ≥ 0 (ms)       | ms   | RAM-cache window of the resonance target layer per note. **JSON-only — there is intentionally no GUI control**; edit by hand. Larger = longer resonance tails held in RAM (more memory). | JSON only |
+| `preload_ms`           | int   | `150`    | ≥ 0 (ms)       | ms   | Per-sample preload head length kept in RAM (rest streams from disk). **JSON-only.** Larger = more RAM resident, less disk streaming (fewer underruns) — useful on embedded with fast RAM / slow storage; load whole short samples by raising this. | JSON only |
+| `cache_budget_mb`      | int   | `0`      | `0`=auto, else MB | MB | RAM budget for bank load. `0` = **auto** (~60 % of physical RAM, via `sysinfo`). `>0` = hard cap. On exceed, loading is **aborted** (incomplete bank + error log) instead of crashing on `bad_alloc`. **JSON-only.** Protects embedded (RPi5/4 GB) from OOM. | JSON only |
 
 ### DSP chain
 
@@ -245,6 +247,8 @@ file.)
   "excite_decay_ms": 5000,             // 500 .. 30000 ms
   "max_resonance_voices": 32,          // 1 .. 64 (init-only)
   "resonance_window_ms": 12000,        // RAM cache window (JSON-only, no GUI)
+  "preload_ms": 150,                   // preload head per sample (JSON-only)
+  "cache_budget_mb": 0,                // 0=auto (~60% RAM); RAM budget (JSON-only)
   "window_x": 100,                     // px (off-screen clamped)
   "window_y": 100,                     // px (off-screen clamped)
   "window_w": 1280,                    // px
@@ -284,9 +288,14 @@ Booleans are written as `true`/`false`; floats use the default `<<` formatting
   stages.
 - **`config_page` index meaning:** `0`=MASTER, `1`=RESONANCE, `2`=CONVOLVER,
   `3`=AGC, `4`=ENHANCER, `5`=LIMITER. Values outside `0`–`5` are reset to `0`.
-- **`resonance_window_ms` and `audio_sample_rate` have no GUI control** — they are
-  set only via this file. `max_resonance_voices` is editable in the file but its
-  GUI control is read-only (applied at engine init).
+- **`resonance_window_ms`, `preload_ms`, `cache_budget_mb` and `audio_sample_rate`
+  have no GUI control** — set only via this file (engine-init tuning, handy for
+  embedded targets like RPi5). `max_resonance_voices` is editable in the file but
+  its GUI control is read-only (applied at engine init).
+- **OOM guard.** `cache_budget_mb` (auto = ~60 % RAM) caps bank load; exceeding it
+  aborts the load with an error (incomplete bank) instead of crashing. Stream
+  worker-thread counts are **auto-sized** from CPU core count at engine init (no
+  JSON field) — ~half the cores for main streaming, ~quarter for resonance.
 - **Off-screen window clamp.** At startup the GUI restores `window_x`/`window_y`,
   then checks whether at least a 100×100 px region of the window overlaps any
   connected monitor. If not (e.g. a monitor was unplugged since the last save),

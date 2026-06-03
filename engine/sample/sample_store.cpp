@@ -165,10 +165,25 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
 
     // Discovery se lisi dle formatu (ploche soubory vs mNNN/ slozky), ale
     // scanBank uz vratil jednotny seznam (midi, cesta) — ingesce je spolecna.
+    // RAM budget (OOM guard): kdyz preload heads prekroci budget, PRERUSIME
+    // nacitani (neuplna banka + error) misto pádu na bad_alloc. Budget kryje
+    // hlavne preload heads; RAM cache rezonance se staví pozdeji a chrani ji
+    // bad_alloc try/catch v Engine::loadBank.
+    const size_t budget_bytes = cache_budget_mb > 0
+                              ? (size_t)cache_budget_mb * 1024 * 1024 : 0;
     for (const auto& entry : scan.files) {
         const ParsedName& p = entry.parsed;
         if (p.midi < 0 || p.midi > 127) continue;
         if (p.midi < midi_from || p.midi > midi_to) continue;   // mimo pozadovany rozsah
+        if (budget_bytes && bank.total_bytes >= budget_bytes) {
+            logger.log("bank", log::Severity::Error,
+                       "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — nacitani "
+                       "PRERUSENO, banka NEUPLNA. Sniz banku / preload_ms / "
+                       "resonance_window_ms, nebo zvys cache_budget_mb.",
+                       bank.name.c_str(), cache_budget_mb,
+                       bank.total_bytes / (1024 * 1024));
+            break;
+        }
         ingestSampleFile(bank, p.midi, entry.full_path, p.filename, logger,
                          preload_ms, resonance_window_ms);
     }

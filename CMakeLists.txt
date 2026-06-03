@@ -16,6 +16,27 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Default build type = Release (RT audio engine — bez optimalizaci nepouzitelny).
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# ARM (Raspberry Pi 5 / aarch64): tune na nativni CPU (Cortex-A76 + NEON).
+# Jen na Linux ARM, aby to nezasahlo do macOS/x86 buildu. Predpoklada se native
+# build na cilovem zarizeni; pri cross-compile flag uprav/vynech.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|armv8|armv7")
+    add_compile_options($<$<CONFIG:Release>:-mcpu=native>)
+endif()
+
+# LTO pro Release, pokud toolchain podporuje (mensi + rychlejsi binarka).
+include(CheckIPOSupported)
+check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
+if(_ipo_ok)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+else()
+    message(STATUS "IPO/LTO nepodporovano: ${_ipo_msg}")
+endif()
+
 # -- vendored deps --
 add_subdirectory(third-party)
 

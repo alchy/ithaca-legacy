@@ -3,6 +3,7 @@
 
 #include "sample/sample_store.h"
 #include "util/log.h"
+#include "util/sysinfo.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +22,21 @@ Engine::~Engine() {
 
 bool Engine::init(const EngineConfig& cfg) {
     cfg_ = cfg;
+    // Auto-sizing streamovacich workeru (0 = auto). Skaluje dle poctu jader a
+    // nechava rezervu pro audio + GUI thread: ~polovina jader na main streaming,
+    // ~ctvrtina na rezonanci. Napr. 4-jadre RPi5 → 2 main + 1 reso; 8-jadro →
+    // 4 + 2. Explicitni kladna hodnota z configu se respektuje (override).
+    {
+        int hc = (int)std::thread::hardware_concurrency();
+        if (hc <= 0) hc = 4;
+        if (cfg_.stream_threads <= 0)
+            cfg_.stream_threads = std::clamp(hc / 2, 2, 8);
+        if (cfg_.resonance_stream_threads <= 0)
+            cfg_.resonance_stream_threads = std::clamp(hc / 4, 1, 4);
+        log::Logger::default_().log("engine", log::Severity::Info,
+            "stream workers: main=%d resonance=%d (jader=%d)",
+            cfg_.stream_threads, cfg_.resonance_stream_threads, hc);
+    }
     pool_   = std::make_unique<VoicePool>(cfg.max_voices);
     // Oddelene streaming pooly: hlavni hlasy vs rezonance (izolace ringu + workeru,
     // aby rezonancni burst pod pedalem nevyhladovel hlavni hlasy). Kazdy pool ma
@@ -32,9 +48,9 @@ bool Engine::init(const EngineConfig& cfg) {
     cfg_.resonance_num_rings = res_rings;
 
     stream_main_ = std::make_unique<StreamEngine>(main_rings, cfg.ring_capacity_frames,
-                                                  cfg.stream_threads);
+                                                  cfg_.stream_threads);
     stream_resonance_ = std::make_unique<StreamEngine>(res_rings, cfg.ring_capacity_frames,
-                                                       cfg.resonance_stream_threads);
+                                                       cfg_.resonance_stream_threads);
     pool_->setStreamEngine(stream_main_.get());
     recomputeRefillThreshold();
     stream_main_->start();
@@ -55,27 +71,49 @@ bool Engine::init(const EngineConfig& cfg) {
 
 bool Engine::loadBank(const std::string& dir) {
     auto& L = log::Logger::default_();
-    // ::ithaca::loadBank (volna funkce) — kvalifikovat, jinak by se nasel
-    // clen Engine::loadBank (skryva volnou funkci ve scope metody).
-    bank_ = ithaca::loadBank(dir, L, /*cache_budget_mb=*/0,
-                           cfg_.midi_from, cfg_.midi_to,
-                           cfg_.preload_ms, cfg_.resonance_window_ms);
-    if (bank_.loaded_samples <= 0) return false;
-    // Cache min/max peak RMS napric vsemi velocity sloty (pro GUI slider rozsah).
-    {
-        float mn = 1e30f, mx = -1e30f;
-        for (int n = 0; n < 128; ++n)
-            for (const auto& s : bank_.notes[n].slots) {
-                if (s.rms_db < mn) mn = s.rms_db;
-                if (s.rms_db > mx) mx = s.rms_db;
-            }
-        if (mn <= mx) { bank_peak_rms_min_db_ = mn; bank_peak_rms_max_db_ = mx; }
+    // Efektivni RAM budget: explicitni z configu, jinak AUTO = ~60 % fyzicke RAM
+    // (ochrana pred OOM na embedded — RPi5/4GB). 0 jen kdyz RAM nezname.
+    int budget_mb = cfg_.cache_budget_mb;
+    if (budget_mb <= 0) {
+        const size_t ram = systemTotalRamBytes();
+        budget_mb = ram ? (int)((ram * 6 / 10) / (1024 * 1024)) : 0;
+        L.log("loader", log::Severity::Info,
+               "RAM budget banky: auto %d MB (60%% z %zu MB fyzicke)",
+               budget_mb, ram / (1024 * 1024));
     }
-    // Postav RAM cache rezonance pro per-notu cilovou vrstvu + zapis ready flagy.
-    {
-        auto ready = ithaca::buildResonanceCache(bank_, cfg_.resonance_layer_db,
-                                                 cfg_.resonance_window_ms, L);
-        if (resonance_) resonance_->setCacheReady(ready);
+    // OOM guard: hromadne alokace (preload heads + RAM cache rezonance) mohou na
+    // velke bance prekrocit RAM → bad_alloc. Misto pádu zalogujeme a vratime
+    // prazdnou banku (engine pojede tise). ::ithaca::loadBank navic prerusi
+    // nacitani uz pri prekroceni budgetu (neuplna banka + error log).
+    try {
+        bank_ = ithaca::loadBank(dir, L, budget_mb,
+                               cfg_.midi_from, cfg_.midi_to,
+                               cfg_.preload_ms, cfg_.resonance_window_ms);
+        if (bank_.loaded_samples <= 0) return false;
+        // Cache min/max peak RMS napric vsemi velocity sloty (GUI slider rozsah).
+        {
+            float mn = 1e30f, mx = -1e30f;
+            for (int n = 0; n < 128; ++n)
+                for (const auto& s : bank_.notes[n].slots) {
+                    if (s.rms_db < mn) mn = s.rms_db;
+                    if (s.rms_db > mx) mx = s.rms_db;
+                }
+            if (mn <= mx) { bank_peak_rms_min_db_ = mn; bank_peak_rms_max_db_ = mx; }
+        }
+        // RAM cache rezonance pro per-notu cilovou vrstvu + ready flagy.
+        {
+            auto ready = ithaca::buildResonanceCache(bank_, cfg_.resonance_layer_db,
+                                                     cfg_.resonance_window_ms, L);
+            if (resonance_) resonance_->setCacheReady(ready);
+        }
+    } catch (const std::bad_alloc&) {
+        L.log("loader", log::Severity::Error,
+              "Nedostatek RAM pri nacitani banky '%s' — zahozeno. Zkus mensi banku, "
+              "nizsi preload_ms / resonance_window_ms, nebo cache_budget_mb.",
+              dir.c_str());
+        bank_ = Bank{};
+        if (resonance_) resonance_->clearCacheReady();
+        return false;
     }
     return true;
 }
