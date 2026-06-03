@@ -29,11 +29,11 @@ bool readWavMono(const std::string& path, std::vector<float>& out, int& sr_out) 
     if (fmt==3 && bps==32) {
         int n=(int)(dsz/(4*ch)); out.resize((size_t)n);
         if (ch==1) f.read(reinterpret_cast<char*>(out.data()), (std::streamsize)n*4);
-        else { std::vector<float> b((size_t)n*ch); f.read(reinterpret_cast<char*>(b.data()),dsz);
+        else { std::vector<float> b((size_t)n*ch); f.read(reinterpret_cast<char*>(b.data()),(std::streamsize)n*ch*4);
                for(int i=0;i<n;++i){float s=0;for(int c=0;c<ch;++c)s+=b[(size_t)(i*ch+c)];out[(size_t)i]=s/ch;} }
     } else if (fmt==1 && bps==16) {
         int n=(int)(dsz/(2*ch)); out.resize((size_t)n);
-        std::vector<int16_t> b((size_t)n*ch); f.read(reinterpret_cast<char*>(b.data()),dsz);
+        std::vector<int16_t> b((size_t)n*ch); f.read(reinterpret_cast<char*>(b.data()),(std::streamsize)n*ch*2);
         for(int i=0;i<n;++i){float s=0;for(int c=0;c<ch;++c)s+=b[(size_t)(i*ch+c)]/32768.f;out[(size_t)i]=s/ch;}
     } else return false;
     return true;
