@@ -28,6 +28,12 @@ struct IParamPage {
     // Volitelny read-only metr (limiter GR / AGC current gain).
     // Vraci false kdyz stranka metr nema.
     virtual bool         meter(float& value, const char*& label) const = 0;
+    // Volitelny "selektor" (napr. IR list u Convolveru). Default: zadny.
+    virtual int          choiceCount() const { return 0; }
+    virtual const char*  choiceName(int /*i*/) const { return ""; }
+    virtual int          currentChoice() const { return -1; }
+    virtual void         selectChoice(int /*i*/) {}
+    virtual const char*  choiceLabel() const { return ""; }
 };
 
 // Audio-thread stage = param page + DSP. set()/setEnabled() z GUI threadu,

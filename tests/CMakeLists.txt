@@ -71,6 +71,10 @@ add_executable(test_resonance_engine test_resonance_engine.cpp)
 target_link_libraries(test_resonance_engine PRIVATE ithaca_core doctest)
 add_test(NAME test_resonance_engine COMMAND test_resonance_engine)
 
+add_executable(test_convolver test_convolver.cpp)
+target_link_libraries(test_convolver PRIVATE ithaca_core doctest)
+add_test(NAME test_convolver COMMAND test_convolver)
+
 add_executable(test_streamed_interp test_streamed_interp.cpp)
 target_link_libraries(test_streamed_interp PRIVATE ithaca_core doctest)
 add_test(NAME test_streamed_interp COMMAND test_streamed_interp)
