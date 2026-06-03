@@ -171,8 +171,10 @@ Attack time je fixní 5 ms (vypočten v `prepare()`): `atk_ = 1 − exp(−1/(0.
 
 **Enhancer** (ex-BBE) — originální piano enhancer (NE klon BBE), hybrid enhancing
 technik podložený teorií BBE. **Parallel-boost model:** pásma se PŘIČÍTAJí jako
-boosty na (fázově zarovnaný) dry → při unity ziscích je výstup ploché aligned dry
-(žádný comb notch). Komponenty: 3-pásmový split (LOW=LP250, MID=BP250–3k,
+boosty na fázově zarovnaný dry `xa` → při unity ziscích je výstup ploché aligned dry
+(žádný comb notch). **Pásma se odvozují z `xa` (ne z raw `x`)** → fázově koherentní
+s přičítaným dry (jinak by se v passbandu rušily — MID @2.7 kHz dalo −6 dB místo +6).
+Komponenty: 3 pásma (LOW=LP250, MID=presence bell HP1800→LP4000 ~2.7 kHz,
 HIGH=HP3k→LP11k), **dynamický boost-when-loud** na HIGH (PROCESS, škálováno broadband
 peak-monitorem), **konstantní** bass contour (CONTOUR), mid presence (MID), jemný
 **harmonický exciter** (sudá nelinearita `high²` → 2. harmonická, high-passed ~4,5 kHz,
@@ -203,13 +205,11 @@ magnitudově ploché). Viz spec 2026-06-03.
 
 1. Pokud `!enabled_` → return.
 2. Broadband peak env (linkovaný `max(|L|,|R|)`, attack ~5 ms / release ~80 ms) → `scale = smoothstep(env, 0.05, 0.35)`.
-3. Band-filtry z dry: `low=LP250(x)`, `mid=LP3k(HP250(x))`, `high=LPcap(HP3k(x))`.
-4. Exciter: `exc = HP4.5k(high + 0.5·high²)`; `excite_amt = kExcite·(PROCESS/12)·scale`.
-5. All-pass aligned dry: `xa = ap_c·x + x₋₁ − ap_c·y₋₁`.
+3. All-pass aligned dry PRVNÍ (fázová reference): `xa = ap_c·x + x₋₁ − ap_c·y₋₁`.
+4. Band-filtry **z `xa`** (koherence): `low=LP250(xa)`, `mid=LP4k(HP1.8k(xa))`, `high=LPcap(HP3k(xa))`.
+5. Exciter: `exc = HP4.5k(high + 0.5·high²)`; `excite_amt = kExcite·(PROCESS/12)·scale`.
 6. Dynamický HIGH zisk: `gHi = 1 + (10^(PROCESS/20) − 1)·scale`.
 7. **Parallel boost:** `out = xa + (gLow−1)·low + (gMid−1)·mid + (gHi−1)·high + exc·excite_amt`. Při všech parametrech 0 → `out = xa` (ploché, jen fázové zarovnání).
-
-Celkem 4 biquad ticky (20 MAC) na vzorek, 2 na kanál, 2 filtry v sérii.
 
 ---
 
