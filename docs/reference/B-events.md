@@ -76,6 +76,10 @@ Kapacita fronty: `MIDI_Q_SIZE = 1024` eventů. Překročení → tichý drop (vi
 | `bool held(int note) const` | nota → bool | — | Drží notu aspoň jeden kanál? |
 | `void allNotesOff()` | — | drain, case `AllNotesOff` | Všechny masky na 0 (panika / reload). |
 
+**Proč bitmaska (a ne čítač/refcount):** `held_[note] |= (1u<<ch)` / `&= ~(1u<<ch)`. 16 bitů přesně pokryje 16 MIDI kanálů; je **idempotentní v rámci kanálu** (opakovaný on z téhož kanálu jen znovu nastaví bit — refcount by přičetl a rozhodil párování); **off od kanálu, který notu nedržel, je čistý no-op** (`bit & maska == 0`) — refcount by podtekl do záporu. `first` = maska byla 0 (→ `pedal_.noteOn`), `last` = maska je 0 (→ release). Velikost 128×2 B = 256 B, vše na audio threadu bez zámků/atomik.
+
+**Hraniční případ:** maska se mění **per kanál**, takže když note-off dorazí na *jiném* kanálu, než byl note-on (nesoulad), nebo se off ztratí, bit zůstane nastaven → `last` nikdy nenastane → `pedal_.noteOff`/`VoicePool::noteOffWithPedal` se nezavolá → **nota může uvíznout**. Za normálního MIDI (off matchuje kanál on) nenastává; **CC123 All-Notes-Off** (panika) masky vyčistí. Vědomý trade-off oproti staré channel-blind verzi, která uvolňovala na každý off (a měla proto cross-hand cancellation bug).
+
 Verifikace: `tests/test_note_hold.cpp` (cross-channel hand-off, idempotence opakovaného on téhož kanálu, no-op off, hranice).
 
 ---
