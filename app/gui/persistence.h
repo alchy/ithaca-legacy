@@ -40,7 +40,7 @@ struct GuiState {
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
     int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only
     int         window_x = 100, window_y = 100;
-    int         window_w = 1280, window_h = 820;
+    int         window_w = 1280, window_h = 720;   // HW cilovy display 1280x720
 };
 
 // Najit cestu k state.json podle OS:

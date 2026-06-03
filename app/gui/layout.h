@@ -20,9 +20,9 @@ inline float S(float px) { return px * g_scale; }
 
 // -- Laditelne rozmery (base px; projdou pres S() na call-site) --------------
 namespace Dims {
-    // Okno (default velikost pri prvnim spusteni).
+    // Okno (default velikost pri prvnim spusteni). HW cilovy display 1280x720.
     inline constexpr float win_w = 1280.f;
-    inline constexpr float win_h = 820.f;
+    inline constexpr float win_h = 720.f;
 
     // Sloupce hlavni rady. col_bank/col_dsp pevne, stred = zbytek (flex).
     inline constexpr float col_bank = 250.f;
