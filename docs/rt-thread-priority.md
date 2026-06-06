@@ -454,7 +454,7 @@ Per-platforma overit:
 | macOS | Pri high system load (zip celeho repa) audio nepustuje | spustit kompresi v pozadi, sledovat dropouts indicator. |
 | Linux | `pthread_setschedparam` uspeje (root) nebo loguje EPERM (uzivatel) | spustit `ithaca-cli --selftest` pres root i bez nej, overit log. |
 | Linux | Fallback `setpriority(-10)` se uplatni | spustit bez RT permissions, overit log + nice value `ps -o pri,ni,cmd`. |
-| RPi5 | RT priorita zlepsi jitter pri mereni | testovat dropouts s & bez RT. Doplnit do `docs/raspberry-pi-5.md` (az vznikne). |
+| RPi5 | RT priorita zlepsi jitter pri mereni | testovat dropouts s & bez RT. Postup setupu RPi5 viz [`docs/raspberry-pi-5.md`](raspberry-pi-5.md). |
 
 Unit testy nepiseme — RT scheduling se nedetektuje deterministicky v testu, jen
 integration overenim ze API vraci uspech a `enableRealtimeAudio` nezhazi proces.
