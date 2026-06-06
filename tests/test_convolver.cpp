@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 #include "dsp/convolver.h"
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <cmath>
@@ -82,4 +83,70 @@ TEST_CASE("Convolver: SIZE posouva telo (vetsi → nizsi spektralni teziste)") {
     Convolver big;   big.prepare(48000.f,8192);   big.setEnabled(true);   big.set(0,1.f);   big.set(3,1.0f);  // velke telo
     Convolver small; small.prepare(48000.f,8192); small.setEnabled(true); small.set(0,1.f); small.set(3,0.0f); // male telo
     CHECK(centroid(big) < centroid(small));   // vetsi telo → nizsi teziste
+}
+TEST_CASE("Convolver: split (head+tail) ekvivalence s referencni FIR konvoluci") {
+    // Hot loop je rozdelen na dva flat passy bez wraparound branche
+    // (head: rp od write_pos dolu k 0; tail: rp od kMaxIr-1 dolu).
+    // Tento test overuje, ze nove rozlozeni produkuje stejny vystup jako
+    // primy ne-ring FIR y[i] = sum_k ir[k]*x[i-k] s nulami vlevo.
+    // PRIME = kMaxIr + 100 -> write_pos pristane v "head" oblasti
+    // a M=256 presahne do "tail" oblasti -> oba passy aktivni.
+    constexpr int M_test = 256;
+    constexpr int PRIME = 8192 + 100;
+    constexpr int TEST  = 64;
+    constexpr int TOTAL = PRIME + TEST;
+
+    auto rng = [](uint32_t& s) {
+        s = s * 1664525u + 1013904223u;
+        return ((float)(s >> 8) / (float)0xFFFFFF) * 2.f - 1.f;   // U(-1, 1)
+    };
+
+    // Vstup
+    std::vector<float> in_l(TOTAL), in_r(TOTAL);
+    { uint32_t s = 1234567;
+      for (int i = 0; i < TOTAL; ++i) { in_l[(size_t)i] = rng(s); in_r[(size_t)i] = rng(s); } }
+
+    // IR uz peak-normalizovana (setIR ji znova nenormalizuje, peak == 1).
+    std::vector<float> ir(M_test);
+    { uint32_t s = 42;
+      for (int i = 0; i < M_test; ++i) ir[(size_t)i] = rng(s) * std::exp(-3.f * (float)i / (float)M_test);
+      float peak = 0.f; for (float v : ir) peak = std::max(peak, std::fabs(v));
+      REQUIRE(peak > 0.f);
+      for (auto& v : ir) v /= peak; }
+
+    Convolver c;
+    c.prepare(48000.f, 256);
+    c.setEnabled(true);
+    c.set(0, 1.f);    // MIX=1 -> pure wet (dry=0)
+    c.setIR(ir);
+
+    std::vector<float> L = in_l, R = in_r;
+    c.process(L.data(), R.data(), TOTAL);
+
+    // Referencni primy FIR (zero-padded vlevo, matches initial ring of nuly).
+    auto ref = [&](const std::vector<float>& x) {
+        std::vector<float> y((size_t)TOTAL, 0.f);
+        for (int i = 0; i < TOTAL; ++i) {
+            const int kmax = (i < M_test - 1) ? i + 1 : M_test;
+            float acc = 0.f;
+            for (int k = 0; k < kmax; ++k) acc += ir[(size_t)k] * x[(size_t)(i - k)];
+            y[(size_t)i] = acc;
+        }
+        return y;
+    };
+    const auto rL = ref(in_l);
+    const auto rR = ref(in_r);
+
+    // Test posledni TEST vzorky: write_pos prozarazen po PRIME % kMaxIr = 100,
+    // takze pro vsechny tyto i je headN < M_test -> tail pass aktivni.
+    // Tolerance: kompilator muze prehazet poradi akumulace (lane-parallel
+    // reduction po vektorizaci) -> max chyba ~ M*eps*max(|x|) ~ 256*1e-7 ~ 3e-5
+    // skalovane velikosti konvolvovaneho signalu (mensi nez |ir|_1 ~ 30).
+    double maxErr = 0.0;
+    for (int i = PRIME; i < TOTAL; ++i) {
+        maxErr = std::max(maxErr, (double)std::fabs(L[(size_t)i] - rL[(size_t)i]));
+        maxErr = std::max(maxErr, (double)std::fabs(R[(size_t)i] - rR[(size_t)i]));
+    }
+    INFO("max abs error proti referencni FIR konvoluci = " << maxErr);
+    CHECK(maxErr < 1e-3);
 }

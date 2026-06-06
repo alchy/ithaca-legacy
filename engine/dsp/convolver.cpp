@@ -51,15 +51,32 @@ void Convolver::process(float* L, float* R, int n) {
     if (M == 0) return;
     const float wet = mix_.load(std::memory_order_relaxed);
     const float dry = 1.f - wet;
+    // Dva flat passy misto jednoho cyklu s wraparound branchem:
+    //   pass A — od write_pos_ smerem k 0  (head ringu)
+    //   pass B — od kMaxIr-1 smerem dolu   (wrapped tail), pokud M presahne head
+    // Inner loopy nemaji `if` ani loop-carried index → MSVC i clang
+    // autovektorizuji na SSE2/AVX2/NEON (4-8x speedup).
+    // Pointery na surove buffery — autovektorizace na std::vector indexovani
+    // pres operator[] obcas zdrahava kvuli aliasing analyze.
+    float* const bl = buf_l_.data();
+    float* const br = buf_r_.data();
+    const float* const ip = ir.data();
     for (int i = 0; i < n; ++i) {
-        buf_l_[(size_t)write_pos_] = L[i];
-        buf_r_[(size_t)write_pos_] = R[i];
+        bl[write_pos_] = L[i];
+        br[write_pos_] = R[i];
         float oL = 0.f, oR = 0.f;
-        int rp = write_pos_;
-        for (int k = 0; k < M; ++k) {
-            oL += ir[(size_t)k] * buf_l_[(size_t)rp];
-            oR += ir[(size_t)k] * buf_r_[(size_t)rp];
-            if (--rp < 0) rp = kMaxIr - 1;
+        const int headN = (M < write_pos_ + 1) ? M : (write_pos_ + 1);
+        for (int k = 0; k < headN; ++k) {
+            const int j = write_pos_ - k;
+            oL += ip[k] * bl[j];
+            oR += ip[k] * br[j];
+        }
+        const int tailN = M - headN;
+        const int base = kMaxIr - 1;
+        for (int k = 0; k < tailN; ++k) {
+            const int j = base - k;
+            oL += ip[headN + k] * bl[j];
+            oR += ip[headN + k] * br[j];
         }
         L[i] = dry * L[i] + wet * oL;
         R[i] = dry * R[i] + wet * oR;
