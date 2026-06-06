@@ -11,7 +11,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(MSVC)
     add_compile_options(/W4 /permissive- /Zc:preprocessor)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX _USE_MATH_DEFINES)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -136,6 +136,8 @@ if(TARGET imgui AND TARGET glfw)
         target_link_libraries(ithaca-gui PRIVATE
             "-framework OpenGL" "-framework Cocoa" "-framework IOKit"
             "-framework CoreVideo")
+    elseif(WIN32)
+        target_link_libraries(ithaca-gui PRIVATE opengl32)
     elseif(UNIX)
         target_link_libraries(ithaca-gui PRIVATE GL)
     endif()

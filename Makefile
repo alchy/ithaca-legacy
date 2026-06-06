@@ -17,7 +17,11 @@
 ifeq ($(OS),Windows_NT)
     PLATFORM := Windows
     EXE      := .exe
-    NULL     := NUL
+    # Recepty pouzivaji bash semantiku (printf, command -v, [ -x ], mkdir -p);
+    # vyzadujeme bash shell i na Windows (Git Bash / MSYS). V bashi je NUL bezny
+    # nazev souboru — null device je /dev/null.
+    SHELL    := bash
+    NULL     := /dev/null
     RM_RF    := cmake -E rm -rf
     MKDIR_P  := cmake -E make_directory
 else
@@ -46,11 +50,16 @@ else
     JOBS ?= 4
 endif
 
-# Generator: Ninja kdyz je v PATH, jinak Unix Makefiles (na non-Windows).
+# Generator: Ninja kdyz je v PATH; jinak Unix Makefiles (Unix) nebo
+# Visual Studio 17 2022 (Windows — Unix Makefiles by hledalo gcc, ktere s MSVC
+# toolchainem chybi). Bundlovana Ninja z VS Installer-u byva mimo PATH, takze
+# default fallback je VS generator.
 ifeq ($(GENERATOR),)
     HAS_NINJA := $(shell command -v ninja 2>$(NULL) >$(NULL) && echo yes)
     ifeq ($(HAS_NINJA),yes)
         GENERATOR := Ninja
+    else ifeq ($(PLATFORM),Windows)
+        GENERATOR := Visual Studio 17 2022
     else
         GENERATOR := Unix Makefiles
     endif
