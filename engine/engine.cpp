@@ -5,6 +5,7 @@
 #include "util/log.h"
 #include "util/sysinfo.h"
 #include "util/denormals.h"
+#include "util/rt_priority.h"
 
 #include <algorithm>
 #include <chrono>
@@ -201,6 +202,55 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     // doznivajicich denormalu (release/decay/IIR) → underrun "z niceho".
     static thread_local bool denorm_set = false;
     if (!denorm_set) { enableFlushDenormals(); denorm_set = true; }
+
+    // RT priorita audio vlakna — jednou per thread. Soft-failure: pri selhani
+    // se loguje WARN + per-platform TIP, audio bezi na default scheduling.
+    // Viz docs/rt-thread-priority.md.
+    static thread_local bool rt_set = false;
+    if (!rt_set) {
+        const RtAudioParams rp{ cfg_.sample_rate, cfg_.block_size };
+        int err = 0;
+        const auto st = enableRealtimeAudio(rp, &err);
+        switch (st) {
+            case RtAudioStatus::Full:
+                LOG_RT_INFO("audio", "RT priorita aktivni (sr=%d block=%d)",
+                            rp.sample_rate, rp.block_size);
+                break;
+            case RtAudioStatus::Partial:
+                // Win-only: SetThreadPriority OK, MMCSS task selhal.
+                LOG_RT_INFO("audio",
+                    "RT priorita castecna (TIME_CRITICAL ano, MMCSS ne; err=%d)",
+                    err);
+                LOG_RT_INFO("audio",
+                    "TIP: zkontroluj 'Multimedia Class Scheduler' service "
+                    "(services.msc -> MMCSS). Bez ni audio thread dostava fair "
+                    "share -> jitter pri systemove zatezi.");
+                break;
+            case RtAudioStatus::Failed:
+                LOG_RT_WARN("audio",
+                    "RT priorita selhala (err=%d) — default scheduling, jitter risk",
+                    err);
+#if defined(__linux__)
+                LOG_RT_INFO("audio",
+                    "TIP: pridej do /etc/security/limits.conf radky "
+                    "'@audio - rtprio 99' a '@audio - memlock unlimited', "
+                    "pak 'gpasswd -a $USER audio' + relogin.");
+#elif defined(_WIN32)
+                LOG_RT_INFO("audio",
+                    "TIP: zkontroluj 'Increase scheduling priority' privilege "
+                    "(secpol.msc -> Local Policies -> User Rights Assignment) "
+                    "a stav MMCSS service (services.msc).");
+#elif defined(__APPLE__)
+                LOG_RT_INFO("audio",
+                    "TIP: thread_policy_set selhal — typicky sandbox bez "
+                    "audio-unit-host entitlement. Spousti se aplikace mimo App "
+                    "Sandbox? Pri distribuci pridej "
+                    "com.apple.security.temporary-exception.audio-unit-host.");
+#endif
+                break;
+        }
+        rt_set = true;
+    }
 
     if (!initialized_ || !pool_) return;
     // Bank reload v progressu? Vrat ticho — nesahej na bank_ (race s reloadBank

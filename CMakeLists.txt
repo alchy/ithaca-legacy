@@ -58,6 +58,7 @@ add_subdirectory(third-party)
 # Ve fazi 1 obsahuje jen logger. V dalsich fazich pribydou sample/voice/dsp moduly.
 add_library(ithaca_core STATIC
     engine/util/log.cpp
+    engine/util/rt_priority.cpp
     engine/io/wav_reader.cpp
     engine/io/wav_writer.cpp
     engine/io/audio_device.cpp
@@ -92,6 +93,10 @@ if(APPLE)
     target_link_libraries(ithaca_core PUBLIC
         "-framework CoreAudio" "-framework AudioToolbox"
         "-framework CoreFoundation")
+elseif(WIN32)
+    # avrt = MMCSS API (AvSetMmThreadCharacteristicsW) pro RT audio thread —
+    # viz engine/util/rt_priority.cpp.
+    target_link_libraries(ithaca_core PUBLIC avrt)
 elseif(UNIX)
     find_package(Threads REQUIRED)
     target_link_libraries(ithaca_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
