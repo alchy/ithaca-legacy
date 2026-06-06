@@ -26,7 +26,9 @@
 | Komponenta | Doporuceni | Proc |
 |---|---|---|
 | **Board** | RPi 5 (**8 GB**) | 4× Cortex-A76 @ 2.4 GHz + NEON 4-wide SIMD; 8 GB pro `cache_budget` ~4.5 GB + headroom. 4 GB stale funkcni, ale male banky a vyssi `cache_budget_mb` clamping. |
-| **Storage** | **NVMe SSD pres PCIe HAT** (Pimoroni NVMe Base, Geekworm X1001, Pineboards HatDrive!) — 256-1000 GB | Sample streaming chce nizkou random read latenci. NVMe ~3000 MB/s vs micro-SD A2 ~100 MB/s. |
+| **Storage interface** | **Pimoroni NVMe Base Duo** (2× M.2 2230/2242/2280 NVMe sloty) | Doporuceny carrier — stackuje pres PCIe 2.0 x1 FPC kabel pod RPi5. 2 sloty umozni: (1) jen jeden NVMe ted, druhy slot pro budouci expanzi nebo RAID, (2) hot data na rychlem disku + sample banky na druhem. Pin-thru shoda s GPIO header umoznuje stackovat DAC HAT nad NVMe Base Duo bez konfliktu. |
+| **Storage alt.** | Pimoroni NVMe Base (single slot), Geekworm X1001, Pineboards HatDrive! | Levnejsi single-slot varianty pokud nepotrebujes druhy disk. Stejny PCIe 2.0 x1, stejna rychlost. |
+| **NVMe SSD** | 256-1000 GB M.2 2280 (Samsung 980, WD SN570, Crucial P3) | Sample streaming chce nizkou random read latenci. NVMe ~3000 MB/s vs micro-SD A2 ~100 MB/s. M.2 2230 / 2242 form factory taky vejdou se na Base Duo. |
 | **Alt. storage** | USB 3.0 SSD + USB-SATA adapter | Lacinejsi fallback, ~400 MB/s, taky staci. |
 | **Boot media** | micro-SD (A2 class) pro bootloader, NVMe pro rootfs (od Bookworm `rpi-eeprom` umoznuje boot primo z NVMe) | Bezpecne pri prvnich pokusech: boot z SD, instalace, az pak migrace na NVMe. |
 | **Audio out** | **I2S DAC HAT** (HiFiBerry DAC+/DAC2 Pro, IQaudio DAC Pro, Pimoroni Audio DAC SHIM) | Nizka latence, bit-exact 24/48 nebo 24/96, zadny USB jitter. |
