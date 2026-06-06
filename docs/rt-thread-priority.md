@@ -489,3 +489,85 @@ integration overenim ze API vraci uspech a `enableRealtimeAudio` nezhazi proces.
 - Linux RTKit: [freedesktop RealtimeKit spec](https://www.freedesktop.org/wiki/Software/RealtimeKit/)
 - Windows MMCSS: [Multimedia Class Scheduler Service](https://learn.microsoft.com/en-us/windows/win32/procthread/multimedia-class-scheduler-service)
 - Audio threading best practices: [Ross Bencina — *Real-Time Audio Programming 101*](http://www.rossbencina.com/code/real-time-audio-programming-101-time-waits-for-nothing)
+
+---
+
+## Pull-time briefing — commit `f751c4c`
+
+Tato sekce shrnuje konkretni nasazeni navrhu vyse jako referenci pri checkoutu
+na druhem prostredi (macOS/Linux), kdyz feature pulluje uzivatel, ktery ji
+nepsal a chce vedet co testovat / instalovat bez ctenia diffu.
+
+### Co se pridalo
+
+| Soubor | Ucel |
+|--------|------|
+| `engine/util/rt_priority.h` | Cross-platform fasada (enum `RtAudioStatus`, struct `RtAudioParams`, `enableRealtimeAudio`, `disableRealtimeAudio`) |
+| `engine/util/rt_priority.cpp` | Per-platform impl s `#ifdef _WIN32 / __APPLE__ / __linux__` vetvemi |
+| `docs/rt-thread-priority.md` | Tato specifikace |
+| `CMakeLists.txt` | +5 radku: `engine/util/rt_priority.cpp` mezi sources, `avrt` link na Windows |
+| `engine/engine.cpp` | +50 radku: include + `thread_local` guard v `processBlock` po FTZ/DAZ + per-platform TIP logy pri failu |
+
+### Per-platform chovani po pullu
+
+**Windows** (overeno na MSVC 19.44 / Windows 11):
+
+- Default cesta = **Full** status: `SetThreadPriority(TIME_CRITICAL)` + MMCSS task "Pro Audio"
+- Default Win11 instalace ma MMCSS service zapnutou → bez konfigurace funguje
+- Log pri startu: `[audio] [INFO]: RT priorita aktivni (sr=48000 block=256)`
+- Buildi pres `avrt.lib` (linkly v CMakeLists.txt do `elseif(WIN32)` vetve)
+- Pokud nekde uvidis **Partial** log + TIP o MMCSS → MMCSS service je vypnuta;
+  `services.msc → Multimedia Class Scheduler → Start`
+
+**macOS** (neovereno na M-series — chybi target machine):
+
+- Cesta: `thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)` s `period = block_size * 1e9 / sample_rate` prevedene na Mach abs time pres `mach_timebase_info`
+- `computation = period / 2`, `constraint = period`, `preemptible = 0`
+- Zadny extra link — `CoreAudio/AudioToolbox/CoreFoundation` jsou uz v `if(APPLE)` vetvi
+- Po pullu na M1/M2/M3: `make build` by melo projit bez modifikaci CMake. Pokud `mach/thread_policy.h` chybi v include path, zkontroluj `xcode-select --install`
+- Ocekavany log: `[audio] [INFO]: RT priorita aktivni (sr=48000 block=256)` (Full)
+- Kdyz selze (sandbox bez audio entitlement): TIP o `com.apple.security.temporary-exception.audio-unit-host` — relevantni jen pro App Store distribuci, ne pro lokalni buildy
+
+**Linux** (neovereno — chybi target machine):
+
+- Cesta: `pthread_setschedparam(SCHED_FIFO, prio=80)`
+- Bez noveho CMake linku (POSIX, `Threads::Threads` uz je v `elseif(UNIX)`)
+- **Pozor — vyzaduje permissions:**
+  - Bud spustit jako root (RPi5 native setup)
+  - Nebo doplnit `/etc/security/limits.conf`:
+    ```
+    @audio - rtprio 99
+    @audio - memlock unlimited
+    ```
+    a `gpasswd -a $USER audio` + relogin
+- Bez permissions: log ukaze `[audio] [WARNING]: RT priorita selhala (err=1) — default scheduling` + TIP s temi limits.conf radky (presny TIP je v `engine/engine.cpp` v `#elif defined(__linux__)` vetvi)
+- RTKit fallback **neni zatim implementovany** — viz "Implementacni kroky" v teto specifikaci jako druha vlna pro desktop distra
+
+### Jak overit po pullu
+
+1. **Kompilace:** `make build` — mela by projit beze zmeny CMake na macOS/Linux. Na Windows overeno.
+2. **Test suita:** `ctest --test-dir build -C Release` — zadny novy test (RT scheduling neni deterministicky testovatelny), ale stavajicich 33 musi projit.
+3. **Smoke (CLI):** `./build/Release/ithaca-cli --selftest` — probehne bez audio device, nezobrazi RT log.
+4. **GUI smoke s RT logem:**
+
+   ```bash
+   ./build/Release/ithaca-gui --bank-dir <cesta> --log-level info
+   ```
+
+   V prvnich ~3 vterinach po startu vidis v stdoutu jednu ze tri hlasek (`Full` / `Partial` / `Failed`). To je primarni signal, ze RT init probehl.
+
+5. **Realny impact** se meri DSP LOAD dlazdici v indicator stripu pri hrani + v klidu. Bez RT na Windows kolisal 40–120 %, po RT je load nizsi a stabilnejsi bez overload eventu (overeno).
+
+### Co kdyby na macOS/Linux neslo zkompilovat
+
+Pouzite headery:
+
+- macOS: `<mach/mach.h>`, `<mach/mach_init.h>`, `<mach/thread_act.h>`, `<mach/thread_policy.h>`, `<mach/mach_time.h>` — vse soucast macOS SDK (`xcode-select`)
+- Linux: `<pthread.h>`, `<sched.h>`, `<cerrno>` — POSIX, standardni
+
+Pri problemech zkontrolovat sekci konkretni platformy vyse — popisuje API a alternativy (POSIX `SCHED_FIFO` fallback na macOS, RTKit na Linuxu).
+
+### Co rozhodne NEZMENI chovani
+
+- Pokud RT API selze, status = `Failed`, audio se chova **presne jako pred timto commitem** (default scheduling). Zadna regrese.
+- `disableRealtimeAudio()` je no-op vsude krome Windows. Neni kriticke volat pri shutdown — handle se uvolni s procesem. Ale pattern rika explicit cleanup.
