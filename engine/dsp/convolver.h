@@ -9,6 +9,12 @@
 
 namespace ithaca::dsp {
 
+// Energeticky orez koncoveho ocasku IR: vrati nejmensi delku L takovou, ze
+// zahozena energie (tapy [L, n)) je <= drop_frac * celkova energie. Tim je orez
+// SLUCHOVE TRANSPARENTNI — relativni L2 chyba wet vystupu je ~sqrt(drop_frac)
+// (napr. drop_frac=1e-6 → ~-60 dB). Min 1; ticho → 1. Cista fce (testovatelna).
+int trimmedIrLength(const std::vector<float>& ir, double drop_frac);
+
 class Convolver : public DspStage {
 public:
     static constexpr int kMaxIr = 8192;   // ~170 ms @48k

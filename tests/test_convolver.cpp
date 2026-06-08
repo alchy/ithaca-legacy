@@ -150,3 +150,45 @@ TEST_CASE("Convolver: split (head+tail) ekvivalence s referencni FIR konvoluci")
     INFO("max abs error proti referencni FIR konvoluci = " << maxErr);
     CHECK(maxErr < 1e-3);
 }
+
+TEST_CASE("trimmedIrLength: energeticka zaruka + hranice") {
+    // Silne doznivajici IR → orez zkrati delku, ale zahodi <= drop_frac energie.
+    const int n = 2000;
+    std::vector<float> ir((size_t)n);
+    for (int i = 0; i < n; ++i) ir[(size_t)i] = std::exp(-(float)i / 50.f);  // tau=50
+
+    const double drop = 1e-6;
+    int L = trimmedIrLength(ir, drop);
+    CHECK(L < n);            // neco se orezalo
+    CHECK(L >= 1);
+
+    double total = 0.0, dropped = 0.0;
+    for (int i = 0; i < n; ++i) total   += (double)ir[(size_t)i] * ir[(size_t)i];
+    for (int i = L; i < n; ++i) dropped += (double)ir[(size_t)i] * ir[(size_t)i];
+    INFO("L=" << L << " dropped/total=" << (dropped/total));
+    CHECK(dropped <= drop * total);     // ZARUKA: zahozena energie pod prahem
+}
+
+TEST_CASE("trimmedIrLength: konstantni IR se neorezava; ticho/hranice") {
+    std::vector<float> flat(1000, 1.0f);
+    CHECK(trimmedIrLength(flat, 1e-6) == 1000);   // zadny doznivajici ocas → bez orezu
+
+    std::vector<float> zero(500, 0.0f);
+    CHECK(trimmedIrLength(zero, 1e-6) == 1);       // ticho → 1
+
+    std::vector<float> one(1, 0.5f);
+    CHECK(trimmedIrLength(one, 1e-6) == 1);
+}
+
+TEST_CASE("Convolver: rebuildIr orezava runtime IR (nizsi DECAY = kratsi)") {
+    Convolver c;
+    c.prepare(48000.f, 256);          // postavi modal IR pres rebuildIr (orezany)
+    const int full = c.irLength();
+    CHECK(full > 0);
+    CHECK(full <= Convolver::kMaxIr);
+    c.set(1, 0.05f);                  // velmi nizky DECAY → kratky doznivajici ocas
+    const int shortL = c.irLength();
+    INFO("IR delka: default=" << full << " nizky DECAY=" << shortL);
+    CHECK(shortL < full);            // kratsi IR = levnejsi konvoluce
+    CHECK(shortL >= 1);
+}

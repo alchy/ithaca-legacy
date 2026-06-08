@@ -44,6 +44,23 @@ int Convolver::irLength() const {
     return (int)ir_[(size_t)active_.load(std::memory_order_acquire)].size();
 }
 
+int trimmedIrLength(const std::vector<float>& ir, double drop_frac) {
+    const int n = (int)ir.size();
+    if (n <= 1) return n;
+    double total = 0.0;
+    for (float v : ir) total += (double)v * (double)v;
+    if (total <= 0.0) return 1;                  // ticho → 1 tap
+    const double budget = drop_frac * total;      // max energie zahoditelna z konce
+    double tail = 0.0;
+    int L = 1;
+    for (int i = n - 1; i >= 1; --i) {
+        const double e = (double)ir[(size_t)i] * (double)ir[(size_t)i];
+        if (tail + e > budget) { L = i + 1; break; }   // tap i uz nelze zahodit
+        tail += e;                                       // tap i zahozen
+    }
+    return L;
+}
+
 void Convolver::process(float* L, float* R, int n) {
     if (!enabled_.load(std::memory_order_relaxed)) return;
     const auto& ir = ir_[(size_t)active_.load(std::memory_order_acquire)];
@@ -51,6 +68,18 @@ void Convolver::process(float* L, float* R, int n) {
     if (M == 0) return;
     const float wet = mix_.load(std::memory_order_relaxed);
     const float dry = 1.f - wet;
+    // Early-out pri MIX~0: cisty dry, ale udrz historii koherentni (O(1)/vzorek
+    // misto O(M) MAC), aby pri navratu MIX>0 nevznikla diskontinuita.
+    if (wet < 1e-4f) {
+        float* const bl0 = buf_l_.data();
+        float* const br0 = buf_r_.data();
+        for (int i = 0; i < n; ++i) {
+            bl0[write_pos_] = L[i];
+            br0[write_pos_] = R[i];
+            if (++write_pos_ >= kMaxIr) write_pos_ = 0;
+        }
+        return;
+    }
     // Dva flat passy misto jednoho cyklu s wraparound branchem:
     //   pass A — od write_pos_ smerem k 0  (head ringu)
     //   pass B — od kMaxIr-1 smerem dolu   (wrapped tail), pokud M presahne head
@@ -132,6 +161,14 @@ void Convolver::rebuildIr() {
     const float a  = 1.f - std::exp(-2.f * 3.14159265f * fc / sr_);
     float y = 0.f;
     for (auto& v : tmp) { y += a * (v - y); v = y; }
+    // Energeticky orez koncoveho ~nuloveho ocasku (po DECAY/TONE) → mensi M =
+    // levnejsi konvoluce, sluchove transparentni (zahozeno <= 1e-6 energie =
+    // ~-60 dB; navic skalovano MIX). Aplikuje se jen na runtime IR (modal/WAV
+    // preset), ne na primy setIR (testy/raw IR zustavaji plne).
+    {
+        const int L = trimmedIrLength(tmp, 1e-6);
+        if (L < (int)tmp.size()) tmp.resize((size_t)L);
+    }
     setIR(tmp);   // normalizuje + atomicky publikuje
 }
 
