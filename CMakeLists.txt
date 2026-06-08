@@ -88,6 +88,18 @@ add_library(ithaca_core STATIC
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)
+
+# Convolver: nejdrazsi per-sample FIR. -ffast-math (jen tento TU) odemkne
+# autovektorizaci float-redukce v hot loopu (NEON/SSE/AVX). Denormaly resi
+# globalni FTZ/DAZ (engine processBlock), IR/vstup jsou konecne → bezpecne.
+# Sluchove identicke (reassociace ~ -120 dB). MSVC ekvivalent /fp:fast.
+if(NOT ITHACA_SANITIZE)   # fast-math + sanitizer spolu nedavaji smysl
+    if(MSVC)
+        set_source_files_properties(engine/dsp/convolver.cpp PROPERTIES COMPILE_OPTIONS /fp:fast)
+    else()
+        set_source_files_properties(engine/dsp/convolver.cpp PROPERTIES COMPILE_OPTIONS -ffast-math)
+    endif()
+endif()
 target_link_libraries(ithaca_core PUBLIC miniaudio_inc rtmidi)
 if(APPLE)
     target_link_libraries(ithaca_core PUBLIC
