@@ -231,3 +231,80 @@ TEST_CASE("loadBank: RAM budget (OOM guard) preruseni nacitani bez padu") {
 
     fs::remove_all(dir);
 }
+
+TEST_CASE("loadBank plni BankLoadProgress (faze monotonni, done==total na konci)") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_progress";
+    fs::remove_all(dir); fs::create_directories(dir);
+    writeConstWav(dir + "/m060-vel0-f48.wav", 0.2f);
+    writeConstWav(dir + "/m062-vel0-f48.wav", 0.4f);
+    writeConstWav(dir + "/m064-vel0-f48.wav", 0.6f);
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    BankLoadProgress prog;
+    Bank bank = loadBank(dir, L, 0, 0, 127, 150, 500, &prog);
+    fs::remove_all(dir);
+    CHECK(bank.loaded_samples == 3);
+    CHECK(prog.phase.load() == 1);              // heads dokoncene (cache az Engine)
+    CHECK(prog.total.load() == 3);
+    CHECK(prog.done.load()  == 3);
+}
+
+TEST_CASE("bankLoadFraction mapuje faze na 0..1 (heads 60 %, cache 40 %)") {
+    CHECK(bankLoadFraction(0, 0, 0)   == doctest::Approx(0.f));
+    CHECK(bankLoadFraction(1, 1, 2)   == doctest::Approx(0.3f));
+    CHECK(bankLoadFraction(1, 2, 2)   == doctest::Approx(0.6f));
+    CHECK(bankLoadFraction(2, 1, 4)   == doctest::Approx(0.7f));
+    CHECK(bankLoadFraction(3, 0, 0)   == doctest::Approx(1.f));
+    CHECK(bankLoadFraction(1, 0, 0)   == doctest::Approx(0.f));   // total 0 -> 0
+}
+
+TEST_CASE("BankLoadProgress: bytes_loaded roste a truncated se nastavi pri prekroceni budgetu") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_budget_prog";
+    fs::remove_all(dir); fs::create_directories(dir);
+    // Streamed head = preload 150 ms = 7200 frames ≈ 57,6 kB float/soubor →
+    // 24 souboru ≈ 1,38 MB > budget 1 MB (break po ~18; presny pocet
+    // nezarucen — ERROR pripad s neuplnou bankou).
+    for (int n = 40; n < 64; ++n) {
+        char name[40];
+        std::snprintf(name, sizeof(name), "/m%03d-vel0-f48.wav", n);
+        writeConstWav(dir + name, 0.3f, 48000, 48000);   // 1 s → Streamed
+    }
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    BankLoadProgress prog;
+    prog.budget_bytes.store(1024 * 1024);   // caller (Engine) nastavuje pred loadem
+    Bank bank = loadBank(dir, L, /*cache_budget_mb=*/1, 0, 127, 150, 500, &prog);
+    fs::remove_all(dir);
+    CHECK(prog.truncated.load());                         // budget prekrocen
+    CHECK(prog.bytes_loaded.load() == bank.total_bytes);  // zrcadli ucetnictvi banky
+    CHECK(bank.loaded_samples < 24);                      // neuplna banka
+}
+
+TEST_CASE("paralelni ingest: dva behy daji identickou banku (deterministicky merge)") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_par";
+    fs::remove_all(dir); fs::create_directories(dir);
+    for (int n = 50; n < 70; ++n) {                  // 20 souboru → vic nez workeru
+        char name[40];
+        std::snprintf(name, sizeof(name), "/m%03d-vel0-f48.wav", n);
+        writeConstWav(dir + name, 0.1f + 0.04f * (float)(n - 50));
+    }
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    Bank a = loadBank(dir, L);
+    Bank b = loadBank(dir, L);
+    fs::remove_all(dir);
+    CHECK(a.loaded_samples == 20);
+    CHECK(b.loaded_samples == 20);
+    CHECK(a.total_bytes == b.total_bytes);
+    for (int n = 0; n < 128; ++n) {
+        REQUIRE(a.notes[n].slots.size() == b.notes[n].slots.size());
+        for (size_t s = 0; s < a.notes[n].slots.size(); ++s) {
+            CHECK(a.notes[n].slots[s].rms_db == b.notes[n].slots[s].rms_db);
+            CHECK(a.notes[n].slots[s].variants[0].mics[0].preload_head
+                  == b.notes[n].slots[s].variants[0].mics[0].preload_head);
+        }
+    }
+}

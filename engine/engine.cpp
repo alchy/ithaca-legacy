@@ -75,7 +75,7 @@ bool Engine::init(const EngineConfig& cfg) {
     return true;
 }
 
-bool Engine::loadBank(const std::string& dir) {
+bool Engine::loadBank(const std::string& dir, BankLoadProgress* progress) {
     auto& L = log::Logger::default_();
     // Efektivni RAM budget: explicitni z configu, jinak AUTO = ~60 % fyzicke RAM
     // (ochrana pred OOM na embedded — RPi5/4GB). 0 jen kdyz RAM nezname.
@@ -87,6 +87,9 @@ bool Engine::loadBank(const std::string& dir) {
                "RAM budget banky: auto %d MB (60%% z %zu MB fyzicke)",
                budget_mb, ram / (1024 * 1024));
     }
+    if (progress)
+        progress->budget_bytes.store((size_t)budget_mb * 1024 * 1024,
+                                     std::memory_order_relaxed);
     // OOM guard: hromadne alokace (preload heads + RAM cache rezonance) mohou na
     // velke bance prekrocit RAM → bad_alloc. Misto pádu zalogujeme a vratime
     // prazdnou banku (engine pojede tise). ::ithaca::loadBank navic prerusi
@@ -94,8 +97,12 @@ bool Engine::loadBank(const std::string& dir) {
     try {
         bank_ = ithaca::loadBank(dir, L, budget_mb,
                                cfg_.midi_from, cfg_.midi_to,
-                               cfg_.preload_ms, cfg_.resonance_window_ms);
-        if (bank_.loaded_samples <= 0) return false;
+                               cfg_.preload_ms, cfg_.resonance_window_ms,
+                               progress);
+        if (bank_.loaded_samples <= 0) {
+            if (progress) progress->phase.store(3);
+            return false;
+        }
         // Cache min/max peak RMS napric vsemi velocity sloty (GUI slider rozsah).
         {
             float mn = 1e30f, mx = -1e30f;
@@ -109,9 +116,11 @@ bool Engine::loadBank(const std::string& dir) {
         // RAM cache rezonance pro per-notu cilovou vrstvu + ready flagy.
         {
             auto ready = ithaca::buildResonanceCache(bank_, cfg_.resonance_layer_db,
-                                                     cfg_.resonance_window_ms, L);
+                                                     cfg_.resonance_window_ms, L,
+                                                     progress);
             if (resonance_) resonance_->setCacheReady(ready);
         }
+        if (progress) progress->phase.store(3);   // hotovo
     } catch (const std::bad_alloc&) {
         L.log("loader", log::Severity::Error,
               "Nedostatek RAM pri nacitani banky '%s' — zahozeno. Zkus mensi banku, "
@@ -119,12 +128,13 @@ bool Engine::loadBank(const std::string& dir) {
               dir.c_str());
         bank_ = Bank{};
         if (resonance_) resonance_->clearCacheReady();
+        if (progress) progress->phase.store(3);
         return false;
     }
     return true;
 }
 
-bool Engine::reloadBank(const std::string& dir) {
+bool Engine::reloadBank(const std::string& dir, BankLoadProgress* progress) {
     // Graceful reload — viz engine.h dokumentace. Volat jen z non-RT threadu.
     // 1) Drain: posli AllNotesOff do MIDI fronty. Audio thread ji vyzvedne
     //    pristi blok a spusti release ramp na vsech aktivnich voicech.
@@ -155,7 +165,7 @@ bool Engine::reloadBank(const std::string& dir) {
     if (pool_)      pool_->reset();
     if (resonance_) resonance_->reset();
     // 6) Slow disk I/O — bank_ se prepise, ale audio thread to nesahne.
-    const bool ok = loadBank(dir);
+    const bool ok = loadBank(dir, progress);
     // 7) Pust audio thread zpet.
     bank_loading_.store(false, std::memory_order_release);
     return ok;

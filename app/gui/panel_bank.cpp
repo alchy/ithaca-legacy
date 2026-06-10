@@ -57,7 +57,7 @@ void renderBankPanel(AppContext& ctx) {
             if (ImGui::Selectable(label.c_str(), sel)) {
                 if (b != ctx.state.bank_path) {
                     ctx.state.bank_path = b;
-                    ctx.engine.reloadBank(b);   // safe drain→silence→load→resume
+                    ctx.requestBankReload(b);   // async; modal overlay viz main.cpp
                 }
             }
         }
@@ -91,12 +91,18 @@ void renderBankPanel(AppContext& ctx) {
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
     ImGui::TextUnformatted(facts);
     ImGui::PopStyleColor();
+    if (ctx.bank_truncated_) {
+        // Posledni load prekrocil RAM budget → banka neuplna (detail v LOG).
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::gold));
+        ImGui::TextUnformatted("NEUPLNA (RAM limit)");
+        ImGui::PopStyleColor();
+    }
     ImGui::Dummy({0, 10});
 
     // RELOAD
     if (ImGui::Button("RELOAD",
                       ImVec2(ImGui::GetContentRegionAvail().x - pad, 0))) {
-        if (!ctx.state.bank_path.empty()) ctx.engine.reloadBank(ctx.state.bank_path);
+        if (!ctx.state.bank_path.empty()) ctx.requestBankReload(ctx.state.bank_path);
     }
 
     ImGui::Unindent(pad);

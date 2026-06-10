@@ -81,6 +81,15 @@ private:
     int findSlot(const PedalState* pedal);
 
     std::vector<Voice> voices_;
+    // Souvisla pamet damp bufferu vsech hlasu (pool_size * 2 * kDampMaxFrames;
+    // Voice drzi jen pointer — viz Voice::setDampBuffer).
+    std::vector<float> damp_pool_;
+    // Per-nota citac aktivnich hlasu → hasActiveMainVoice je O(1) misto
+    // O(pool) scanu (rezonancni eligibility ho vola az 127x na jeden note-on).
+    // Invariant: citac sleduje VYHRADNE prechody active() rizene poolem:
+    // inc po v.start(), dec pri prepareDamp (retrigger/steal) a pri prechodu
+    // active→inactive kolem v.process(); reset() nuluje.
+    uint8_t note_active_count_[128] = {};
 };
 
 } // namespace ithaca

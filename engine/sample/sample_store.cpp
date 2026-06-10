@@ -8,27 +8,73 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <thread>
+#include <vector>
 
 namespace ithaca {
 
 namespace {
 
-// Nacte JEDEN WAV soubor jako VelocitySlot a vlozi ho do bank.notes[midi].
-// Sdileno fixed-velocity i dynamic-velocity loaderem — oba se lisi jen v tom,
-// jak objevi dvojice (midi, cesta); samotna ingesce (peek → MicLayer → preload
-// head → peak RMS → attack end → resonance okno → slot + statistiky) je spolecna.
-// Vraci true pri uspechu. `filename` je jen pro logy.
-bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
-                      const std::string& filename, log::Logger& logger,
-                      int preload_ms, int resonance_window_ms) {
-    (void)resonance_window_ms;   // ingest uz neplni preload_resonance — dela to buildResonanceCache
+// Jednoduchy fork-join: rozdej indexy 0..n-1 mezi az n_workers vlaken
+// (atomic counter; kazdy worker si bere dalsi volny index). Pouziva paralelni
+// ingest a stavba rezonancni cache — per-index prace je nezavisla.
+template <typename Fn>
+void parallelFor(int n, int n_workers, Fn&& fn) {
+    if (n <= 0) return;
+    const int nw = (std::min)(n_workers, n);
+    if (nw <= 1) { for (int i = 0; i < n; ++i) fn(i); return; }
+    std::atomic<int> next{0};
+    std::vector<std::thread> ts;
+    ts.reserve((size_t)nw);
+    for (int t = 0; t < nw; ++t)
+        ts.emplace_back([&] {
+            for (;;) {
+                const int i = next.fetch_add(1, std::memory_order_relaxed);
+                if (i >= n) break;
+                fn(i);
+            }
+        });
+    for (auto& t : ts) t.join();
+}
+
+int loaderWorkers() {
+    int hc = (int)std::thread::hardware_concurrency();
+    if (hc <= 0) hc = 4;
+    return std::clamp(hc / 2, 2, 8);
+}
+
+// Vysledek pripravy JEDNOHO WAV souboru (paralelni faze — bez zapisu do Bank).
+struct PreparedSample {
+    int          midi = -1;
+    std::string  filename;     // jen pro logy
+    VelocitySlot slot;
+    size_t       bytes = 0;    // preload_head bajty (budget/statistiky)
+    bool         ok = false;
+};
+
+// Cteni + analyza JEDNOHO souboru (peek → MicLayer → preload head → peak RMS
+// → attack end). Sdileno fixed- i dynamic-velocity loaderem; bezi PARALELNE
+// pres worker pool (logger ma vlastni mutex). budget_bytes/approx_bytes:
+// hruby OOM guard paralelniho cteni — kdyz rozectene heads presahnou 2x
+// budget, soubor se uz NEcte (autoritativni presna kontrola je v commitu;
+// prekroceni je tak jako tak ERROR + neuplna banka, presna mnozina nactenych
+// souboru v chybovem pripade neni garantovana).
+PreparedSample prepareSampleFile(int midi, const std::string& full_path,
+                                 const std::string& filename,
+                                 log::Logger& logger, int preload_ms,
+                                 size_t budget_bytes,
+                                 std::atomic<size_t>& approx_bytes) {
+    PreparedSample out;
+    out.midi = midi;
+    out.filename = filename;
     WavInfo info = peekWavInfo(full_path);
     if (!info.valid) {
         logger.log("bank", log::Severity::Warning,
                    "Nelze precist hlavicku: %s", filename.c_str());
-        return false;
+        return out;
     }
 
     MicLayer mic;
@@ -41,8 +87,7 @@ bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
     // "Kratky" sampl = vejde se do 2 * preload_ms. Drzime cely v RAM (head).
     const int preload_frames =
         (int)((int64_t)preload_ms * info.sample_rate / 1000);
-    const int short_threshold_frames = preload_frames * 2;
-    if (info.frames <= short_threshold_frames) {
+    if (info.frames <= preload_frames * 2) {
         mic.mode        = MicLayerMode::FullyLoaded;
         mic.head_frames = info.frames;
     } else {
@@ -50,12 +95,19 @@ bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
         mic.head_frames = preload_frames;
     }
 
+    const size_t est = (size_t)mic.head_frames * 2 * sizeof(float);
+    if (budget_bytes &&
+        approx_bytes.fetch_add(est, std::memory_order_relaxed) + est
+            > budget_bytes * 2) {
+        return out;   // OOM guard paralelniho cteni (commit by stejne odmitl)
+    }
+
     // Nacti preload_head [0 .. head_frames).
     WavData head = readWavRange(full_path, 0, mic.head_frames);
     if (!head.valid) {
         logger.log("bank", log::Severity::Warning,
                    "Nelze nacist preload (read failed): %s", filename.c_str());
-        return false;
+        return out;
     }
     if (head.frames < mic.head_frames) {
         // Soubor je oriznuty — sampl si nechame s tim, co jsme dostali, jen
@@ -83,25 +135,29 @@ bool ingestSampleFile(Bank& bank, int midi, const std::string& full_path,
         mic.resonance_start_frame = ae;          // = attack_end_frame (buffer plni buildResonanceCache)
     }
 
+    out.bytes = mic.preload_head.size() * sizeof(float);
+
     SampleAsset asset;
     asset.peak_rms_db      = rms;
     asset.attack_end_frame = ae;
     asset.mics.push_back(std::move(mic));
 
-    VelocitySlot slot;
-    slot.rms_db = rms;
-    slot.variants.push_back(std::move(asset));
+    out.slot.rms_db = rms;
+    out.slot.variants.push_back(std::move(asset));
+    out.ok = true;
+    return out;
+}
 
-    bank.notes[midi].slots.push_back(std::move(slot));
-    bank.notes[midi].recorded = true;
-
-    const MicLayer& m = bank.notes[midi].slots.back().variants[0].mics[0];
+// Vlozeni pripraveneho samplu do banky + statistiky. POUZE z merge vlakna,
+// ve scan poradi (deterministicka banka + presna budget kontrola).
+void commitSample(Bank& bank, PreparedSample&& p) {
+    const MicLayer& m = p.slot.variants[0].mics[0];
     // resident_frames: pocitej REZIDENTNI v RAM (head + resonance).
     bank.resident_frames += (size_t)m.head_frames + (size_t)m.resonance_frames;
-    bank.total_bytes  += (m.preload_head.size() + m.preload_resonance.size())
-                         * sizeof(float);
+    bank.total_bytes     += p.bytes;
     bank.loaded_samples++;
-    return true;
+    bank.notes[p.midi].slots.push_back(std::move(p.slot));
+    bank.notes[p.midi].recorded = true;
 }
 
 // Serad sloty kazde noty VZESTUPNE podle peak RMS (nejtissi → nejhlasitejsi).
@@ -138,7 +194,8 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
               int cache_budget_mb,
               int midi_from, int midi_to,
               int preload_ms,
-              int resonance_window_ms) {
+              int resonance_window_ms,
+              BankLoadProgress* progress) {
     Bank bank;
     bank.path = dir;
     bank.name = std::filesystem::path(dir).filename().string();
@@ -171,10 +228,39 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
     // bad_alloc try/catch v Engine::loadBank.
     const size_t budget_bytes = cache_budget_mb > 0
                               ? (size_t)cache_budget_mb * 1024 * 1024 : 0;
-    for (const auto& entry : scan.files) {
-        const ParsedName& p = entry.parsed;
+    // Filtr eligible souboru predem (progress total + podklad pro paralelni
+    // ingest): indexy do scan.files.
+    std::vector<int> idx;
+    idx.reserve(scan.files.size());
+    for (int i = 0; i < (int)scan.files.size(); ++i) {
+        const ParsedName& p = scan.files[(size_t)i].parsed;
         if (p.midi < 0 || p.midi > 127) continue;
-        if (p.midi < midi_from || p.midi > midi_to) continue;   // mimo pozadovany rozsah
+        if (p.midi < midi_from || p.midi > midi_to) continue;
+        idx.push_back(i);
+    }
+    if (progress) {
+        progress->phase.store(1);
+        progress->total.store((int)idx.size());
+        progress->done.store(0);
+    }
+    (void)resonance_window_ms;   // resonanci plni az buildResonanceCache
+    // Paralelni priprava (cteni + analyza) — kazdy worker pise jen svuj index.
+    std::vector<PreparedSample> prepared(idx.size());
+    std::atomic<size_t> approx_bytes{0};
+    parallelFor((int)idx.size(), loaderWorkers(), [&](int i) {
+        const BankFileEntry& e = scan.files[(size_t)idx[(size_t)i]];
+        prepared[(size_t)i] = prepareSampleFile(
+            e.parsed.midi, e.full_path, e.parsed.filename, logger,
+            preload_ms, budget_bytes, approx_bytes);
+        if (progress) {
+            progress->done.fetch_add(1, std::memory_order_relaxed);
+            progress->bytes_loaded.fetch_add(prepared[(size_t)i].bytes,
+                                             std::memory_order_relaxed);
+        }
+    });
+    // Merge jednovlaknove ve scan poradi → deterministicka banka + presny budget.
+    for (auto& p : prepared) {
+        if (!p.ok) continue;
         if (budget_bytes && bank.total_bytes >= budget_bytes) {
             logger.log("bank", log::Severity::Error,
                        "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — nacitani "
@@ -182,11 +268,13 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
                        "resonance_window_ms, nebo zvys cache_budget_mb.",
                        bank.name.c_str(), cache_budget_mb,
                        bank.total_bytes / (1024 * 1024));
+            if (progress) progress->truncated.store(true, std::memory_order_relaxed);
             break;
         }
-        ingestSampleFile(bank, p.midi, entry.full_path, p.filename, logger,
-                         preload_ms, resonance_window_ms);
+        commitSample(bank, std::move(p));
     }
+    if (progress)
+        progress->bytes_loaded.store(bank.total_bytes, std::memory_order_relaxed);
 
     sortBankSlotsByRms(bank);
     logBankSummary(bank, logger, cache_budget_mb);
@@ -194,13 +282,26 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
 }
 
 std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
-                                          int window_ms, log::Logger& logger) {
+                                          int window_ms, log::Logger& logger,
+                                          BankLoadProgress* progress) {
     std::array<bool, 128> ready{};   // vse false
-    for (int n = 0; n < 128; ++n) {
+    if (progress) {
+        int recorded = 0;
+        for (int n = 0; n < 128; ++n)
+            if (bank.notes[(size_t)n].recorded && !bank.notes[(size_t)n].slots.empty())
+                ++recorded;
+        progress->phase.store(2);
+        progress->total.store(recorded);
+        progress->done.store(0);
+    }
+    // Paralelne pres noty: kazda nota pise JEN sve sloty a svuj prvek ready[n]
+    // (nezavisle pametove lokace); logger ma mutex, progress je atomic.
+    parallelFor(128, loaderWorkers(), [&](int n) {
         auto& note = bank.notes[(size_t)n];
-        if (!note.recorded || note.slots.empty()) continue;
+        if (!note.recorded || note.slots.empty()) return;
+        if (progress) progress->done.fetch_add(1, std::memory_order_relaxed);
         const int si = nearestSlotByRms(note, target_db);
-        if (si < 0) continue;
+        if (si < 0) return;
         for (int s = 0; s < (int)note.slots.size(); ++s) {
             auto& vslot = note.slots[(size_t)s];
             if (vslot.variants.empty() || vslot.variants[0].mics.empty()) continue;
@@ -223,12 +324,16 @@ std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
                 m.resonance_frames  = rd.frames;
                 m.preload_resonance = std::move(rd.samples);
                 ready[(size_t)n] = true;
+                if (progress)
+                    progress->bytes_loaded.fetch_add(
+                        m.preload_resonance.size() * sizeof(float),
+                        std::memory_order_relaxed);
             } else {
                 logger.log("bank", log::Severity::Warning,
                            "buildResonanceCache: read failed note %d", n);
             }
         }
-    }
+    });
     return ready;
 }
 

@@ -29,13 +29,13 @@
 // Underrun → fast fade do ticha + LOG_RT_WARN.
 
 #include "sample/sample_types.h"
+#include "stream/streamed_reader.h"
 
 #include <cstdint>
 
 namespace ithaca {
 
 class StreamEngine;
-struct RingHandle;
 
 // Default cas ramp na sledovani target_gain_. Volene tak, aby zmeny pedalu
 // (per-blok update z ResonanceEngine) byly slysitelne plynule a bez zipperu.
@@ -128,21 +128,13 @@ private:
     // ramp stepu bez nutnosti predavat sr).
     float  engine_sr_      = 48000.f;
 
-    // -- Streaming (stejne jako Voice) --
+    // -- Streaming: sdileny StreamedSampleReader (viz Voice). ResonanceVoice
+    //    drzi jen EOF-hold policy (eofAcquire + holdHiFromLo/bumpLoIdx). --
     StreamEngine* stream_       = nullptr;
-    RingHandle*   ring_         = nullptr;
-    int64_t       file_request_off_ = 0;
-    bool          stream_pending_   = false;
+    StreamedSampleReader reader_;
     bool          underrun_fading_  = false;
     float         underrun_gain_    = 1.f;
     float         underrun_step_    = 0.f;
-
-    // -- SR konverze ve streamovane (ring) casti: lo/hi sliding window (viz Voice). --
-    float    ring_lo_l_   = 0.f;
-    float    ring_lo_r_   = 0.f;
-    float    ring_hi_l_   = 0.f;
-    float    ring_hi_r_   = 0.f;
-    int64_t  ring_lo_idx_ = -1;
 
     // Recompute `gain_step_` z (gain_, target_gain_, ramp_frames_).
     // Volajici (setTargetGain/addExcitation) prepisuji i ostry step z fadeOut

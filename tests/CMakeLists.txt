@@ -141,3 +141,7 @@ add_test(NAME test_ir_wav COMMAND test_ir_wav)
 add_executable(test_ir_modal test_ir_modal.cpp)
 target_link_libraries(test_ir_modal PRIVATE ithaca_core doctest)
 add_test(NAME test_ir_modal COMMAND test_ir_modal)
+
+add_executable(test_render_regression test_render_regression.cpp)
+target_link_libraries(test_render_regression PRIVATE ithaca_core doctest)
+add_test(NAME test_render_regression COMMAND test_render_regression)

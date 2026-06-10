@@ -20,18 +20,10 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
     // Kdybychom drzeli ring z minule, vrat ho. (V realnem provozu se ResonanceVoice
     // slot recykluje az po deaktivaci, kdy ring uz byl uvolnen v process();
     // ale defensive cleanup pro pripady ze caller re-start aktivni slot.)
-    if (ring_ && stream_) {
-        stream_->releaseRing(ring_);
-        ring_ = nullptr;
-    }
-    stream_pending_   = false;
+    reader_.release(stream_);
     underrun_fading_  = false;
     underrun_gain_    = 1.f;
     underrun_step_    = 0.f;
-    file_request_off_ = 0;
-    ring_lo_l_ = 0.f; ring_lo_r_ = 0.f;
-    ring_hi_l_ = 0.f; ring_hi_r_ = 0.f;
-    ring_lo_idx_ = -1;
 
     midi_       = midi;
     mic_        = mic;
@@ -70,35 +62,23 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
                       (int64_t)mic_->file.frames
                           > (int64_t)mic_->resonance_start_frame));
 
-    // Streamed → alokuj ring a zazadat o data za preload_resonance regionem.
+    // Streamed → alokuj ring a zazadat o data za preload_resonance regionem
+    // (reader: acquire + request s no-advance-on-drop). Pokud uz neni co
+    // streamovat (resonance_window pokryval konec souboru), ring se jen
+    // oznaci EOF a request se neposle. Ring pool plny → ResonanceVoice
+    // doplyne preload_resonance a tise utichne (zadny crash; rezonance je
+    // luxus, nikoliv must-have hlavniho hlasu).
     if (active_ && mic_->mode == MicLayerMode::Streamed && stream_) {
-        ring_ = stream_->acquireRing();
-        if (ring_) {
-            const int64_t cap         = (int64_t)ring_->capacity_frames;
-            const int     eff_res_frames = use_cache_ ? mic_->resonance_frames : 0;
-            const int64_t res_end     = (int64_t)mic_->resonance_start_frame
-                                      + (int64_t)eff_res_frames;
-            const int64_t total_after = (int64_t)mic_->file.frames - res_end;
-            // Pokud uz neni co streamovat (resonance_window pokryval konec souboru),
-            // tak ring stejne mame, jen ho oznacime jako EOF a request neposleme.
-            if (total_after <= 0) {
-                ring_->eof_.store(true, std::memory_order_release);
-                file_request_off_ = res_end;
-            } else {
-                const int64_t want    = (cap < total_after) ? cap : total_after;
-                const bool    eof_done = (want >= total_after);
-                if (stream_->requestRead(ring_, mic_->file.path,
-                                         res_end, want, eof_done)) {
-                    file_request_off_ = res_end + want;
-                    stream_pending_   = true;
-                } else {
-                    // Fronta plna: offset neposouvat, refill v process() zopakuje.
-                    file_request_off_ = res_end;
-                }
-            }
+        const int     eff_res_frames = use_cache_ ? mic_->resonance_frames : 0;
+        const int64_t res_end     = (int64_t)mic_->resonance_start_frame
+                                  + (int64_t)eff_res_frames;
+        const int64_t total_after = (int64_t)mic_->file.frames - res_end;
+        if (total_after <= 0) {
+            (void)reader_.beginEofOnly(stream_, res_end);
+        } else {
+            (void)reader_.begin(stream_, mic_->file.path, res_end,
+                                (int64_t)mic_->file.frames);
         }
-        // Ring pool plny → ResonanceVoice doplyne preload_resonance a tise utichne
-        // (zadny crash; rezonance je luxus, nikoliv must-have hlavnho hlasu).
     }
 
     // DEBUG: kazdy resonance voice start logujeme s timestamp + midi + initial_gain.
@@ -155,14 +135,12 @@ void ResonanceVoice::fadeOut(float engine_sr) {
 }
 
 void ResonanceVoice::hardStop() noexcept {
-    if (ring_ && stream_) { stream_->releaseRing(ring_); ring_ = nullptr; }
-    stream_pending_  = false;
+    reader_.release(stream_);
     underrun_fading_ = false;
     active_          = false;
     is_fading_out_   = false;
     gain_ = 0.f; target_gain_ = 0.f; gain_step_ = 0.f;
     mic_  = nullptr;
-    ring_lo_idx_ = -1;
 }
 
 void ResonanceVoice::recomputeGainStep() noexcept {
@@ -173,7 +151,7 @@ void ResonanceVoice::recomputeGainStep() noexcept {
 
 bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept {
     if (!active_ || !mic_) {
-        if (ring_ && stream_) { stream_->releaseRing(ring_); ring_ = nullptr; }
+        reader_.release(stream_);
         active_ = false;
         return false;
     }
@@ -187,6 +165,8 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
     const bool    streamed     = (mic_->mode == MicLayerMode::Streamed);
 
     bool produced = false;
+    // Bulk rezim ringu: 1 acquire + 1 release za blok misto 3 atomik/vzorek.
+    if (reader_.hasRing()) reader_.beginBlock();
 
     for (int i = 0; i < n_samples; ++i) {
         int p0 = (int)position_;
@@ -209,30 +189,30 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                 sL = res_data[local * 2]     * (1.f - frac) + res_data[(local + 1) * 2]     * frac;
                 sR = res_data[local * 2 + 1] * (1.f - frac) + res_data[(local + 1) * 2 + 1] * frac;
                 position_ += pos_inc_;
-            } else if (ring_) {
-                // Streamed: lin. interpolace pres lo/hi okno. Seed lo = posledni
-                // preload_resonance frame, hi = prvni ring pop → plynuly sev.
-                if (ring_lo_idx_ < 0) {
-                    ring_lo_idx_ = res_end - 1;
-                    if (res_frames > 0) {
-                        ring_lo_l_ = res_data[(size_t)(res_frames - 1) * 2];
-                        ring_lo_r_ = res_data[(size_t)(res_frames - 1) * 2 + 1];
-                    }
-                    float L, R;
-                    if (ring_->popFrame(L, R)) { ring_hi_l_ = L; ring_hi_r_ = R; }
-                    else { ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_; }
+            } else if (reader_.hasRing()) {
+                // Streamed: lin. interpolace pres lo/hi okno readeru. Seed lo
+                // = posledni preload_resonance frame, hi = prvni ring pop →
+                // plynuly sev. (res_frames==0: seedovana nula se zahodi driv,
+                // nez se pouzije — overeno trasovanim indexu.)
+                if (!reader_.seeded()) {
+                    const float lo_l = (res_frames > 0)
+                        ? res_data[(size_t)(res_frames - 1) * 2] : 0.f;
+                    const float lo_r = (res_frames > 0)
+                        ? res_data[(size_t)(res_frames - 1) * 2 + 1] : 0.f;
+                    reader_.seed(lo_l, lo_r, res_end - 1);
                 }
                 const int64_t target = (int64_t)position_;
                 bool underrun = false;
-                while (ring_lo_idx_ < target) {
-                    ring_lo_l_ = ring_hi_l_; ring_lo_r_ = ring_hi_r_;
-                    float L, R;
-                    if (ring_->popFrame(L, R)) {
-                        ring_hi_l_ = L; ring_hi_r_ = R;
-                    } else if (ring_->eof_.load(std::memory_order_acquire)) {
-                        ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_;
-                        ring_lo_idx_++;
-                        if (ring_lo_idx_ >= (int64_t)total_frames - 1) {
+                // EOF-hold policy: pri prazdnem ringu s EOF drz posledni
+                // vzorek (hi=lo) a dojed k deaktivaci u konce souboru;
+                // bez EOF jde o skutecny underrun.
+                while (reader_.loIdx() < target) {
+                    const auto adv = reader_.advance(target);
+                    if (adv == StreamedSampleReader::Advance::Reached) break;
+                    if (reader_.eofAcquire()) {
+                        reader_.holdHiFromLo();
+                        reader_.bumpLoIdx();
+                        if (reader_.loIdx() >= (int64_t)total_frames - 1) {
                             active_ = false;
                         }
                         break;
@@ -240,7 +220,6 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                         underrun = true;
                         break;
                     }
-                    ring_lo_idx_++;
                 }
                 if (underrun) {
                     if (!underrun_fading_) {
@@ -251,13 +230,13 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                     }
                     // Drz posledni znamy vzorek — underrun rampa ho fadne k 0
                     // (nuly by fade obesly = tvrdy strih).
-                    sL = ring_lo_l_; sR = ring_lo_r_;
+                    sL = reader_.loL(); sR = reader_.loR();
                 } else {
-                    float frac = (float)(position_ - (double)ring_lo_idx_);
+                    float frac = (float)(position_ - (double)reader_.loIdx());
                     if (frac < 0.f) frac = 0.f;
                     if (frac > 1.f) frac = 1.f;
-                    sL = ring_lo_l_ * (1.f - frac) + ring_hi_l_ * frac;
-                    sR = ring_lo_r_ * (1.f - frac) + ring_hi_r_ * frac;
+                    sL = reader_.loL() * (1.f - frac) + reader_.hiL() * frac;
+                    sR = reader_.loR() * (1.f - frac) + reader_.hiR() * frac;
                 }
                 position_ += pos_inc_;
             } else {
@@ -293,9 +272,8 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
         }
 
         // Hard guard na konec souboru (kdyby pos jsel mimo file.frames i v ringu).
-        if (streamed && ring_ && (int)position_ >= total_frames &&
-            ring_->eof_.load(std::memory_order_acquire) &&
-            ring_->available() == 0) {
+        if (streamed && reader_.hasRing() && (int)position_ >= total_frames &&
+            reader_.eofAcquire() && reader_.ringAvailable() == 0) {
             active_ = false;
         }
 
@@ -336,35 +314,16 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
         if (!active_) break;
     }
 
-    // Refill heuristika (Streamed). Stejny vzor jako Voice — kdyz avail klesne
-    // pod prah, pozadat o dalsi data.
-    if (streamed && ring_ && stream_ && active_) {
-        const int avail = ring_->available();
-        const int thr   = stream_->refillThresholdFrames();
-        const int half_cap = ring_->capacity_frames / 2;
-        if (stream_pending_ && avail >= half_cap) {
-            stream_pending_ = false;
-        }
-        if (!stream_pending_ && avail < thr) {
-            const int64_t remain = (int64_t)total_frames - file_request_off_;
-            if (remain > 0) {
-                int64_t want = (int64_t)(ring_->capacity_frames - avail);
-                if (want > remain) want = remain;
-                const bool eof_done = (file_request_off_ + want >= (int64_t)total_frames);
-                if (stream_->requestRead(ring_, mic_->file.path,
-                                         file_request_off_, want, eof_done)) {
-                    file_request_off_ += want;
-                    stream_pending_    = true;
-                }
-                // false → drop; zadny posun offsetu (retry pristi blok).
-            }
-        }
+    reader_.endBlock();   // commit r_ pred refill (ten cte available z atomik)
+
+    // Refill heuristika (Streamed) zije v readeru — stejny vzor jako Voice.
+    if (streamed && reader_.hasRing() && stream_ && active_) {
+        reader_.refill(stream_, mic_->file.path);
     }
 
     // Pri deaktivaci uvolni ring.
-    if (!active_ && ring_ && stream_) {
-        stream_->releaseRing(ring_);
-        ring_ = nullptr;
+    if (!active_ && reader_.hasRing() && stream_) {
+        reader_.release(stream_);
     }
 
     return active_ || produced;

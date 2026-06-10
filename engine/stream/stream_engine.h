@@ -67,6 +67,14 @@ struct RingHandle {
     // je ring prazdny.
     bool popFrame(float& L, float& R) noexcept;
 
+    // Bulk cteni pro StreamedSampleReader: konzument si 1x za blok snapshotne
+    // w_ (acquire), cte lokalnim kurzorem a 1x za blok commitne r_ (release)
+    // — misto 3 atomickych operaci na KAZDY frame. Hodnoty identicke s
+    // popFrame (bit-exact); popFrame zustava pro testy a popInto.
+    size_t snapshotW() const noexcept { return w_.load(std::memory_order_acquire); }
+    size_t cursorR()   const noexcept { return r_.load(std::memory_order_relaxed); }
+    void   commitR(size_t r) noexcept { r_.store(r, std::memory_order_release); }
+
     // Konzument: kolik frames je k dispozici k cteni (atomic snapshot).
     int available() const noexcept;
 

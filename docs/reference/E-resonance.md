@@ -13,8 +13,8 @@ Sympatická rezonance simuluje fyzikální jev, kdy zahrání noty M rozvibruje 
 | `engine/resonance/resonance_layer_select.h/.cpp` | Výběr velocity slotu pro rezonanci: slot s `rms_db` nejblíž cíli `target_db` (čistá funkce, testovatelná bez enginu; remíza → nižší index, prázdné slots → -1) | `nearestSlotByRms(const NoteSlots&, float target_db)` |
 | `engine/resonance/harmonic_proximity.h` | Deklarace funkcí `harmonicProximity` a `initHarmonicProximity` (off-RT warm-up matice), popis partial-coincidence modelu, ladící parametry | `harmonicProximity(int target_midi, int source_midi)`, `initHarmonicProximity()` |
 | `engine/resonance/harmonic_proximity.cpp` | Implementace modelu, výpočet raw coupling, normalizace 128×128 matice (warm-up volá `Engine::init` přes `initHarmonicProximity`) | `rawProx`, `couplingMatrix`, anonymní namespace s konstantami `kPartials`, `kDriveExp`, `kRecvExp`, `kBandwidthCents` |
-| `engine/voice/resonance_voice.h` | Deklarace rezonantního hlasu, gain-ramp envelope, streaming interface | `ResonanceVoice`, `kResonanceRampMs`, `kResonanceFadeOutMs`, `kResonanceTargetEpsilon`, `kResonanceGainEpsilon` |
-| `engine/voice/resonance_voice.cpp` | Implementace start (skip-attack), gain rampy, streaming preload→ring, underrun fade | `ResonanceVoice` (plná implementace) |
+| `engine/voice/resonance_voice.h` | Deklarace rezonantního hlasu, gain-ramp envelope; streaming přes sdílený `StreamedSampleReader` (viz [C-buffers](C-buffers.md)), v hlasu zůstává jen EOF-hold policy | `ResonanceVoice`, `kResonanceRampMs`, `kResonanceFadeOutMs`, `kResonanceTargetEpsilon`, `kResonanceGainEpsilon` |
+| `engine/voice/resonance_voice.cpp` | Implementace start (skip-attack), gain rampy, streaming preload→ring (reader), EOF-hold/underrun policy | `ResonanceVoice` (plná implementace) |
 
 ---
 
@@ -48,13 +48,13 @@ Sympatická rezonance simuluje fyzikální jev, kdy zahrání noty M rozvibruje 
 
 **`onPlayedNoteOn` — eligibilita + budget gate + spawn/excite**
 
-Funkce iteruje všech 128 MIDI not N a pro každou provádí sérii testů řazených od nejlevnějších O(1) po jediný drahý O(pool) scan (~90 % not vyřadí hned první test):
+Funkce iteruje všech 128 MIDI not N a pro každou provádí sérii testů řazených od nejlevnějších po (historicky) nejdražší — ~90 % not vyřadí hned první test; všechny testy jsou dnes O(1):
 
 1. *Harmonický práh:* `harmonicProximity(N, M) < kResonanceHarmonicMin` (0.05) → vynechá (sekunda, tritonus — téměř nulová hodnota).
 2. *Excitační práh:* `excite = vel_norm * harm * gain_lin < kResonanceExciteMinGain` (0.001) → vynechá (neslyšitelná rezonance by jen kradla sloty).
 3. *Eligibility filter 5.5.1(1) — pedál:* `pedal.isUndamped(N)` musí být true (jinak struna tlumena).
 4. *Rule B in-progress:* pokud `slot->active() && slot->fadingOut()`, přeskočí — nová excitace by přerušila probíhající fade-out z rule B.
-5. *Eligibility filter 5.5.1(1) — main voice:* `pool.hasActiveMainVoice(N)` musí být false (jinak by rezonance koexistovala s hlavním hlasem na téže struně — porušení invariantu). Záměrně poslední: jediný test s O(pool) scanem.
+5. *Eligibility filter 5.5.1(1) — main voice:* `pool.hasActiveMainVoice(N)` musí být false (jinak by rezonance koexistovala s hlavním hlasem na téže struně — porušení invariantu). Záměrně poslední (historicky šlo o jediný test s O(pool) scanem); od feat/async-loader-a-stream-refactor je O(1) přes per-nota čítač `note_active_count_` ve `VoicePool`, takže pořadí už je jen konvence — test je levný.
 
 **RAM cache mód (fáze 8):** `ResonanceEngine` drží per-notě `reso_cache_ready_[128]` (atomic; mimo movable `MicLayer`). `onPlayedNoteOn` přečte `reso_cache_ready_[N]` (acquire) a předá `use_cache` do `slot->start(...)`: `true` → hraj z RAM `preload_resonance` (12 s cílové vrstvy); `false` → **stream mód** (ignoruj cache, streamuj z `resonance_start_frame` přes ring). Při změně „Resonance Layer" slideru běží `Engine::rebuildResonanceCache` přes **stavový automat {running, pending} pod `recache_mtx_`** (opakované pohyby slideru se coalescují přes `pending`; stav GUI čte přes `Engine::recacheInProgress()`). Bg smyčka v **každé iteraci** (i coalescované) volá `clearCacheReady()` (nové hlasy → stream) + `requestRecacheFade()` → `processBlock` na začátku fadene **všechny aktivní ne-fading hlasy** (i stream-mód) → `waitForAudioQuiesce(2, 500)` + 15 ms doběh fade; teprve pak přestaví cache (`buildResonanceCache`) a `setCacheReady()`. Realloc `preload_resonance` je bezpečný — faded hlasy ho nečtou, stream-mód ho ignoruje. Detail stavového automatu viz [A-core](A-core.md).
 
@@ -134,12 +134,12 @@ kde:
 | funkce (signatura) | vlákno | vstup → výstup | volá ji | volá (proč) |
 |---|---|---|---|---|
 | `setStreamEngine(StreamEngine* se)` | off-RT | pointer → void | `ResonanceEngine::setStreamEngine`, `ResonanceEngine::onPlayedNoteOn` (před `start`) | přímé přiřazení `stream_` |
-| `start(int midi, const MicLayer*, float initial_gain, float pan_l, float pan_r, float engine_sr, bool use_cache = true)` | audio | parametry hlasu + cache/stream mód → aktivace | `ResonanceEngine::onPlayedNoteOn` | `stream_->acquireRing`, `stream_->requestRead`, `recomputeGainStep` |
+| `start(int midi, const MicLayer*, float initial_gain, float pan_l, float pan_r, float engine_sr, bool use_cache = true)` | audio | parametry hlasu + cache/stream mód → aktivace | `ResonanceEngine::onPlayedNoteOn` | `reader_.release` (defensive), `reader_.begin` / `reader_.beginEofOnly`, `recomputeGainStep` |
 | `addExcitation(float excitation_gain)` | audio | relativní přírůstek gainu → aktualizace target | `ResonanceEngine::onPlayedNoteOn` (existující hlas) | `recomputeGainStep` |
 | `setTargetGain(float target)` | audio | absolutní cílový gain → ramp k cíli | `ResonanceEngine::processBlock` | `recomputeGainStep` |
 | `fadeOut(float engine_sr)` | audio | sr → ostrý ramp na 0 | `ResonanceEngine::onSelfNoteOn` (rule B), `ResonanceEngine::enforceVoiceBudget`, `ResonanceEngine::onPlayedNoteOn` (budget gate) | nastaví `is_fading_out_=true`, přepočítá `gain_step_` |
-| `hardStop()` noexcept | audio/off-RT | — → okamžitá deaktivace | `ResonanceEngine::reset` | `stream_->releaseRing` |
-| `process(float* out_l, float* out_r, int n_samples)` noexcept | audio | výstupní buffery → bool (active \|\| produced) | `ResonanceEngine::processBlock` | čte preload_resonance nebo ring, aplikuje gain rampu, refill heuristika |
+| `hardStop()` noexcept | audio/off-RT | — → okamžitá deaktivace | `ResonanceEngine::reset` | `reader_.release` |
+| `process(float* out_l, float* out_r, int n_samples)` noexcept | audio | výstupní buffery → bool (active \|\| produced) | `ResonanceEngine::processBlock` | čte preload_resonance nebo ring přes `reader_` (bulk `beginBlock`/`endBlock`, `seed`/`advance`), EOF-hold policy (`eofAcquire`/`holdHiFromLo`/`bumpLoIdx`), gain rampa, `reader_.refill` |
 | `recomputeGainStep()` noexcept | audio (privátní) | — → přepočet `gain_step_` | `start`, `addExcitation`, `setTargetGain` | `(target_gain_ - gain_) / ramp_frames_` |
 | `active()` | libovolné | — → bool | `ResonanceEngine` (smyčky) | přímý read `active_` |
 | `fadingOut()` noexcept | audio | — → bool | `ResonanceEngine::onPlayedNoteOn`, `enforceVoiceBudget`, `processBlock` | přímý read `is_fading_out_` |
@@ -156,13 +156,15 @@ Parametr `use_cache` určuje mód: `true` = čti RAM `preload_resonance`; `false
 
 `active_` (viabilita) se nastaví na true jen pokud `mic_` je platný a obsahuje data: pro FullyLoaded ověří `head_frames > resonance_start_frame`; pro Streamed `eff_res_frames0 > 0 || file.frames > resonance_start_frame` — stream mód tedy rozhoduje výhradně podle immutable `file.frames`, nikdy podle `resonance_frames` přepisovaného rebuildem.
 
-Pro Streamed mic: `acquireRing()` a první request od `res_end = resonance_start_frame + eff_res_frames`. Pokud `total_after = file.frames − res_end <= 0` (rezonanční okno pokrývalo konec souboru), request se neposílá a ring se rovnou označí EOF. Jinak `requestRead(ring, path, res_end, want, eof_done)` — `requestRead` vrací bool; při dropu (plná fronta workeru) se `file_request_off_` NEposouvá a refill heuristika v `process()` request zopakuje. Pokud `acquireRing` selže (pool plný), hlas dohraje jen preload_resonance a tiše skončí (rezonance je luxus, nekritická jako hlavní hlas).
+Pro Streamed mic se streaming inicializuje přes sdílený `StreamedSampleReader` (viz [C-buffers](C-buffers.md)): pokud `total_after = file.frames − res_end <= 0` (rezonanční okno pokrývalo konec souboru), volá se `reader_.beginEofOnly(stream_, res_end)` — žádný request, ring se rovnou označí EOF. Jinak `reader_.begin(stream_, path, res_end, file.frames)` = `acquireRing()` + první request od `res_end = resonance_start_frame + eff_res_frames`; `requestRead` uvnitř vrací bool a při dropu (plná fronta workeru) se `file_request_off_` NEposouvá — `reader_.refill()` v `process()` request zopakuje (no-advance-on-drop). Pokud acquire selže (pool plný, `begin`/`beginEofOnly` vrátí false), hlas dohraje jen preload_resonance a tiše skončí (rezonance je luxus, nekritická jako hlavní hlas).
 
 **`process` — gain ramp + streaming preload→ring + underrun**
 
 Sample-by-sample smyčka pro `n_samples` vzorků. Dvě větve dle `mic_->mode`:
 
-*Streamed:* Nejprve region `preload_resonance` (lokální index `p0 - res_start`, lineární interpolace; ve stream módu je `res_frames = 0`, takže se jde rovnou do ringu). Na hranici `p0 >= res_end - 1` přepne na ring. Seed okna (lo/hi sliding window): `ring_lo_idx_ = res_end - 1`, `ring_lo_l/r` = poslední frame preload_resonance → plynulý šev. `ring_hi` se plní z `ring_->popFrame`. Každý vzorek: pokud `ring_lo_idx_ < target (= int(position_))`, posouvá okno pop-frame smyčkou. Pokud `popFrame` selže a není EOF → **underrun**: nastaví `underrun_fading_ = true`, volá `stream_->noteUnderrun()` a **drží poslední známý vzorek** (`ring_lo`) — underrun fade ho tvaruje (nuly by rampu obešly = tvrdý střih/klik). Po dobu underrunu se přes `underrun_gain_` (krok `underrun_step_` = `-1/(kUnderrunFadeMs * 0.001 * sr)`) multiplicativně ztlumí výstup → `active_ = false` při `underrun_gain_ <= 0`. EOF bez dat: `active_ = false` po doběhnutí.
+Před smyčkou `reader_.beginBlock()` (bulk čtení ringu: 1 acquire + 1 release za blok místo 3 atomik/vzorek), po smyčce `reader_.endBlock()` — viz [C-buffers](C-buffers.md).
+
+*Streamed:* Nejprve region `preload_resonance` (lokální index `p0 - res_start`, lineární interpolace; ve stream módu je `res_frames = 0`, takže se jde rovnou do ringu). Na hranici `p0 >= res_end - 1` přepne na ring. Seed okna v readeru: `reader_.seed(lo_l, lo_r, res_end − 1)` — lo = poslední frame preload_resonance → plynulý šev, hi = první ring pop. Každý vzorek: `reader_.advance(target = int(position_))` posouvá lo/hi okno. **EOF-hold policy zůstává v hlasu:** při `Advance::RingEmpty` s `reader_.eofAcquire()` drží poslední vzorek (`holdHiFromLo()` + `bumpLoIdx()`) a dojede indexem k `total_frames − 1` → deaktivace u konce souboru; při `RingEmpty` **bez** EOF → **underrun**: nastaví `underrun_fading_ = true`, volá `stream_->noteUnderrun()` a **drží poslední známý vzorek** (`reader_.loL()/loR()`) — underrun fade ho tvaruje (nuly by rampu obešly = tvrdý střih/klik). Po dobu underrunu se přes `underrun_gain_` (krok `underrun_step_` = `-1/(kUnderrunFadeMs * 0.001 * sr)`) multiplicativně ztlumí výstup → `active_ = false` při `underrun_gain_ <= 0`.
 
 *FullyLoaded:* Čte přímo z `preload_head` od `position_` (= res_start), lineární interpolace, `active_ = false` při přesahu `head_frames`.
 
@@ -170,9 +172,9 @@ Gain ramp (společná pro obě větve): `gain_ += gain_step_`, clamp na `target_
 
 Deaktivace při fade-out: `is_fading_out_ && gain_ <= kResonanceGainEpsilon (1e-5)` → `active_ = false`, break.
 
-Refill heuristika (Streamed, po smyčce): `stream_pending_` se resetuje, jakmile `avail >= capacity/2` (worker prokazatelně dodal data); pokud pak `avail < refillThresholdFrames()` a není čekající request, volá `stream_->requestRead` pro další blok dat. `requestRead` vrací bool — při dropu (plná fronta) se `file_request_off_` neposouvá a request se přirozeně zopakuje příští blok (žádná díra v datech).
+Refill heuristika (Streamed, po smyčce a po `endBlock()`): žije ve sdíleném readeru — `reader_.refill(stream_, path)`. `stream_pending_` se resetuje, jakmile `avail >= capacity/2` (worker prokazatelně dodal data); pokud pak `avail < refillThresholdFrames()` a není čekající request, volá `requestRead` pro další blok dat. `requestRead` vrací bool — při dropu (plná fronta) se `file_request_off_` neposouvá a request se přirozeně zopakuje příští blok (žádná díra v datech). Stejný vzor jako `Voice`.
 
-Při deaktivaci uvolní ring: `stream_->releaseRing(ring_)`.
+Při deaktivaci uvolní ring: `reader_.release(stream_)`.
 
 **`setTargetGain` — absolutní nastavení targetu (per-blok z processBlock)**
 
@@ -195,8 +197,8 @@ Nový target = `max(target_gain_, gain_ + excitation_gain)` — nová nota můž
 ## Křížové odkazy
 
 - **Events — pedal damping:** `PedalState::isUndamped(N)` a `PedalState::dampingFor(N)` jsou primární vstup eligibility filtru a per-blok aktualizace `target_gain`. Definováno v `engine/pedal/pedal_state.h`; práh `kDampingEpsilon` tam.
-- **Polyfonie — `hasActiveMainVoice`:** `VoicePool::hasActiveMainVoice(int midi)` (viz `engine/voice/voice_pool.h`) je druhá podmínka eligibility filtru 5.5.1(1). Zabraňuje koexistenci hlavního a rezonantního hlasu na téže struně.
-- **Buffers — resonance stream pool:** `Engine` drží oddělený `stream_resonance_` (`std::unique_ptr<StreamEngine>`) nezávislý na `stream_main_` pro hlavní hlasy (viz `engine/engine.h`). `ResonanceVoice` používá `acquireRing`/`releaseRing`/`requestRead` z tohoto poolu. Underrun rezonance neovlivní hlavní pool.
+- **Polyfonie — `hasActiveMainVoice`:** `VoicePool::hasActiveMainVoice(int midi)` (viz `engine/voice/voice_pool.h`) je druhá podmínka eligibility filtru 5.5.1(1). Zabraňuje koexistenci hlavního a rezonantního hlasu na téže struně. Od feat/async-loader-a-stream-refactor je O(1) přes per-nota čítač `note_active_count_` (viz [D-polyphony](D-polyphony.md)).
+- **Buffers — resonance stream pool:** `Engine` drží oddělený `stream_resonance_` (`std::unique_ptr<StreamEngine>`) nezávislý na `stream_main_` pro hlavní hlasy (viz `engine/engine.h`). `ResonanceVoice` na něj sahá přes sdílený `StreamedSampleReader` (`reader_.begin`/`beginEofOnly`/`refill`/`release`, bulk `beginBlock`/`endBlock` — viz [C-buffers](C-buffers.md)). Underrun rezonance neovlivní hlavní pool.
 - **Loader — Bank:** `onPlayedNoteOn` přistupuje k `bank.notes[N].slots[nearestSlotByRms(ns, layer_target_db_)].variants[0].mics[0]` pro získání `MicLayer` s `resonance_start_frame`, `resonance_frames`, `preload_resonance`, `preload_head`. Pokud záznam pro N chybí (`!ns.recorded` nebo `nearestSlotByRms` vrátí -1), rezonance pro N nevznikne. Typy definovány v `engine/sample/sample_types.h`.
 
 ---
@@ -205,7 +207,7 @@ Nový target = `max(target_gain_, gain_ + excitation_gain)` — nová nota můž
 
 **5.5.1 eligibility — logická správnost:** Filtr je konzistentní. Tři podmínky (damping, `hasActiveMainVoice`, `fadingOut` z rule B) se navzájem doplňují bez mezer. Rule B správně nuluje `last_excite_[N]` — eligibility filter (1) pak skutečně blokuje, protože `processBlock` přestane volat `setTargetGain` na deaktivovaném slotu a při dalším note-on M platí `pool.hasActiveMainVoice(N) = true`.
 
-**Pořadí eligibility testů:** ✅ VYŘEŠENO (branch `fix/revize-2026-06-10`). Dříve běžel O(pool) scan `hasActiveMainVoice` před levnými testy. Nyní pořadí: harmonická blízkost (vyřadí ~90 % not) → excitační práh → `pedal.isUndamped` → `fadingOut` → `hasActiveMainVoice` (jediný ne-O(1) test až nakonec). Nový práh `init_gain < kResonanceExciteMinGain` navíc brání alokaci ringu a diskových čtení pro half-pedalem neslyšitelné hlasy.
+**Pořadí eligibility testů:** ✅ VYŘEŠENO (branch `fix/revize-2026-06-10`). Dříve běžel O(pool) scan `hasActiveMainVoice` před levnými testy. Nyní pořadí: harmonická blízkost (vyřadí ~90 % not) → excitační práh → `pedal.isUndamped` → `fadingOut` → `hasActiveMainVoice` (dříve jediný ne-O(1) test, proto až nakonec). Nový práh `init_gain < kResonanceExciteMinGain` navíc brání alokaci ringu a diskových čtení pro half-pedalem neslyšitelné hlasy. Aktualizace (feat/async-loader-a-stream-refactor): `hasActiveMainVoice` je nyní O(1) přes per-nota čítač ve `VoicePool` — poznámka o pořadí testů zůstává platná, poslední test je už jen levný.
 
 **Budget gate — srovnání úrovní:** ✅ VYŘEŠENO (branch `fix/revize-2026-06-10`). Původní text tohoto nálezu („srovnání je na stejné škále — správné chování") byl **nesprávný**: `qlevel` se počítal čistě z `currentLevel()`, jenže čerstvě spawnutý hlas má `gain_` ještě ~0 (30ms rampa) — byl tedy vždy „nulovou obětí" a spawn-churn se vracel už uvnitř jediného `onPlayedNoteOn`. Oprava: úroveň oběti = `max(slot->currentLevel(), slot->targetGain())` (nový getter `ResonanceVoice::targetGain`); při plném budgetu přežívá nejsilnější harmonika, ne poslední spawnutá. Hraniční případ zůstává v pořádku: pokud všechny živé hlasy jsou ve fade-out (live = 0 po filtru), `live >= cap` je false — spawn pokračuje bez krádeže.
 

@@ -104,22 +104,9 @@ bool AppContext::initFromState(const GuiState& s) {
     engine.setResonanceEnabled(state.resonance_enabled);
     engine.setResonanceGainDb(state.resonance_gain_db);
 
-    // Bank: best-effort. Pokud cesta neni nebo nejde nacist, jen warning a
-    // engine bezi prazdny (uzivatel muze banku vybrat pozdeji pres UI).
-    if (!state.bank_path.empty()) {
-        if (!engine.loadBank(state.bank_path)) {
-            log::Logger::default_().log("gui", log::Severity::Warning,
-                "Nelze nacist banku: %s", state.bank_path.c_str());
-        }
-    }
-
-    // Default Resonance Layer = 1/3 rozsahu banky, kdyz uzivatel jeste nenastavil
-    // (heuristika: persistovany default -30 dB). Jinak respektuj ulozenou hodnotu.
-    if (!state.bank_path.empty()) {
-        const float lo = engine.bankPeakRmsMinDb(), hi = engine.bankPeakRmsMaxDb();
-        if (hi > lo && state.resonance_layer_db == -30.f)
-            state.resonance_layer_db = lo + (hi - lo) / 3.f;
-    }
+    // Bank se nacita ASYNC (requestBankReload na konci initu) — okno se ukaze
+    // hned, prubeh kryje modalni overlay. Layer heuristika "1/3 rozsahu banky"
+    // se aplikuje v pollReloadCompletion (po dokonceni loadu).
     engine.setResonanceLayerDb(state.resonance_layer_db);
 
     // Audio device start. AudioCallback je free funkce + userdata (Engine*).
@@ -154,10 +141,58 @@ bool AppContext::initFromState(const GuiState& s) {
                 "MIDI port nenalezen: %s", state.midi_port_name.c_str());
         }
     }
+
+    // Startovni load banky jede async stejnou cestou jako reload — okno se
+    // ukaze hned, prubeh kryje modalni overlay v render smycce.
+    if (!state.bank_path.empty()) requestBankReload(state.bank_path);
     return true;
 }
 
+void AppContext::requestBankReload(const std::string& dir) {
+    bool expected = false;
+    if (!reload_in_progress_.compare_exchange_strong(expected, true,
+                                                     std::memory_order_acq_rel))
+        return;                                       // uz bezi (modal blokuje UI)
+    if (reload_thread_.joinable()) reload_thread_.join();   // predchozi dobehl
+    reload_dir_ = dir;
+    load_progress_.phase.store(0);
+    load_progress_.done.store(0);
+    load_progress_.total.store(0);
+    load_progress_.bytes_loaded.store(0);
+    load_progress_.truncated.store(false);
+    reload_thread_ = std::thread([this] {
+        const bool ok = engine.reloadBank(reload_dir_, &load_progress_);
+        reload_ok_.store(ok, std::memory_order_release);
+        reload_done_pending_.store(true, std::memory_order_release);
+        reload_in_progress_.store(false, std::memory_order_release);
+    });
+}
+
+void AppContext::pollReloadCompletion() {
+    if (!reload_done_pending_.exchange(false, std::memory_order_acq_rel)) return;
+    bank_truncated_ = load_progress_.truncated.load(std::memory_order_relaxed);
+    if (!reload_ok_.load(std::memory_order_acquire)) {
+        log::Logger::default_().log("gui", log::Severity::Warning,
+            "Nelze nacist banku: %s", reload_dir_.c_str());
+        return;
+    }
+    // Default Resonance Layer = 1/3 rozsahu banky, kdyz uzivatel drzi default
+    // (-30 dB). Zmena state.resonance_layer_db spusti existujici 400ms layer
+    // debounce v main.cpp → engine.rebuildResonanceCache (vyresi i nalez
+    // H-stredni z revize: heuristika driv bezela bez rebuilu cache).
+    const float lo = engine.bankPeakRmsMinDb(), hi = engine.bankPeakRmsMaxDb();
+    if (hi > lo && state.resonance_layer_db == -30.f)
+        state.resonance_layer_db = lo + (hi - lo) / 3.f;
+    log::Logger::default_().log("gui", log::Severity::Info,
+        "Banka nactena: %s (%d not, %d samplu)%s", reload_dir_.c_str(),
+        engine.recordedNotes(), engine.loadedSamples(),
+        bank_truncated_ ? " — NEUPLNA (RAM budget)" : "");
+}
+
 void AppContext::shutdown() {
+    // Reload nelze prerusit (drzi bank_loading_) — pockej na dobeh PRED
+    // zavrenim MIDI/audia (quiesce handshake vyuzije bezici audio).
+    if (reload_thread_.joinable()) reload_thread_.join();
     // Poradi: nejdrive MIDI (zavre callback thread, aby uz necpel noty do
     // engine), pak audio (zastavi miniaudio callback, uz nikdo nesahne na
     // engine), nakonec subscribery (zadne log eventy se nepokusi sahnout na
