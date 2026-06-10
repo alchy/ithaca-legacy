@@ -301,7 +301,9 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                     // DIAG: log kazdy NoteOn na drainu — m, vel, kanal, jestli se
                     // nasel asset (spec.asset==NULL = nota nema namapovany sample
                     // → tise se zahodi), a kolik hlasu je aktivnich (steal).
-                    log::Logger::default_().log("midi_on", log::Severity::Info,
+                    // RT-safe: LOG_RT_* do lock-free ringu (audio thread nesmi
+                    // zamykat log_mutex_ — priority inversion pod SCHED_FIFO).
+                    LOG_RT_INFO("midi_on",
                         "noteOn midi=%d vel=%d ch=%d first=%d asset=%s active_voices=%d",
                         m, v, ch, (int)first, spec.asset ? "yes" : "NULL",
                         pool_->activeCount());
@@ -322,7 +324,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 // Synthesia), note-off se ignoruje a nota zni dal.
                 const bool last = hold_.noteOff(m, ch);
                 const bool sustained = pedal_.isUndamped(m);
-                log::Logger::default_().log("midi_off", log::Severity::Info,
+                LOG_RT_INFO("midi_off",
                     "noteOff midi=%d ch=%d last=%d release_ms=%.0f cc64=%d sustained=%d",
                     m, ch, (int)last, rms, (int)pedal_.sustainCC(), (int)sustained);
                 if (!last) break;   // jiny kanal porad drzi → neni release
@@ -338,8 +340,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 // CC64 jako spojita hodnota; PedalState prepocita damping_[128].
                 // Resonance se prizpusobi PER-BLOK ve resonance_->processBlock().
                 const bool was_down = pedal_.isPedalDown();
-                log::Logger::default_().log("midi_cc", log::Severity::Info,
-                    "Sustain CC64=%d", (int)e.data1);
+                LOG_RT_INFO("midi_cc", "Sustain CC64=%d", (int)e.data1);
                 pedal_.setSustainCC(e.data1);
                 const bool now_down = pedal_.isPedalDown();
                 // Pri prechodu DOWN → UP: aplikuj release na vsechny pending
@@ -354,8 +355,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 break;
             }
             case MidiEvent::AllNotesOff: {
-                log::Logger::default_().log("midi_off", log::Severity::Info,
-                    "AllNotesOff");
+                LOG_RT_INFO("midi_off", "AllNotesOff");
                 hold_.allNotesOff();
                 pedal_.allNotesOff();
                 pool_->allNotesOff(cfg_.release_ms, sr);
@@ -371,13 +371,11 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
         resonance_->processBlock(out_l, out_r, n_samples, pedal_);
         // DIAG: loguj zmenu poctu aktivnich rezonanci + cc64 (jen pri zmene).
         // Po uvolneni pedalu pocet spadne na 0 (mute pres per-blok damping) —
-        // uzitecne pro ladeni pedalu/rezonance. Pozn.: audio-thread log, pri
-        // velmi malem block_size muze prispet k latenci (viz buffer doporuceni).
-        static int dbg_reso_last = -1;
+        // uzitecne pro ladeni pedalu/rezonance. RT-safe (lock-free ring).
         const int rc = resonance_->activeCount();
-        if (rc != dbg_reso_last) {
-            dbg_reso_last = rc;
-            log::Logger::default_().log("resonance", log::Severity::Info,
+        if (rc != dbg_reso_count_) {
+            dbg_reso_count_ = rc;
+            LOG_RT_INFO("resonance",
                 "active rezonance = %d (cc64=%d)", rc, (int)pedal_.sustainCC());
         }
     }

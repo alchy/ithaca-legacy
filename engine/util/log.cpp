@@ -191,17 +191,36 @@ void Logger::vlogRT(const char* component, Severity severity,
 }
 
 int Logger::flushRTBuffer() {
-    std::lock_guard<std::mutex> lk(log_mutex_);
-    size_t r = rt_read_idx_.load(std::memory_order_relaxed);
-    const size_t w = rt_write_idx_.load(std::memory_order_acquire);
+    // Davkovy flush: writeEntry pod log_mutex_, notifikace subscriberu az PO
+    // uvolneni log_mutex_ (zamky se nikdy nedrzi vnorene; vzor vlog()).
+    // Subscribery dostavaji i RT zpravy → GUI log strip vidi underruny/RT stav.
+    LogEntry pending[64];
     int flushed = 0;
-    while (r < w) {
-        Entry& e = rt_buffer_[r % RT_BUFFER_SIZE];
-        writeEntry(e.component, e.severity, e.message, e.timestamp_us);
-        ++r;
-        ++flushed;
+    for (;;) {
+        int batch = 0;
+        {
+            std::lock_guard<std::mutex> lk(log_mutex_);
+            size_t r = rt_read_idx_.load(std::memory_order_relaxed);
+            const size_t w = rt_write_idx_.load(std::memory_order_acquire);
+            while (r < w && batch < 64) {
+                Entry& e = rt_buffer_[r % RT_BUFFER_SIZE];
+                writeEntry(e.component, e.severity, e.message, e.timestamp_us);
+                pending[batch++] = LogEntry{ (long long)e.timestamp_us,
+                                             std::string(e.component), e.severity,
+                                             std::string(e.message) };
+                ++r;
+            }
+            rt_read_idx_.store(r, std::memory_order_release);
+        }
+        if (batch == 0) break;
+        flushed += batch;
+        if (!subscribers_.empty()) {
+            std::lock_guard<std::mutex> lk(subscriber_mtx_);
+            for (int i = 0; i < batch; ++i)
+                for (auto& sub : subscribers_)
+                    if (sub) sub(pending[i]);
+        }
     }
-    rt_read_idx_.store(r, std::memory_order_release);
     return flushed;
 }
 

@@ -168,8 +168,8 @@ TEST_CASE("Streamed 48k regrese: vystup = vstup (frac=0)") {
 TEST_CASE("Streamed clean end loguje END-OF-SAMPLE (Info), ne UNDERRUN (Warning)") {
     // Cisty konec streamovaneho vzorku: ring se vyprazdni az kdyz uz byl cely
     // soubor vyzadan → ma se logovat jako Info "END-OF-SAMPLE", NE jako
-    // Warning "UNDERRUN" (to je matouci). Engine bezi single-thread v testu,
-    // takze subscriber fire je synchronni a deterministicky.
+    // Warning "UNDERRUN" (to je matouci). Voice loguje pres RT ring (LOG_RT_*),
+    // subscriberum se zpravy doruci pri flushRTBuffer() — v testu explicitne.
     TempDir tmp{"cleanend"};
     constexpr int frames = 20000;
     writeRamp(tmp.path, frames, 48000, "48");
@@ -196,6 +196,7 @@ TEST_CASE("Streamed clean end loguje END-OF-SAMPLE (Info), ne UNDERRUN (Warning)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     (void)renderNote(eng, 1200);
+    lg.flushRTBuffer();   // doruc RT zpravy (voice_end) subscriberum
 
     lg.clearSubscribers();
     lg.setOutputMode(true, false);    // restore

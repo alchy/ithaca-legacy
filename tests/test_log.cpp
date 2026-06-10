@@ -7,6 +7,7 @@
 #include "util/version.h"
 
 #include <string>
+#include <vector>
 
 using namespace ithaca;
 
@@ -66,6 +67,22 @@ TEST_CASE("logRT pretece pri prekroceni kapacity ringu a zahozene zpravy se poci
     CHECK(lg.rtDroppedCount() == (uint64_t)(N - 1024));
     // Po flushe je ring prazdny.
     CHECK(lg.flushRTBuffer() == 0);
+}
+
+TEST_CASE("flushRTBuffer doruci RT zpravy subscriberum (GUI log strip)") {
+    log::Logger lg;
+    lg.setMinSeverity(log::Severity::Debug);
+    lg.setOutputMode(/*console=*/false, /*file=*/false);
+    std::vector<std::string> got;
+    lg.addSubscriber([&](const log::LogEntry& e) {
+        got.push_back(e.topic + ":" + e.message);
+    });
+    lg.logRT("rt_test", log::Severity::Info, "hello %d", 42);
+    lg.flushRTBuffer();
+    lg.clearSubscribers();
+    bool found = false;
+    for (auto& s : got) if (s == "rt_test:hello 42") found = true;
+    CHECK(found);
 }
 
 TEST_CASE("version string neni prazdny") {

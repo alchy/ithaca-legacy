@@ -77,8 +77,8 @@ void Voice::prepareDamp(float engine_sr) {
         ring_ = nullptr;
     }
     stream_pending_  = false;
-    // DEBUG: zaloguj deaktivaci v dusledku retrigger/steal damping.
-    log::Logger::default_().log("voice_end", log::Severity::Info,
+    // DEBUG: zaloguj deaktivaci v dusledku retrigger/steal damping (RT ring).
+    LOG_RT_INFO("voice_end",
         "DEACTIVATE midi=%d reason=damped_for_retrigger_or_steal damp_len=%d",
         midi_, damp_len_);
     active_          = false;   // pool ho ted muze rovnou ukrast / pouzit znovu
@@ -178,11 +178,9 @@ float Voice::currentLevel() const noexcept {
 
 bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
     // DEBUG helper: zaloguj kazdou cestu deaktivace s konkretnim duvodem.
-    // Pozn.: pouziva non-RT logger (mutex) — to porusi RT-safety, ale je to
-    // ladici nastroj. V produkcni faze odstranit nebo nahradit RT ringem +
-    // periodickym flushem.
+    // RT-safe: LOG_RT_* pise do lock-free ringu (flush dela non-RT thread).
     auto log_end = [this](const char* reason) {
-        log::Logger::default_().log("voice_end", log::Severity::Info,
+        LOG_RT_INFO("voice_end",
             "DEACTIVATE midi=%d reason=%s pos=%lld total=%d head=%d "
             "ring=%s ring_avail=%d ring_eof=%d releasing=%d in_onset=%d "
             "underrun_fading=%d damping=%d",
@@ -273,12 +271,12 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                     // blikal cervene po kazde normalne dohraje dlouhe note.
                     const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
                     if (clean_end) {
-                        log::Logger::default_().log("voice_end", log::Severity::Info,
+                        LOG_RT_INFO("voice_end",
                             "END-OF-SAMPLE midi=%d pos=%lld total=%d", midi_,
                             (long long)position_, total_frames);
                     } else {
                         if (stream_) stream_->noteUnderrun();
-                        log::Logger::default_().log("voice_end", log::Severity::Warning,
+                        LOG_RT_WARN("voice_end",
                             "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d",
                             midi_, (long long)position_, total_frames,
                             head_frames, ring_->available());

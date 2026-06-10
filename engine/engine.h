@@ -213,6 +213,7 @@ private:
     // eventu. Psano z MIDI/GUI threadu pri noteOn/noteOff, cteno z GUI.
     std::atomic<uint64_t>             last_note_on_us_{0};
     std::atomic<uint64_t>             last_note_off_us_{0};
+    int                  dbg_reso_count_ = -1;  // audio-thread only (DIAG zmeny poctu rezonanci)
     std::thread          recache_thread_;
     std::atomic<bool>    recache_running_{false};
     std::atomic<float>   recache_target_{-30.f};   // zadany cil (cte bg thread; bez torn readu cfg_)

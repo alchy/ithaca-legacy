@@ -87,9 +87,8 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
     int slot = findSlot(pedal);
     Voice& v = voices_[slot];
 
-    // DEBUG (NE RT-safe — produkcni build by ho nemel mit; v ladici fazi pomuze
-    // videt skutecne stealy a noteOn frequenci). Pozn.: tady volame non-RT
-    // logger primo (mutex + file/console flush), takze pojede do souboru ihned.
+    // DEBUG diagnostika stealu/noteOn frekvence. RT-safe: LOG_RT_* do lock-free
+    // ringu (audio thread nesmi zamykat log mutex — priority inversion).
     {
         int active = activeCount();
         int releasing = 0, held = 0;
@@ -99,7 +98,7 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
             if (pedal && pedal->isHeld(vv.midi())) held++;
         }
         if (v.active() && v.midi() != midi) {
-            log::Logger::default_().log("voice_steal", log::Severity::Warning,
+            LOG_RT_WARN("voice_steal",
                 "STEAL victim_midi=%d victim_lvl=%.3f victim_releasing=%d "
                 "victim_held=%d → new_midi=%d new_vel=%.2f pool=%d/%d "
                 "rel=%d held=%d",
@@ -108,7 +107,7 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
                 midi, spec.vel_gain, active, (int)voices_.size(),
                 releasing, held);
         } else {
-            log::Logger::default_().log("voice_on", log::Severity::Info,
+            LOG_RT_INFO("voice_on",
                 "noteOn midi=%d vel=%.2f slot=%d pool=%d/%d rel=%d held=%d",
                 midi, spec.vel_gain, slot, active, (int)voices_.size(),
                 releasing, held);
