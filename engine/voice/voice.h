@@ -56,6 +56,9 @@ public:
     bool process(float* out_l, float* out_r, int n_samples) noexcept;
 
     bool  active()    const { return active_; }
+    // True dokud dohrava damping crossfade po prepareDamp (hlas uz je !active,
+    // ale ocas MUSI doznit — VoicePool::processBlock ho proto stale zpracovava).
+    bool  isDamping() const { return damping_; }
     bool  releasing() const { return releasing_; }
     int   midi()      const { return midi_; }
     void  setMidi(int m)    { midi_ = m; }

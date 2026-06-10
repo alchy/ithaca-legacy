@@ -175,7 +175,10 @@ bool VoicePool::processBlock(float* out_l, float* out_r, int n_samples,
     (void)engine_sr;
     bool any = false;
     for (auto& v : voices_) {
-        if (!v.active()) continue;
+        // Dampujici hlas po prepareDamp je !active(), ale crossfade ocas MUSI
+        // doznit i kdyz novy hlas dostal jiny slot (jinak tvrdy strih = lupnuti
+        // + "duch" zdedeny pozdejsim noteOn na tomto slotu).
+        if (!v.active() && !v.isDamping()) continue;
         if (v.process(out_l, out_r, n_samples)) any = true;
     }
     return any;
