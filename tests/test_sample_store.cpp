@@ -281,3 +281,30 @@ TEST_CASE("BankLoadProgress: bytes_loaded roste a truncated se nastavi pri prekr
     CHECK(prog.bytes_loaded.load() == bank.total_bytes);  // zrcadli ucetnictvi banky
     CHECK(bank.loaded_samples < 24);                      // neuplna banka
 }
+
+TEST_CASE("paralelni ingest: dva behy daji identickou banku (deterministicky merge)") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_par";
+    fs::remove_all(dir); fs::create_directories(dir);
+    for (int n = 50; n < 70; ++n) {                  // 20 souboru → vic nez workeru
+        char name[40];
+        std::snprintf(name, sizeof(name), "/m%03d-vel0-f48.wav", n);
+        writeConstWav(dir + name, 0.1f + 0.04f * (float)(n - 50));
+    }
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    Bank a = loadBank(dir, L);
+    Bank b = loadBank(dir, L);
+    fs::remove_all(dir);
+    CHECK(a.loaded_samples == 20);
+    CHECK(b.loaded_samples == 20);
+    CHECK(a.total_bytes == b.total_bytes);
+    for (int n = 0; n < 128; ++n) {
+        REQUIRE(a.notes[n].slots.size() == b.notes[n].slots.size());
+        for (size_t s = 0; s < a.notes[n].slots.size(); ++s) {
+            CHECK(a.notes[n].slots[s].rms_db == b.notes[n].slots[s].rms_db);
+            CHECK(a.notes[n].slots[s].variants[0].mics[0].preload_head
+                  == b.notes[n].slots[s].variants[0].mics[0].preload_head);
+        }
+    }
+}
