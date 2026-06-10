@@ -231,3 +231,30 @@ TEST_CASE("loadBank: RAM budget (OOM guard) preruseni nacitani bez padu") {
 
     fs::remove_all(dir);
 }
+
+TEST_CASE("loadBank plni BankLoadProgress (faze monotonni, done==total na konci)") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_progress";
+    fs::remove_all(dir); fs::create_directories(dir);
+    writeConstWav(dir + "/m060-vel0-f48.wav", 0.2f);
+    writeConstWav(dir + "/m062-vel0-f48.wav", 0.4f);
+    writeConstWav(dir + "/m064-vel0-f48.wav", 0.6f);
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    BankLoadProgress prog;
+    Bank bank = loadBank(dir, L, 0, 0, 127, 150, 500, &prog);
+    fs::remove_all(dir);
+    CHECK(bank.loaded_samples == 3);
+    CHECK(prog.phase.load() == 1);              // heads dokoncene (cache az Engine)
+    CHECK(prog.total.load() == 3);
+    CHECK(prog.done.load()  == 3);
+}
+
+TEST_CASE("bankLoadFraction mapuje faze na 0..1 (heads 60 %, cache 40 %)") {
+    CHECK(bankLoadFraction(0, 0, 0)   == doctest::Approx(0.f));
+    CHECK(bankLoadFraction(1, 1, 2)   == doctest::Approx(0.3f));
+    CHECK(bankLoadFraction(1, 2, 2)   == doctest::Approx(0.6f));
+    CHECK(bankLoadFraction(2, 1, 4)   == doctest::Approx(0.7f));
+    CHECK(bankLoadFraction(3, 0, 0)   == doctest::Approx(1.f));
+    CHECK(bankLoadFraction(1, 0, 0)   == doctest::Approx(0.f));   // total 0 -> 0
+}

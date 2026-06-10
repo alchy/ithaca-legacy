@@ -138,7 +138,8 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
               int cache_budget_mb,
               int midi_from, int midi_to,
               int preload_ms,
-              int resonance_window_ms) {
+              int resonance_window_ms,
+              BankLoadProgress* progress) {
     Bank bank;
     bank.path = dir;
     bank.name = std::filesystem::path(dir).filename().string();
@@ -171,10 +172,24 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
     // bad_alloc try/catch v Engine::loadBank.
     const size_t budget_bytes = cache_budget_mb > 0
                               ? (size_t)cache_budget_mb * 1024 * 1024 : 0;
-    for (const auto& entry : scan.files) {
-        const ParsedName& p = entry.parsed;
+    // Filtr eligible souboru predem (progress total + podklad pro paralelni
+    // ingest): indexy do scan.files.
+    std::vector<int> idx;
+    idx.reserve(scan.files.size());
+    for (int i = 0; i < (int)scan.files.size(); ++i) {
+        const ParsedName& p = scan.files[(size_t)i].parsed;
         if (p.midi < 0 || p.midi > 127) continue;
-        if (p.midi < midi_from || p.midi > midi_to) continue;   // mimo pozadovany rozsah
+        if (p.midi < midi_from || p.midi > midi_to) continue;
+        idx.push_back(i);
+    }
+    if (progress) {
+        progress->phase.store(1);
+        progress->total.store((int)idx.size());
+        progress->done.store(0);
+    }
+    for (int i : idx) {
+        const auto& entry = scan.files[(size_t)i];
+        const ParsedName& p = entry.parsed;
         if (budget_bytes && bank.total_bytes >= budget_bytes) {
             logger.log("bank", log::Severity::Error,
                        "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — nacitani "
@@ -186,6 +201,7 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
         }
         ingestSampleFile(bank, p.midi, entry.full_path, p.filename, logger,
                          preload_ms, resonance_window_ms);
+        if (progress) progress->done.fetch_add(1, std::memory_order_relaxed);
     }
 
     sortBankSlotsByRms(bank);
@@ -194,11 +210,22 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
 }
 
 std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
-                                          int window_ms, log::Logger& logger) {
+                                          int window_ms, log::Logger& logger,
+                                          BankLoadProgress* progress) {
     std::array<bool, 128> ready{};   // vse false
+    if (progress) {
+        int recorded = 0;
+        for (int n = 0; n < 128; ++n)
+            if (bank.notes[(size_t)n].recorded && !bank.notes[(size_t)n].slots.empty())
+                ++recorded;
+        progress->phase.store(2);
+        progress->total.store(recorded);
+        progress->done.store(0);
+    }
     for (int n = 0; n < 128; ++n) {
         auto& note = bank.notes[(size_t)n];
         if (!note.recorded || note.slots.empty()) continue;
+        if (progress) progress->done.fetch_add(1, std::memory_order_relaxed);
         const int si = nearestSlotByRms(note, target_db);
         if (si < 0) continue;
         for (int s = 0; s < (int)note.slots.size(); ++s) {
