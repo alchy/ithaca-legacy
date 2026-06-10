@@ -39,12 +39,25 @@ struct RingHandle {
     std::atomic<size_t> r_{0};
 
     // Worker po dokonceni posledniho streamovaciho chunku (kdyz frame_off
-    // dosahl konce souboru) nastavi eof_=true → Voice po precteni vseho
-    // ukonci hlas cisto bez underrun fade.
+    // dosahl konce souboru) nastavi eof_=true. Voice ho cte jen diagnosticky
+    // (do logu) — cisty konec vs. underrun rozlisuje pres file_request_off_
+    // a OBA dozni stejnym 5ms fade (cisty konec = Info, underrun = Warning).
+    // ResonanceVoice eof_ cte (acquire) pro hold-last-sample / konec hlasu.
     std::atomic<bool>   eof_{false};
 
     // Allocator flag (acquireRing / releaseRing).
     std::atomic<bool>   in_use_{false};
+
+    // Generace vlastnictvi: inkrement pri kazdem releaseRing. StreamRequest
+    // nese snapshot — worker pred zapisem overi shodu, takze pozdni/stale
+    // request nikdy nezapise data/EOF do ringu noveho vlastnika (ABA guard
+    // pro steal/retrigger streamovaneho hlasu s in-flight requestem).
+    std::atomic<uint32_t> gen_{0};
+
+    // Producer try-lock (0/1): per-ring smi zapisovat jen jeden worker a
+    // acquireRing na nej kratce pocka pred resetem kurzoru. Drzi se JEN pres
+    // push (memcpy), ne pres disk I/O → ceka se max ~desitky us.
+    std::atomic<int>    producers_{0};
 
     // Producent (worker): zapise az n_frames stereo frames. Vrati pocet
     // skutecne zapsanych (kdyz se ring zaplni). Bez alokaci.
@@ -79,6 +92,7 @@ struct StreamRequest {
     int64_t     frame_off     = 0;
     int64_t     n_frames      = 0;
     bool        eof_when_done = false;   // worker po dokonceni nastavi ring->eof_
+    uint32_t    gen           = 0;       // snapshot RingHandle::gen_ pri odeslani
 };
 
 // SP-MC fronta StreamRequestu. Producent (audio thread) je single lock-free;
@@ -147,8 +161,10 @@ public:
     void releaseRing(RingHandle* r);
 
     // Naplnovac (volat z Voice po vypoctu, ze je v ringu malo dat). Drop-on-full
-    // pri zaplneni fronty; tim padem RT-safe.
-    void requestRead(RingHandle* ring, const std::string& path,
+    // pri zaplneni fronty; tim padem RT-safe. Vraci false pri plne fronte —
+    // caller pak NEPOSOUVA file_request_off_ (request prirozene zopakuje
+    // pristi blok; drive tichy drop maskoval underrun jako END-OF-SAMPLE).
+    bool requestRead(RingHandle* ring, const std::string& path,
                      int64_t frame_off, int64_t n_frames,
                      bool eof_when_done = false) noexcept;
 
@@ -170,7 +186,8 @@ public:
     int  refillThresholdFrames() const noexcept {
         return refill_threshold_.load(std::memory_order_relaxed);
     }
-    // Engine to vola po setBlockSize: max(capacity/2, block_size*4).
+    // Engine::recomputeRefillThreshold (init/setBlockSize) sem posila
+    // min(max(capacity/2, block_size*4), capacity-64).
     void setRefillThresholdFrames(int v) noexcept {
         refill_threshold_.store(v, std::memory_order_relaxed);
     }

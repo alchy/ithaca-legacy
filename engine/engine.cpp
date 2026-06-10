@@ -1,6 +1,7 @@
 // engine/engine.cpp — viz engine.h.
 #include "engine.h"
 
+#include "resonance/harmonic_proximity.h"
 #include "sample/sample_store.h"
 #include "util/log.h"
 #include "util/sysinfo.h"
@@ -65,6 +66,9 @@ bool Engine::init(const EngineConfig& cfg) {
     resonance_->setStreamEngine(stream_resonance_.get());
     resonance_->setExciteDecayTimeMs(cfg.excite_decay_ms, cfg.block_size,
                                      (float)cfg.sample_rate);
+    // Warm-up 128x128 harmonicke matice (off-RT). Lazy init na audio vlakne
+    // by pri prvni note kazde session stal stovky ms → deterministicky dropout.
+    initHarmonicProximity();
     master_gain_.store(cfg.master_gain, std::memory_order_relaxed);
     dsp_.prepare((float)cfg.sample_rate, cfg.block_size);
     initialized_ = true;
@@ -132,13 +136,19 @@ bool Engine::reloadBank(const std::string& dir) {
     // 3) Zapni bank_loading_ flag. processBlock to uvidi a vrati ticho;
     //    pripadny prave bezici processBlock dobehne s puvodnim bank_.
     bank_loading_.store(true, std::memory_order_release);
-    // 4) Pockej ~10 ms aby in-flight processBlock dobehl. Audio bloky maji
-    //    typicky pod 6 ms (256 vz / 48k), 10 ms je bezpecna rezerva.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // 4) Handshake misto pevneho sleepu: epoch+2 garantuje dobeh in-flight
+    //    bloku + ze dalsi blok videl bank_loading_ (vraci ticho). Timeout
+    //    500 ms pokryva i block_size 8192 (~170 ms perioda) a stojici audio
+    //    (testy / zastavene zarizeni — pak je mutace trivialne bezpecna).
+    waitForAudioQuiesce(2, 500);
     // Join pripadny bezici recache thread — pristupuje k bank_/cfg_, musi
     // dobehnout DRIV nez loadBank prepise banku (jinak race / use-after-free).
     if (recache_thread_.joinable()) recache_thread_.join();
-    recache_running_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(recache_mtx_);
+        recache_running_ = false;
+        recache_pending_ = false;
+    }
     // 5) TVRDE zastav vsechny hlasy DRIV nez uvolnime bank_ — jinak by Voice/
     //    ResonanceVoice drzely const MicLayer*/SampleAsset* do uvolnene pameti
     //    stare banky (release ~200 ms >> 60 ms pauza) => use-after-free.
@@ -151,6 +161,17 @@ bool Engine::reloadBank(const std::string& dir) {
     return ok;
 }
 
+void Engine::waitForAudioQuiesce(int min_epochs, int timeout_ms) noexcept {
+    const uint64_t e0 = block_epoch_.load(std::memory_order_seq_cst);
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds(timeout_ms);
+    while (block_epoch_.load(std::memory_order_seq_cst)
+               < e0 + (uint64_t)min_epochs) {
+        if (std::chrono::steady_clock::now() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
 namespace {
 // Monotonni cas v mikrosekundach (pro note-on/off blikani indikatoru).
 uint64_t nowMicros() {
@@ -161,6 +182,12 @@ uint64_t nowMicros() {
 } // namespace
 
 void Engine::noteOn(int midi, int velocity, int channel) {
+    // Range guard verejneho API: (uint8_t) cast bez kontroly by z midi=300
+    // udelal notu 44 a z velocity=256 nulu (→ falesny NoteOff). MIDI vstup
+    // posila max 127, ale GUI/testy/batch chranene nebyly.
+    if (midi < 0 || midi > 127) return;
+    if (velocity > 127) velocity = 127;
+    if (channel < 0 || channel > 15) channel = 0;
     if (velocity <= 0) { noteOff(midi, channel); return; }
     last_note_on_us_.store(nowMicros(), std::memory_order_relaxed);
     if (!midi_q_.push({MidiEvent::NoteOn, (uint8_t)midi, (uint8_t)velocity,
@@ -169,6 +196,8 @@ void Engine::noteOn(int midi, int velocity, int channel) {
             "MIDI fronta plna — NoteOn midi=%d ZAHOZEN", midi);
 }
 void Engine::noteOff(int midi, int channel) {
+    if (midi < 0 || midi > 127) return;
+    if (channel < 0 || channel > 15) channel = 0;
     last_note_off_us_.store(nowMicros(), std::memory_order_relaxed);
     if (!midi_q_.push({MidiEvent::NoteOff, (uint8_t)midi, 0, (uint8_t)channel}))
         log::Logger::default_().log("midi", log::Severity::Warning,
@@ -191,10 +220,14 @@ bool Engine::overloadRecent(float ms) const noexcept {
     return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
 }
 void Engine::allNotesOff() {
-    midi_q_.push({MidiEvent::AllNotesOff, 0, 0});
+    if (!midi_q_.push({MidiEvent::AllNotesOff, 0, 0}))
+        log::Logger::default_().log("midi", log::Severity::Warning,
+            "MIDI fronta plna — AllNotesOff ZAHOZEN");
 }
 void Engine::sustainPedal(uint8_t cc) {
-    midi_q_.push({MidiEvent::Sustain, cc, 0});
+    if (!midi_q_.push({MidiEvent::Sustain, cc, 0}))
+        log::Logger::default_().log("midi", log::Severity::Warning,
+            "MIDI fronta plna — Sustain CC64=%d ZAHOZEN", (int)cc);
 }
 
 void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
@@ -203,11 +236,12 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     static thread_local bool denorm_set = false;
     if (!denorm_set) { enableFlushDenormals(); denorm_set = true; }
 
-    // RT priorita audio vlakna — jednou per thread. Soft-failure: pri selhani
+    // RT priorita audio vlakna — jednou per thread, jen kdyz si ji aplikace
+    // vyzadala (cfg.rt_priority; GUI a CLI --play). Soft-failure: pri selhani
     // se loguje WARN + per-platform TIP, audio bezi na default scheduling.
     // Viz docs/rt-thread-priority.md.
     static thread_local bool rt_set = false;
-    if (!rt_set) {
+    if (!rt_set && cfg_.rt_priority) {
         const RtAudioParams rp{ cfg_.sample_rate, cfg_.block_size };
         int err = 0;
         const auto st = enableRealtimeAudio(rp, &err);
@@ -253,6 +287,10 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     }
 
     if (!initialized_ || !pool_) return;
+    // Epoch tick: zapocaty blok. reloadBank/recache cekaji na epoch+2 = "in-flight
+    // blok dobehl a dalsi uz vidi aktualni flagy" (nahrazuje sleep heuristiku,
+    // ktera neplatila pro block_size az 8192 ≈ 170 ms periody).
+    block_epoch_.fetch_add(1, std::memory_order_seq_cst);
     // Bank reload v progressu? Vrat ticho — nesahej na bank_ (race s reloadBank
     // na non-RT threadu) a preskoc drain MIDI / voice render. Resetneme i peak
     // metr aby GUI videlo, ze nic neteche. Caller buffery nemusi mit vynulovane,
@@ -297,7 +335,9 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                     // DIAG: log kazdy NoteOn na drainu — m, vel, kanal, jestli se
                     // nasel asset (spec.asset==NULL = nota nema namapovany sample
                     // → tise se zahodi), a kolik hlasu je aktivnich (steal).
-                    log::Logger::default_().log("midi_on", log::Severity::Info,
+                    // RT-safe: LOG_RT_* do lock-free ringu (audio thread nesmi
+                    // zamykat log_mutex_ — priority inversion pod SCHED_FIFO).
+                    LOG_RT_INFO("midi_on",
                         "noteOn midi=%d vel=%d ch=%d first=%d asset=%s active_voices=%d",
                         m, v, ch, (int)first, spec.asset ? "yes" : "NULL",
                         pool_->activeCount());
@@ -318,7 +358,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 // Synthesia), note-off se ignoruje a nota zni dal.
                 const bool last = hold_.noteOff(m, ch);
                 const bool sustained = pedal_.isUndamped(m);
-                log::Logger::default_().log("midi_off", log::Severity::Info,
+                LOG_RT_INFO("midi_off",
                     "noteOff midi=%d ch=%d last=%d release_ms=%.0f cc64=%d sustained=%d",
                     m, ch, (int)last, rms, (int)pedal_.sustainCC(), (int)sustained);
                 if (!last) break;   // jiny kanal porad drzi → neni release
@@ -334,8 +374,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 // CC64 jako spojita hodnota; PedalState prepocita damping_[128].
                 // Resonance se prizpusobi PER-BLOK ve resonance_->processBlock().
                 const bool was_down = pedal_.isPedalDown();
-                log::Logger::default_().log("midi_cc", log::Severity::Info,
-                    "Sustain CC64=%d", (int)e.data1);
+                LOG_RT_INFO("midi_cc", "Sustain CC64=%d", (int)e.data1);
                 pedal_.setSustainCC(e.data1);
                 const bool now_down = pedal_.isPedalDown();
                 // Pri prechodu DOWN → UP: aplikuj release na vsechny pending
@@ -350,8 +389,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
                 break;
             }
             case MidiEvent::AllNotesOff: {
-                log::Logger::default_().log("midi_off", log::Severity::Info,
-                    "AllNotesOff");
+                LOG_RT_INFO("midi_off", "AllNotesOff");
                 hold_.allNotesOff();
                 pedal_.allNotesOff();
                 pool_->allNotesOff(cfg_.release_ms, sr);
@@ -367,13 +405,11 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
         resonance_->processBlock(out_l, out_r, n_samples, pedal_);
         // DIAG: loguj zmenu poctu aktivnich rezonanci + cc64 (jen pri zmene).
         // Po uvolneni pedalu pocet spadne na 0 (mute pres per-blok damping) —
-        // uzitecne pro ladeni pedalu/rezonance. Pozn.: audio-thread log, pri
-        // velmi malem block_size muze prispet k latenci (viz buffer doporuceni).
-        static int dbg_reso_last = -1;
+        // uzitecne pro ladeni pedalu/rezonance. RT-safe (lock-free ring).
         const int rc = resonance_->activeCount();
-        if (rc != dbg_reso_last) {
-            dbg_reso_last = rc;
-            log::Logger::default_().log("resonance", log::Severity::Info,
+        if (rc != dbg_reso_count_) {
+            dbg_reso_count_ = rc;
+            LOG_RT_INFO("resonance",
                 "active rezonance = %d (cc64=%d)", rc, (int)pedal_.sustainCC());
         }
     }
@@ -539,32 +575,51 @@ void Engine::rebuildResonanceCache(float target_db) noexcept {
     cfg_.resonance_layer_db = target_db;            // GUI-thread zapis (pamet aktualniho cile)
     recache_target_.store(target_db, std::memory_order_release);  // cil pro bg thread (bez torn read)
     resonance_->setLayerTargetDb(target_db);        // nove spawny vyberou novou vrstvu hned
-    // VZDY (i pri coalesce) sraz ready flagy → nove hlasy stream mod, a fadene aktivni
-    // cache-mod hlasy. Tim odpada okno, kdy by ready=true ukazoval na jeste nepostavenou
-    // novou cilovou vrstvu (jinak benigni — hlas by degradoval na ring stream — ale takhle
-    // je stav konzistentni). RT-safety: ResonanceVoice re-fetchuje preload_resonance kazdy
-    // blok; fade + 120ms sleep zaruci, ze cache-mod hlas je !active driv, nez bg realokuje.
-    resonance_->clearCacheReady();
-    resonance_->requestRecacheFade();
-    // Pokud uz rebuild bezi, jen oznac pending (bezici thread znovu prebuduje na novy cil).
-    if (recache_running_.exchange(true, std::memory_order_acq_rel)) {
-        recache_has_pending_.store(true, std::memory_order_release);
-        return;
+    {
+        std::lock_guard<std::mutex> lk(recache_mtx_);
+        if (recache_running_) {
+            // Bezici rebuild si pending vyzvedne POD TYMZE mutexem, kterym
+            // shazuje running → lost-update (pending nastaveny tesne po
+            // dokonceni workeru, ktery uz ho nevyzvedl) nemuze nastat.
+            recache_pending_ = true;
+            return;
+        }
+        recache_running_ = true;
     }
     if (recache_thread_.joinable()) recache_thread_.join();   // predchozi uz dobehl
-    recache_thread_ = std::thread([this]() {
-        for (;;) {
-            const float t = recache_target_.load(std::memory_order_acquire);
-            std::this_thread::sleep_for(std::chrono::milliseconds(120));  // dobeh fade
-            auto ready = ithaca::buildResonanceCache(
-                bank_, t, cfg_.resonance_window_ms, log::Logger::default_());
-            if (resonance_) resonance_->setCacheReady(ready);
-            // Prisel mezitim novy cil? (GUI uz srazil ready + fade) → prebuduj znovu.
-            if (recache_has_pending_.exchange(false, std::memory_order_acquire)) continue;
-            break;
-        }
-        recache_running_.store(false, std::memory_order_release);
-    });
+    try {
+        recache_thread_ = std::thread([this]() {
+            for (;;) {
+                const float t = recache_target_.load(std::memory_order_acquire);
+                // KAZDA iterace (i coalesce — drive chybelo!): sraz ready flagy
+                // (nove spawny jedou stream modem a preload_resonance nectou)
+                // + fade aktivnich hlasu. Pak pockej, az audio fade request
+                // zkonzumuje (epoch+2) a 5ms fade dobehne — teprve potom je
+                // realokace preload_resonance bezpecna.
+                resonance_->clearCacheReady();
+                resonance_->requestRecacheFade();
+                waitForAudioQuiesce(2, 500);
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+                auto ready = ithaca::buildResonanceCache(
+                    bank_, t, cfg_.resonance_window_ms, log::Logger::default_());
+                if (resonance_) resonance_->setCacheReady(ready);
+                std::lock_guard<std::mutex> lk(recache_mtx_);
+                if (recache_pending_) { recache_pending_ = false; continue; }
+                recache_running_ = false;
+                break;
+            }
+        });
+    } catch (...) {
+        // Spawn vlakna selhal (extremni stav) — vrat stav; cache zustane
+        // stream-mode do dalsiho pohybu slideru.
+        std::lock_guard<std::mutex> lk(recache_mtx_);
+        recache_running_ = false;
+    }
+}
+
+bool Engine::recacheInProgress() const noexcept {
+    std::lock_guard<std::mutex> lk(recache_mtx_);
+    return recache_running_;
 }
 
 void Engine::setExciteDecayMs(float ms) noexcept {

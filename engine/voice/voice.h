@@ -56,6 +56,9 @@ public:
     bool process(float* out_l, float* out_r, int n_samples) noexcept;
 
     bool  active()    const { return active_; }
+    // True dokud dohrava damping crossfade po prepareDamp (hlas uz je !active,
+    // ale ocas MUSI doznit — VoicePool::processBlock ho proto stale zpracovava).
+    bool  isDamping() const { return damping_; }
     bool  releasing() const { return releasing_; }
     int   midi()      const { return midi_; }
     void  setMidi(int m)    { midi_ = m; }
@@ -108,8 +111,11 @@ private:
     // floor(position_) a ring_hi_* na floor(position_)+1 (lookahead). Vystup =
     // lo*(1-frac) + hi*frac. Okno se posouva popovanim z ringu dokud lo
     // nedosahne floor(position_). Seed pri prvnim vstupu: lo = posledni head
-    // frame, hi = prvni ring pop (plynuly sev head->ring). Pri EOF clamp hi=lo
-    // (hold last sample). Na 48k (pos_inc=1) je frac=0 → vystup = puvodni vzorek.
+    // frame, hi = prvni ring pop (plynuly sev head->ring); kdyz ring jeste nic
+    // nema, seed clampne hi=lo. V hlavni smycce prazdny ring znamena: cisty
+    // EOF (cely soubor uz vyzadan) → deaktivace, zero + 5ms fade; skutecny
+    // underrun → drz posledni vzorek (ring_lo) a 5ms fade ho tvaruje.
+    // Na 48k (pos_inc=1) je frac=0 → vystup = puvodni vzorek.
     float    ring_lo_l_   = 0.f;
     float    ring_lo_r_   = 0.f;
     float    ring_hi_l_   = 0.f;

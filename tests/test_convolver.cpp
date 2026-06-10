@@ -192,3 +192,42 @@ TEST_CASE("Convolver: rebuildIr orezava runtime IR (nizsi DECAY = kratsi)") {
     CHECK(shortL < full);            // kratsi IR = levnejsi konvoluce
     CHECK(shortL >= 1);
 }
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+TEST_CASE("setIR bez beziciho audia neblokuje (seen sentinel)") {
+    Convolver cv;
+    cv.prepare(48000.f, 256);
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<float> ir(64, 0.1f);
+    for (int i = 0; i < 10; ++i) cv.setIR(ir);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    CHECK(ms < 100);
+    CHECK(cv.irLength() == 64);
+}
+
+TEST_CASE("soubezny setIR + process: zadny crash, konecny vystup (smoke; plne overi TSan)") {
+    Convolver cv;
+    cv.prepare(48000.f, 256);
+    cv.setEnabled(true);
+    cv.set(0, 1.f);   // MIX=1 → plna konvoluce
+    std::atomic<bool> run{true};
+    std::atomic<bool> bad{false};
+    std::thread audio([&] {
+        std::vector<float> L(256, 0.5f), R(256, 0.5f);
+        while (run.load()) {
+            cv.process(L.data(), R.data(), 256);
+            for (float v : L) if (!std::isfinite(v)) { bad = true; run = false; }
+            std::fill(L.begin(), L.end(), 0.5f);
+            std::fill(R.begin(), R.end(), 0.5f);
+        }
+    });
+    std::vector<float> ir1(512, 0.2f), ir2(2048, 0.05f);
+    for (int i = 0; i < 500; ++i) cv.setIR((i & 1) ? ir1 : ir2);
+    run = false;
+    audio.join();
+    CHECK_FALSE(bad.load());
+}

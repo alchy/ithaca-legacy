@@ -8,7 +8,7 @@ Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ith
 
 | Soubor | Odpovědnost | Klíčové typy |
 |---|---|---|
-| `main.cpp` | Vstupní bod: CLI parse, GLFW/ImGui init, DPI scale, render loop, layout shell, persistence debounce, shutdown sekvence | `GuiState`, `AppContext`, `MasterPage`, `ResonancePage`, `IParamPage*[5]` |
+| `main.cpp` | Vstupní bod: CLI parse, GLFW/ImGui init, DPI scale, render loop, layout shell, persistence debounce, shutdown sekvence | `GuiState`, `AppContext`, `MasterPage`, `ResonancePage`, `IParamPage*[6]` |
 | `app_context.h` / `app_context.cpp` | Vlastník všech těžkých objektů (engine, audio device, MIDI, log buffer); inicializace z persistovaného stavu a shutdown | `AppContext`, `audioCallback()` |
 | `persistence.h` / `persistence.cpp` | JSON load/save `GuiState` (schema v3→v4 migrace); atomický zápis přes `.tmp` + rename; platformní cesta | `GuiState`, `loadState()`, `saveState()`, `defaultStatePath()` |
 | `log_subscriber.h` / `log_subscriber.cpp` | Thread-safe kruhový buffer 256 log eventů; snapshot pro GUI render | `LogRingBuffer` |
@@ -39,7 +39,7 @@ Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ith
 | `printUsage(const char* argv0) → void` | GUI | `argv0` | `main()` při `--help` nebo neznámé volbě | `fprintf(stderr, …)` | argv0: název spustitelného souboru | Tiskne nápovědu CLI voleb (`--bank-dir`, `--log-level`, `--help`). |
 | `isWindowOnAnyMonitor() → bool` (lambda) | GUI | — | `main()` po `glfwSetWindowPos` | `glfwGetWindowPos`, `glfwGetWindowSize`, `glfwGetMonitors`, `glfwGetMonitorPos`, `glfwGetVideoMode` | — | Počítá překryv okna (minimálně 100×100 px) s každým připojeným monitorem. Chrání před situací, kdy persistovaná pozice okna ukazuje na odpojenou obrazovku. Pokud žádný překryv nevyhovuje, fallback na `(100, 100)` a zapíše novou pozici i do `st`. |
 | **Render loop** (`while (!glfwWindowShouldClose(w))`) | GUI | — | — | `glfwPollEvents`, `glfwGetWindowSize/Pos`, `ImGui_ImplOpenGL3_NewFrame`, `ImGui_ImplGlfw_NewFrame`, `ImGui::NewFrame`, render funkce panelů, `saveState` | — | **Viz detailní popis níže.** |
-| **log_thr** (lambda background thread) | separátní | `log_run` atomic | `main()` | `Logger::default_().flushRTBuffer()`, `sleep_for(10ms)` | — | Každých 10 ms volá `flushRTBuffer()` — přesouvá zprávy z lock-free RT SPSCu do plného `Logger`. Bez toho by audio thread přetékal RT ring a zprávy se zahazovaly. Před `join()` provede jeden finální flush. |
+| **log_thr** (lambda background thread) | separátní | `log_run` atomic | `main()` | `Logger::default_().flushRTBuffer()`, `sleep_for(10ms)` | — | Každých 10 ms volá `flushRTBuffer()` — přesouvá zprávy z lock-free RT SPSCu do plného `Logger` a **notifikuje subscribery** → GUI LOG strip vidí i RT zprávy z audio vlákna (underruny, RT priorita). Bez flushe by audio thread přetékal RT ring a zprávy se zahazovaly. Před `join()` provede jeden finální flush. |
 
 #### Render loop — podrobně
 
@@ -57,15 +57,17 @@ Každá iterace provede:
 4. **Sestavení 3sloupé hlavní řady** (všechny jako `BeginChild` s `SameLine(0,0)` bez mezery):
    - `##bank` (COL1) → `renderBankPanel(ctx)`
    - `##voice` (flex = `content_w − COL1 − COL3`) → `renderParamPage(ctx, *pages[ctx.state.config_page])`
-   - `##config` (COL3) → `renderConfigPanel(ctx, pages, 5, ctx.state.config_page)`
+   - `##config` (COL3) → `renderConfigPanel(ctx, pages, 6, ctx.state.config_page)`
 
 5. **Zrcadlení DSP parametrů do `ctx.state`** — po renderu hlavní řady se hodnoty DSP stage zpětně čtou z enginu (`ch.stage(i).get(j)`, `agc.enabled()` atd.) a ukládají do `ctx.state`. Tak persistence vidí aktuální hodnoty i po přímé změně z panelu (bez samostatného callback mechanismu).
 
-6. **Persistence debounce** — porovnání 20 polí `ctx.state` vs. `last_saved`. Při první detekované změně se zaznamená `dirty_since = now()`. Teprve po 1 s beze změny (nebo spíše 1 s od první změny, `now − dirty_since > 1 s`) se volá `saveState`. `dirty_since` se resetuje. Tím se zabrání ukládání každý frame při tažení slideru.
-   - **Sledovaná pole:** `bank_path`, `midi_port_name`, `master_gain_db`, `resonance_enabled`, `resonance_gain_db`, `resonance_layer_db`, `release_ms`, `excite_decay_ms`, `log_level`, `midi_channel`, `agc_enabled`, `agc_target`, `agc_release_ms`, `agc_floor`, `enhancer_enabled`, `enhancer_process`, `enhancer_contour`, `enhancer_mid`, `convolver_enabled`, `convolver_mix`, `convolver_choice`, `limiter_enabled`, `limiter_threshold_db`, `limiter_release_ms`, `config_page`, `max_resonance_voices`, `audio_block_size`. (`audio_sample_rate` a `resonance_window_ms` se z GUI nemění → nejsou ve sledovaných, ale ukládají se v `saveState` i tak. `resonance_window_ms` = délka RAM cache rezonance [ms], default 12000; laditelné jen ručně v `state.json`, záměrně bez GUI ovládání.)
+6. **Persistence debounce** — porovnání 30 polí `ctx.state` vs. `last_saved`. Při první detekované změně se zaznamená `dirty_since = now()`. Uloží se ~1 s **od první změny** (`now − dirty_since > 1 s`), ne „po 1 s ticha" — při kontinuálním tažení slideru se tedy průběžně ukládá zhruba jednou za sekundu. `dirty_since` se po uložení resetuje. Tím se zabrání ukládání každý frame.
+   - **Sledovaná pole:** `bank_path`, `midi_port_name`, `master_gain_db`, `resonance_enabled`, `resonance_gain_db`, `resonance_layer_db`, `release_ms`, `excite_decay_ms`, `log_level`, `midi_channel`, `agc_enabled`, `agc_target`, `agc_release_ms`, `agc_floor`, `enhancer_enabled`, `enhancer_process`, `enhancer_contour`, `enhancer_mid`, `convolver_enabled`, `convolver_mix`, `convolver_choice`, `convolver_decay`, `convolver_tone`, `convolver_size`, `limiter_enabled`, `limiter_threshold_db`, `limiter_release_ms`, `config_page`, `max_resonance_voices`, `audio_block_size`. (`audio_sample_rate` a `resonance_window_ms` se z GUI nemění → nejsou ve sledovaných, ale ukládají se v `saveState` i tak. `resonance_window_ms` = délka RAM cache rezonance [ms], default 12000; laditelné jen ručně v `state.json`, záměrně bez GUI ovládání.)
    - **Chybějící pole v debounce kontrole:** `bank_search_dir`, `window_x`, `window_y`, `window_w`, `window_h` — tyto se uloží vždy při shutdownu (finální `saveState`), ale ne přes debounce, viz Nálezy revize.
 
-7. **OpenGL render** — `glViewport`, `glClear(0.1, 0.1, 0.1)`, `RenderDrawData`, `SwapBuffers`.
+7. **Resonance Layer debounce** — změna `ctx.state.resonance_layer_db` (slider RESONANCE LAYER) zaznamená `layer_dirty_since`; po 400 ms ticha se volá `engine.rebuildResonanceCache(layer_db)` — přestavba RAM cache rezonance na pozadí (background thread enginu, GUI neblokuje).
+
+8. **OpenGL render** — `glViewport`, `glClear(0.1, 0.1, 0.1)`, `RenderDrawData`, `SwapBuffers`.
 
 ---
 
@@ -83,12 +85,13 @@ Inicializační sekvence (v pořadí volání):
 
 1. **`Logger::setMinSeverity`** — z `state.log_level` (přes `severity_from_string`). Nastaveno *před* `engine.init()`, aby i bank-load logy ctily zvolenou úroveň.
 2. **`Logger::addSubscriber`** — lambda `[this](LogEntry e){ log_buf.push(e); }`. Připojeno *před* `engine.init()`, aby GUI strip viděla i init logy (bank load, stream threads, atd.). Logger drží callback by-value; lambda zachycuje `this` — `AppContext` musí přežít do `shutdown()`.
-3. **`engine.init(cfg)`** — sestavení `EngineConfig` z `GuiState`: `master_gain = pow(10, gain_db/20)` (dB→linear), `sample_rate = state.audio_sample_rate` (fallback 48000 při ≤ 0), `block_size = clamp(state.audio_block_size, 32, 8192)` (Fáze 8 — dřív napevno 48000/256). Validované hodnoty se promítnou zpět do `state`. **Při selhání vrací `false`** — jediná hard-failure cesta.
-4. **Aplikace DSP parametrů** — `ch.stage(0..2).set(i, v)` a `setEnabled(bool)` pro CONVOLVER (MIX + IR dropdown), AGC (3 params), ENHANCER (3 params), LIMITER (2 params). Pořadí odpovídá indexům v `Param` tabulkách stage.
-5. **`engine.setMaxResonanceVoices`** — explicitně, přestože hodnota byla předána přes `cfg` (exercizuje setter cestu).
+3. **`engine.init(cfg)`** — sestavení `EngineConfig` z `GuiState`: `master_gain = pow(10, gain_db/20)` (dB→linear), `sample_rate = state.audio_sample_rate` (fallback 48000 při ≤ 0), `block_size = clamp(state.audio_block_size, 32, 8192)` (Fáze 8 — dřív napevno 48000/256), `cfg.rt_priority = true` (GUI je reálná audio aplikace — audio thread si při prvním `processBlock` zvedne RT prioritu; default pole v `EngineConfig` je `false`, aby testy/offline render RT prioritu nedostaly). Validované hodnoty se promítnou zpět do `state`. **Při selhání vrací `false`** — jediná hard-failure cesta; `main()` pak volá `ctx.shutdown()` (odregistrace log subscriberu — jinak by Logger singleton po zániku ctx volal use-after-free).
+4. **Aplikace DSP parametrů** — `ch.stage(0..3).set(i, v)` a `setEnabled(bool)` pro CONVOLVER (MIX/DECAY/TONE/SIZE + IR choice), AGC (3 params), ENHANCER (3 params), LIMITER (2 params). Pořadí odpovídá indexům v `Param` tabulkách stage.
+5. **Explicitní engine settery** — `engine.setMaxResonanceVoices` (přestože hodnota byla předána přes `cfg`; exercizuje setter cestu), `engine.setResonanceEnabled`, `engine.setResonanceGainDb`.
 6. **Bank load** — `engine.loadBank(state.bank_path)`, jen při neprázdném `bank_path`. Selhání = warning, engine běží prázdný (uživatel vybere banku v UI). Nevrací `false`.
-7. **Audio device start** — `audio->start(&audioCallback, &engine, 48000, 256)`. Musí být *po* `engine.init()` (voice pool / stream / ringy jsou připravené). Selhání = warning (GUI stále funguje bez zvuku).
-8. **MIDI otevření** — substring match `state.midi_port_name` v `MidiInput::listPorts()`. Při shodě: `midi.open(engine, i)`, `midi.setChannel(state.midi_channel)`, uloží přesný název portu do `state.midi_port_name`. Selhání = warning.
+7. **Default Resonance Layer = 1/3 rozsahu banky** — pokud je načtená banka a uložená hodnota je stále persistovaný default −30 dB (heuristika „uživatel ještě nenastavil"), nastaví se `resonance_layer_db = lo + (hi − lo)/3` z `bankPeakRmsMinDb()/MaxDb()`. Poté vždy `engine.setResonanceLayerDb(state.resonance_layer_db)`.
+8. **Audio device start** — `audio->start(&audioCallback, &engine, cfg.sample_rate, cfg.block_size)` (validované hodnoty z kroku 3, ne hardcoded). Musí být *po* `engine.init()` (voice pool / stream / ringy jsou připravené). Selhání = warning (GUI stále funguje bez zvuku).
+9. **MIDI otevření** — substring match `state.midi_port_name` v `MidiInput::listPorts()`. Při shodě: `midi.setChannel(state.midi_channel)` **před** `midi.open(engine, i)` (callback může běžet hned po otevření portu a filtroval by podle starého kanálu), pak uloží přesný název portu do `state.midi_port_name`. Selhání = warning.
 
 ---
 
@@ -106,18 +109,19 @@ Inicializační sekvence (v pořadí volání):
 #### `loadState` — podrobně
 
 1. Přečte celý soubor do `std::string`.
-2. Zkontroluje `schema_version`: akceptuje **3 nebo 4** (jiné hodnoty nebo chybějící klíč → `nullopt`).
-3. Načte povinná pole přítomná v obou verzích: `bank_search_dir`, `bank_path`, `midi_port_name`, `log_level` (default `"info"` při prázdném), `midi_channel` (default `-1`), `master_gain_db`, `release_ms`, `excite_decay_ms`, `max_resonance_voices`, `window_x/y/w/h`. Rezonanční pole `resonance_enabled`/`resonance_gain_db`/`resonance_layer_db` jsou čtena defensivně (`readB`/`readF`, default při chybějícím klíči — migrace ze starých souborů s `resonance_strength`, který se ignoruje).
-4. **Schema v4 DSP pole** — načítána obraně pomocí lambda helperů `readF/readB/readI`: při chybějícím klíči (tj. v3 soubor) vrací default ze struktury `GuiState`. Tím je migrace v3→v4 automatická a bezúpadková: DSP stage budou ve výchozím stavu (disabled, default hodnoty).
-5. Nakonec nastaví `s.schema_version = 4` — soubor se při příštím `saveState` uloží vždy jako v4.
-6. Celý blok je v `try/catch(...)` → při jakékoli výjimce ze `stof`/`stoi` vrací `nullopt` (korupce souboru = začni s defaults).
+2. Zkontroluje `schema_version`: akceptuje **3 nebo 4** (jiné hodnoty nebo chybějící klíč → `nullopt` — jediná cesta, jak zahodit celý stav).
+3. **Všechna ostatní pole se čtou defenzivně** lambda helpery `readF`/`readB`/`readI`: chybějící NEBO poškozený klíč (`stof`/`stoi` v `try/catch`) → default ze struktury `GuiState` jen pro dané pole. Jeden vadný numerický klíč už nezahodí celý stav (dřív `stof("abc")` → výjimka → ztráta `bank_path` i MIDI nastavení). String pole: `bank_search_dir`, `bank_path`, `midi_port_name`, `log_level` (default `"info"` při prázdném).
+4. **Sanitizace hodnot:** `midi_channel` clamp do `[-1, 15]` (mimo rozsah → `-1` = OMNI); geometrie okna — `window_w < 320` → `1280`, `window_h < 240` → `720` (minimalizované okno na Windows ukládá 0×0 a `glfwCreateWindow(0,0)` by při příštím startu selhal).
+5. **Migrace BBE → Enhancer:** `enhancer_*` klíče s fallbackem na staré `bbe_*` (`enhancer_process` ← `bbe_definition`, `enhancer_contour` ← `bbe_bass`, `enhancer_enabled` ← `bbe_enabled`). Migrace v3→v4 je automatická: chybějící DSP klíče = defaulty (stage disabled).
+6. Nakonec nastaví `s.schema_version = 4` — soubor se při příštím `saveState` uloží vždy jako v4. Vnější `try/catch(...)` zůstává jen jako pojistka (vrací `nullopt`), defenzivní čtečky ho v praxi už nespustí.
 
 #### `saveState` — podrobně
 
 1. `create_directories(path.parent_path())` — vytvoří `ithaca-legacy/` při prvním spuštění.
 2. Zapíše do `path + ".tmp"` (flat JSON, jeden klíč na řádek, 2 mezery odsazení).
-3. `filesystem::rename(tmp, path)` — atomická operace na POSIX systémech; na Windows může selhat přes hranice svazků, ale pro lokální config adresář to nevadí.
-4. Vrací `false` při selhání `create_directories` nebo `ofstream`.
+3. **Flush + kontrola před rename:** po zápisu `f.flush()` a test `f.good()` — při IO chybě (plný disk) se `.tmp` torzo smaže a vrátí se `false`, takže se dobrý config nikdy nepřepíše torzem (to je smysl tmp+rename vzoru).
+4. `filesystem::rename(tmp, path)` — atomická operace na POSIX systémech; na Windows může selhat přes hranice svazků, ale pro lokální config adresář to nevadí.
+5. Vrací `false` při selhání `create_directories`, `ofstream`, flush kontroly nebo rename.
 
 ---
 
@@ -168,7 +172,7 @@ Kapacita bufferu je `kCapacity = 256`. Producent může být libovolný vlákno 
 |---|---|
 | `g_scale` (`inline float`) | Globální DPI scale, nastavena v `main()` z `glfwGetWindowContentScale()`. Default 1.0 (HiDPI Retina ~2.0). |
 | `S(float px) → float` | `px × g_scale` — konverze logického px na fyzický. |
-| `Dims::win_w/h` | Výchozí velikost okna při prvním spuštění: 1280×820 px. |
+| `Dims::win_w/h` | Výchozí velikost okna při prvním spuštění: 1280×720 px (HW cílový display). |
 | `Dims::col_bank` / `col_dsp` | Šířky pevných sloupců: 250 px (BANK) / 290 px (CONFIG/DSP). Střední VOICE sloupec = flex (zbytek). |
 | `Dims::topbar_h` / `strip_h` / `kbd_h` / `log_h` | Výšky pásem: 44 / 100 / 100 / 80 px. `log_h` je minimum; LOG pohltí zbytek výšky. |
 | `Dims::main_h_max` | Strop výšky hlavní řady: 280 px. Omezuje prázdný prostor pod slidery při větším okně. |
@@ -202,7 +206,7 @@ Nekombinuje standardní ImGui slider, ale kreslí celý widget ručně přes `Im
 - **Track** — tenká linka (`Dims::slider_track = 3 px`) ve spodní třetině řádku; pozadí `Colors::line_soft`, vyplněná část po grab pozici barvou `fill_col`.
 - **Grab** — svislá zárazka `3 px × 12 px` (`Dims::slider_grab`) na pozici `gx = o.x + width × t` kde `t = (v − lo) / (hi − lo)`.
 - **Interakce** — `ImGui::InvisibleButton` přes celý řádek. Při `IsItemActive()` čte `MousePos.x`, přepočítá `t` a nastaví `*v`. Vrátí `true` při změně hodnoty.
-- **Readonly** (`enabled=false`) — ztlumené barvy (`Colors::line` fill, `Colors::muted` text), `Dummy()` místo `InvisibleButton`, vrátí `false`. Používá se pro `MAX RESONANCE` (init-only parametr).
+- **Readonly** (`enabled=false`) — ztlumené barvy (`Colors::line` fill, `Colors::muted` text), `Dummy()` místo `InvisibleButton`, vrátí `false`. Aktuálně žádný parametr readonly není (`MAX RESONANCE` je živý slider → `engine.setMaxResonanceVoices`); mechanismus zůstává pro budoucí použití.
 - **DPI** — používá `Dims::*` konstanty (logické px); DPI škálování řeší ImGui/GLFW na úrovni framebufferu, nikoli widget.
 
 #### `Keyboard` — podrobně
@@ -222,7 +226,7 @@ Template funkce (ActiveFn, ResoFn = lambda `int→bool`). Kreslí 88 kláves MID
 
 Obsah zleva doprava:
 1. **Logo ITHACA** — `Fonts::brand`, `Colors::gold`.
-2. **MIDI IN dropdown** (`ImGui::BeginCombo("##midi")`) — zobrazuje `listPorts()` každý frame (live scan). Výběr `(none)` zavře port (`midi.close()`, smaže `state.midi_port_name`). Výběr portu: `midi.close()` + `midi.open(engine, i)` + `midi.setChannel(state.midi_channel)`, uloží přesný název. Tlačítko `RESCAN` je vizuální hook (listPorts se volá každý frame, tlačítko zatím nic extra neprovádí).
+2. **MIDI IN dropdown** (`ImGui::BeginCombo("##midi")`) — seznam portů je **cachovaný** (`static std::vector<std::string> ports`): `listPorts()` konstruuje RtMidi klienta (OS IPC) a per-frame volání bývalo nejdražší operace celého GUI. Rescan proběhne jen (a) první frame, (b) při otevření comba (1× per open, guard `combo_was_open`), (c) tlačítkem `RESCAN` — to je nyní funkční. Výběr `(none)` zavře port (`midi.close()`, smaže `state.midi_port_name`). Výběr portu: `midi.close()` + `midi.open(engine, i)` + `midi.setChannel(state.midi_channel)`, uloží přesný název.
 3. **CH dropdown** (`ImGui::BeginCombo("##ch")`) — OMNI nebo 1–16. Při změně: `state.midi_channel = c`, `midi.setChannel(c)`.
 4. **SR | BUFFER skupina** (Fáze 8, mezi CH a LOG) — viz oblast C (Buffery):
    - **`SR`** read-only label = `engine.sampleRate()` formátovaný (`%g kHz`). Konfiguruje se jen v `state.json` (`audio_sample_rate`), GUI ho jen zobrazuje.
@@ -242,7 +246,7 @@ Chybí reset `max_resonance_voices` v RESET akci — viz Nálezy revize.
 | Funkce (signatura) | Vlákno | Vstup → výstup | Volá ji | Volá (proč) | Parametry | Vysvětlení |
 |---|---|---|---|---|---|---|
 | `scanBanks(const string& search_root) → vector<string>` | GUI | adresář → podadresáře jako kandidáti | `renderBankPanel()` | `filesystem::directory_iterator` | search_root: adresář bank | Vrátí seznam podadresářů `search_root`. Prázdný root → prázdný výstup. Chybný/neexistující adresář → prázdný výstup (error_code). Výsledek cachován staticky (`static cands`, `static last_root`) — rescan jen při změně rootu. |
-| `renderBankPanel(AppContext& ctx) → void` | GUI | — | `main()` render loop | `scanBanks()`, `engine.reloadBank()`, `engine.bankType()`, `engine.recordedNotes()`, `engine.loadedSamples()` | — | Vykreslí: eyebrow BANK, dropdown se seznamem kandidátů (filename jako label), TYPE badge (`FIXED`/`DYNAMIC`/`EXTENDED`/`—` ze `engine.bankType()`), statistiky (`X not · Y samplu`), RELOAD tlačítko. Výběr jiné banky: `state.bank_path = b`, `engine.reloadBank(b)` (safe drain→silence→load→resume, blokuje ~60 ms na GUI vlákně). RELOAD tlačítko volá `engine.reloadBank(state.bank_path)`. |
+| `renderBankPanel(AppContext& ctx) → void` | GUI | — | `main()` render loop | `scanBanks()`, `engine.reloadBank()`, `engine.bankType()`, `engine.recordedNotes()`, `engine.loadedSamples()` | — | Vykreslí: eyebrow BANK, dropdown se seznamem kandidátů (filename jako label), TYPE badge (`FIXED`/`DYNAMIC`/`EXTENDED`/`—` ze `engine.bankType()`), statistiky (`X not · Y samplu`), RELOAD tlačítko. Výběr jiné banky: `state.bank_path = b`, `engine.reloadBank(b)` (safe drain→silence→load→resume; synchronní — blokuje GUI vlákno po dobu disk loadu banky, viz Nálezy revize #3). RELOAD tlačítko volá `engine.reloadBank(state.bank_path)`. |
 
 `root` pro scan se určuje prioritně z `state.bank_search_dir`, pak z rodiče `state.bank_path`, pak prázdný string.
 
@@ -310,7 +314,7 @@ Parametr `ctx` přijat ale nevyužit (`(void)ctx`). `selected` je `int&` — in/
 
 `renderLogPanel(AppContext& ctx)` — GUI vlákno — kreslí do `##log` child okna (plná šířka, zbytek výšky po hlavní řadě a klaviatuře).
 
-- Snapshot 50 nejnovějších eventů do statického `std::array<LogEntry, 50> tmp` (na stacku procesu/staticky, nedochází k heap alokaci každý frame).
+- Snapshot 50 nejnovějších eventů do statického `std::array<LogEntry, 50> tmp` — samotné pole nealokuje, ale `LogEntry` obsahuje `std::string` topic/message, takže kopie ve `snapshot()` mohou heap alokovat (krátké zprávy kryje SSO). Podstatné je, že se mutex ring bufferu nedrží během renderu.
 - `BeginChild("##loglist", {0,0}, false, HorizontalScrollbar)` — 0,0 = vyplň celou dostupnou oblast.
 - Pro každý event: barva dle severity — `muted` (Info/Debug), `gold` (Warning), červená `0xd0,0x5a,0x4a` (Error/Fatal). `ImGui::Text("[%s] %s", topic, message)`.
 - **Auto-scroll:** `if (ScrollY >= ScrollMaxY - 1) SetScrollHereY(1.0)` — scrolluje k nejnovějšímu záznamu pouze pokud je uživatel u dna. Při ručním scrollování nahoru se nesnáží „uchytit" nové zprávy.
@@ -321,12 +325,12 @@ Parametr `ctx` přijat ale nevyužit (`(void)ctx`). `selected` je `int&` — in/
 
 | Oblast | Co GUI ovládá / čte |
 |---|---|
-| **Engine** (`engine/engine.h`) | `initFromState`: `engine.init(cfg)`, `loadBank`, `setMaxResonanceVoices`, `setResonanceEnabled/GainDb/LayerDb`. Runtime: `setMasterGain`, `setReleaseMs` (přes `MasterPage::set`), `setResonanceGainDb`, `setResonanceLayerDb`, `setResonanceEnabled`, `setExciteDecayMs`, `setMaxResonanceVoices` (přes `ResonancePage::set`), `bankPeakRmsMinDb/MaxDb` (dyn. rozsah slideru), `dspChain().stage(i).set/setEnabled` (přes `renderParamPage`). Diagnostika: `activeVoices`, `resonanceVoices`, `mainRingsUsed/Total`, `resonanceRingsUsed/Total`, `masterPeakL/R`, `noteOnRecent`, `noteOffRecent`, `pedalCC`, `activeMidiNotes`, `resonatingMidiNotes`, `bankType`, `recordedNotes`, `loadedSamples`, `mainStreamUnderrunRecent`, `resonanceStreamUnderrunRecent`. |
-| **DSP Chain** (`engine/dsp/dsp_stage.h`, `dsp_chain.h`) | `renderParamPage` + `renderConfigPanel` pracují s `IParamPage*` (polymorfní). `main.cpp` získá reference `dspChain().stage(0..2)` a zrcadlí hodnoty do `ctx.state` každý frame. |
-| **Audio** (`io/audio_device.h`) | `AppContext::initFromState` volá `audio->start(&audioCallback, &engine, 48000, 256)`. `shutdown` volá `audio->stop()`. GUI jinak s audio device nekomunikuje. |
-| **MIDI** (`midi/midi_input.h`) | `renderTopBar` volá `MidiInput::listPorts()`, `midi.open/close`, `midi.setChannel`. `AppContext::initFromState` otevírá port dle persistovaného jména. |
-| **Loader / Bank reload** (`engine/engine.h::reloadBank`) | `renderBankPanel` volá `engine.reloadBank(path)` — blokující (~60 ms) GUI-thread safe operace (drain → silence → load → resume). |
-| **Logger** (`util/log.h`) | `AppContext::initFromState` registruje subscriber → `LogRingBuffer::push`. `main()` spouští background thread pro `flushRTBuffer` (10 ms interval). `renderTopBar` volá `Logger::setMinSeverity` při změně úrovně. |
+| **Engine** (`engine/engine.h`) | `initFromState`: `engine.init(cfg)` (vč. `cfg.rt_priority = true`), `loadBank`, `setMaxResonanceVoices`, `setResonanceEnabled/GainDb/LayerDb`. Runtime: `setMasterGain`, `setReleaseMs` (přes `MasterPage::set`), `setResonanceGainDb`, `setResonanceLayerDb`, `setResonanceEnabled`, `setExciteDecayMs`, `setMaxResonanceVoices` (přes `ResonancePage::set`), `bankPeakRmsMinDb/MaxDb` (dyn. rozsah slideru), `rebuildResonanceCache` (debounced 400 ms z render loopu), `dspChain().stage(i).set/setEnabled` (přes `renderParamPage`). Diagnostika: `activeVoices`, `resonanceVoices`, `mainRingsUsed/Total`, `resonanceRingsUsed/Total`, `masterPeakL/R`, `noteOnRecent`, `noteOffRecent`, `pedalCC`, `activeMidiNotes`, `resonatingMidiNotes`, `bankType`, `recordedNotes`, `loadedSamples`, `mainStreamUnderrunRecent`, `resonanceStreamUnderrunRecent`, `dspLoadPeak`, `overloadRecent`. |
+| **DSP Chain** (`engine/dsp/dsp_stage.h`, `dsp_chain.h`) | `renderParamPage` + `renderConfigPanel` pracují s `IParamPage*` (polymorfní). `main.cpp` získá reference `dspChain().stage(0..3)` a zrcadlí hodnoty do `ctx.state` každý frame. |
+| **Audio** (`io/audio_device.h`) | `AppContext::initFromState` volá `audio->start(&audioCallback, &engine, cfg.sample_rate, cfg.block_size)`. `setAudioBlockSize` dělá stop → `engine.setBlockSize` → start. `shutdown` volá `audio->stop()`. GUI jinak s audio device nekomunikuje. |
+| **MIDI** (`midi/midi_input.h`) | `renderTopBar` volá `MidiInput::listPorts()` (cachovaně: první frame / otevření comba / RESCAN), `midi.open/close`, `midi.setChannel`. `AppContext::initFromState` otevírá port dle persistovaného jména (setChannel před open). |
+| **Loader / Bank reload** (`engine/engine.h::reloadBank`) | `renderBankPanel` volá `engine.reloadBank(path)` — GUI-thread safe operace (drain → silence → load → resume), ale synchronní: blokuje GUI vlákno po dobu disk loadu banky. |
+| **Logger** (`util/log.h`) | `AppContext::initFromState` registruje subscriber → `LogRingBuffer::push`. `main()` spouští background thread pro `flushRTBuffer` (10 ms interval); `flushRTBuffer` notifikuje subscribery, takže LOG strip vidí i RT zprávy z audio vlákna (underruny, RT priorita). `renderTopBar` volá `Logger::setMinSeverity` při změně úrovně. |
 | **Events (MIDI/CC)** | Engine drží lock-free `MidiQueue`; MIDI thread vkládá `noteOn/noteOff/sustainPedal` — GUI tato data čte přes atomické diagnostické metody (ne přímý přístup do fronty). |
 
 ---
@@ -335,19 +339,19 @@ Parametr `ctx` přijat ale nevyužit (`(void)ctx`). `selected` je `int&` — in/
 
 ### 1. Debounce nesleduje `bank_search_dir` a `window_*`
 
-Porovnávací blok v render loop kontroluje 20 polí `GuiState`, ale **vynechává** `bank_search_dir`, `window_x`, `window_y`, `window_w`, `window_h`. Změna `bank_search_dir` (přes CLI nebo budoucí Browse dialog) se tedy uloží až při příštím shutdownu nebo při jiné sledované změně. `window_*` se mění každý frame (z `glfwGetWindowSize/Pos`), takže jejich **zařazení do debounce by triggrovalo ukládání neustále** při jakémkoli pohybu okna — zřejmě záměrné (ukládají se jen při shutdownu). `bank_search_dir` by zařadit šlo, bez rizika záplavy ukládání.
+Porovnávací blok v render loop kontroluje 30 polí `GuiState`, ale **vynechává** `bank_search_dir`, `window_x`, `window_y`, `window_w`, `window_h`. Změna `bank_search_dir` (přes CLI nebo budoucí Browse dialog) se tedy uloží až při příštím shutdownu nebo při jiné sledované změně. `window_*` se mění každý frame (z `glfwGetWindowSize/Pos`), takže jejich **zařazení do debounce by triggrovalo ukládání neustále** při jakémkoli pohybu okna — zřejmě záměrné (ukládají se jen při shutdownu). `bank_search_dir` by zařadit šlo, bez rizika záplavy ukládání.
 
 ### 2. RESET netleží `max_resonance_voices`
 
 `renderTopBar` → RESET tlačítko resetuje `resonance_enabled`, `resonance_gain_db`, `release_ms`, `excite_decay_ms`, `master_gain_db` na defaults a volá odpovídající engine settery. **Neresetuje** `max_resonance_voices` (default 32) ani `resonance_layer_db` (vázán na banku).
 
-### 3. `reloadBank` blokuje GUI vlákno ~60 ms
+### 3. `reloadBank` blokuje GUI vlákno po dobu disk loadu
 
-`engine.reloadBank()` (z `renderBankPanel` i `main.cpp`) volá `std::this_thread::sleep_for` celkem ~60 ms v GUI vlákně. Při ~60 Hz render loopu způsobí viditelné zaseknutí (přeskočí ~4 framy). Žádný workaround není implementován — reload by měl být delegován do pomocného threadu s indikátorem průběhu.
+`engine.reloadBank()` (z `renderBankPanel`) je synchronní: handshake/drain část je rychlá (~55 ms + 1–2 audio bloky), ale následný `loadBank` dělá disk I/O **na GUI vlákně** — u větších bank jde o sekundy, po které GUI nereaguje (žádné framy). Async reload s indikátorem průběhu je vědomě odložen — viz `docs/review-2026-06-10.md` §5, bod 6.
 
-### 4. Thread-safety čtení DSP stage z GUI vlákna
+### 4. Thread-safety čtení DSP stage z GUI vlákna — ✅ VYVRÁCENO (revize 2026-06-10)
 
-Po renderu hlavní řady `main.cpp` čte `ch.stage(i).get(j)` a `agc.enabled()` z GUI vlákna — tyto hodnoty mohly být právě zapisovány audio threadem přes `process()`. `DspStage` implementace by měla parametry udržovat atomicky (nebo pod mutexem). Bez inspekce `dsp_chain.cpp` / konkrétních stage implementací nelze potvrdit, zda jsou settery/gettery skutečně atomické — potenciální race condition.
+Po renderu hlavní řady `main.cpp` čte `ch.stage(i).get(j)` a `agc.enabled()` z GUI vlákna. Inspekce stage implementací potvrdila, že **všechny user-facing parametry i enable flagy jsou `std::atomic`** (`atomic<float>`/`atomic<bool>` s `relaxed` load/store) — čtení z GUI vlákna je bezpečné, žádná race condition. Audio thread parametry pouze čte (zapisuje jen do oddělených metrických atomik `cur_gain_`/`gr_db_`). Viz G-dsp „Multithreading — atomické parametry".
 
 ### 5. `Colors::v()` — pořadí kanálů
 

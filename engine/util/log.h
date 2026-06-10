@@ -99,9 +99,9 @@ public:
 
     // -- Subscriber API (pro GUI log strip, audit hooks atd.) --
     // Subscriber je callback volany synchronnousne pri kazdem uspesnem log()
-    // volani (po formatu zpravy, pod separe mutex). Pozn.: zatim NEvolano z
-    // RT cesty (vlogRT); ta jde pres ring buffer a flushRTBuffer() ho jen
-    // tiskne — pokud bude treba notifikovat i flush zpravy, prida se zvlast.
+    // volani (po formatu zpravy, pod separe mutex). RT zpravy (vlogRT) jsou
+    // subscriberum dorucovany pri flushRTBuffer() — z non-RT flush threadu,
+    // takze GUI log strip vidi i underruny/RT stav audio threadu.
     // KRITICKE: subscriber callback nesmi sam volat log() (deadlock pres
     // subscriber_mtx_, byt log_mutex_ je separe).
     using Subscriber = std::function<void(const LogEntry&)>;

@@ -121,6 +121,37 @@ TEST_CASE("StreamEngine: noteUnderrun orazitkuje a underrunRecent to vidi") {
     CHECK(se.underrunRecent(0.f)    == false);  // nulove okno → nic neni "recent"
 }
 
+TEST_CASE("stale request po releaseRing nezapise data ani EOF do recyklovaneho ringu") {
+    TempFile p{ makeRampWav("stale", 1000) };
+    StreamEngine se(/*n_rings=*/1, /*ring_capacity_frames=*/128, /*n_workers=*/1);
+    RingHandle* r1 = se.acquireRing();              // worker zatim NEbezi
+    REQUIRE(r1 != nullptr);
+    CHECK(se.requestRead(r1, p.path, 0, 500, /*eof_when_done=*/true));
+    se.releaseRing(r1);                             // gen bump → request je stale
+    RingHandle* r2 = se.acquireRing();              // tentyz slot, nova generace
+    REQUIRE(r2 == r1);
+    se.start();                                     // worker zpracuje stale request
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(r2->available() == 0);                    // zadna stara data
+    CHECK_FALSE(r2->eof_.load());                   // zadny falesny EOF
+    CHECK(se.requestRead(r2, p.path, 0, 100, false));   // novy request projde
+    for (int i = 0; i < 100 && r2->available() < 100; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(r2->available() >= 100);
+    se.releaseRing(r2);
+    se.stop();
+}
+
+TEST_CASE("requestRead vraci false pri plne fronte (drop je viditelny callerum)") {
+    StreamEngine se(1, 64, 1);                      // nestartovano → fronta se plni
+    RingHandle* r = se.acquireRing();
+    REQUIRE(r != nullptr);
+    int ok = 0;
+    for (int i = 0; i < 300; ++i)
+        if (se.requestRead(r, "x.wav", 0, 1, false)) ++ok;
+    CHECK(ok == 256);                               // StreamRequestQueue::kCap
+}
+
 TEST_CASE("RingHandle push/pop wrap pres konec bufferu") {
     // Direct test ringu bez workeru.
     RingHandle r;

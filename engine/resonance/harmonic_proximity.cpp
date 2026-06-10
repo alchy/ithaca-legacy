@@ -67,6 +67,8 @@ const std::array<std::array<float, 128>, 128>& couplingMatrix() {
 
 } // namespace
 
+void initHarmonicProximity() { (void)couplingMatrix(); }
+
 float harmonicProximity(int target_midi, int source_midi) {
     if (target_midi < 0 || target_midi > 127 ||
         source_midi < 0 || source_midi > 127) return 0.f;

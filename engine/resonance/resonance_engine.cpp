@@ -35,8 +35,9 @@
 namespace ithaca {
 
 ResonanceEngine::ResonanceEngine(int max_resonance_voices) {
-    // voices_ default initialized — vsechny unique_ptr null (lazy konstrukce
-    // pri prvni rezonanci dane noty).
+    // Predalokace vsech 128 hlasu. (Drive lazy make_unique v onPlayedNoteOn
+    // = malloc na audio vlakne; ~20 kB celkem nestoji za RT prohrešek.)
+    for (auto& v : voices_) v = std::make_unique<ResonanceVoice>();
     setMaxVoices(max_resonance_voices);
 }
 
@@ -86,9 +87,10 @@ void ResonanceEngine::setExciteDecayTimeMs(float tau_ms, int block_size, float e
     if (tau_ms <= 0.f || block_size <= 0 || engine_sr <= 0.f) return;
     // block_ms = block_size * 1000 / engine_sr; decay = exp(-block_ms/tau_ms).
     const float block_ms = (float)block_size * 1000.f / engine_sr;
-    decay_per_block_     = std::exp(-block_ms / tau_ms);
-    if (decay_per_block_ < 0.f) decay_per_block_ = 0.f;
-    if (decay_per_block_ > 1.f) decay_per_block_ = 1.f;
+    float d = std::exp(-block_ms / tau_ms);
+    if (d < 0.f) d = 0.f;
+    if (d > 1.f) d = 1.f;
+    decay_per_block_.store(d, std::memory_order_relaxed);
 }
 
 void ResonanceEngine::onSelfNoteOn(int played_midi, float engine_sr) {
@@ -114,14 +116,8 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
 
     for (int N = 0; N < 128; ++N) {
         if (N == played_midi) continue;              // play-on-self
-        // Eligibility filter 5.5.1 (1):
-        if (!pedal.isUndamped(N)) continue;          // damping <= eps → ineligibilni
-        if (pool.hasActiveMainVoice(N)) continue;    // main voice N existuje → ineligibilni
-        // Rule B in-progress: rezonance N prave fade-uje — neprzme to.
-        auto& slot = voices_[(size_t)N];
-        if (slot && slot->active() && slot->fadingOut()) continue;
-
-        // Harmonicky model:
+        // Levne O(1) testy nejdriv: harmonicka blizkost vyradi ~90 % not,
+        // drahy pool scan (hasActiveMainVoice, O(pool)) az nakonec.
         const float harm = harmonicProximity(N, played_midi);
         if (harm < kResonanceHarmonicMin) continue;
 
@@ -131,7 +127,14 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         const float excite = vel_norm * harm * gain;
         if (excite < kResonanceExciteMinGain) continue;
 
-        if (slot && slot->active()) {
+        // Eligibility filter 5.5.1 (1):
+        if (!pedal.isUndamped(N)) continue;          // damping <= eps → ineligibilni
+        // Rule B in-progress: rezonance N prave fade-uje — neprzme to.
+        auto& slot = voices_[(size_t)N];
+        if (slot->active() && slot->fadingOut()) continue;
+        if (pool.hasActiveMainVoice(N)) continue;    // main voice N existuje → ineligibilni
+
+        if (slot->active()) {
             // Per-nota uniqueness 5.5.1 (2): existujici slot, jen aktualizuj
             // amplitudu. max() drzi nejvyssi z N excitaci v pohledu na blok
             // (smerodatne pro decay-derived target_gain v processBlock).
@@ -157,9 +160,7 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         const SampleAsset& a = vs.variants[0];
         const MicLayer*    m = &a.mics[0];
 
-        // Lazy konstrukce unique_ptr per slot N.
-        if (!slot) slot = std::make_unique<ResonanceVoice>();
-        slot->setStreamEngine(stream_);
+        slot->setStreamEngine(stream_);   // hlasy predalokovane v konstruktoru
 
         float pl, pr;
         panForNote(N, pl, pr);
@@ -168,6 +169,9 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         // pri half-pedal = ~0.5 → rezonance startuje tise. processBlock pak
         // udrzuje target podle aktualniho dampingu.
         const float init_gain = excite * pedal.dampingFor(N);
+        // Half-pedal: damping muze srazit init_gain hluboko pod slysitelnost —
+        // nealokuj ring + diskova cteni pro hlas, ktery nikdo neuslysi.
+        if (init_gain < kResonanceExciteMinGain) continue;
 
         // Budget gate PRED spawnem: nealokuj ring + necti z disku pro hlas,
         // ktery by se stejne hned ztlumil. Steal jen kdyz je novy hlasitejsi nez
@@ -175,14 +179,18 @@ void ResonanceEngine::onPlayedNoteOn(int played_midi, int velocity,
         // spawn-churn (drive: spawn VSECH harmonik → acquireRing + requestRead →
         // fadeOut pres budget; zbytecna diskova cteni hladovela streamujici
         // prezivajici rezonanci → underrun i pri MAX RESONANCE=1).
+        // Uroven = max(currentLevel, targetGain): cerstve spawnuty hlas ma
+        // gain_ jeste 0 (rampa ~30 ms), ale target uz plny — srovnani ciste
+        // pres currentLevel() delalo z prave spawnutych hlasu nulove obeti
+        // a spawn-churn se vracel uvnitr jedineho onPlayedNoteOn.
         {
             int   live = 0, quietest = -1;
             float qlevel = 1e30f;
             for (int k = 0; k < 128; ++k) {
                 const auto& s = voices_[(size_t)k];
-                if (!s || !s->active() || s->fadingOut()) continue;
+                if (!s->active() || s->fadingOut()) continue;
                 ++live;
-                const float lvl = s->currentLevel();
+                const float lvl = std::max(s->currentLevel(), s->targetGain());
                 if (lvl < qlevel) { qlevel = lvl; quietest = k; }
             }
             const int cap = max_voices_.load(std::memory_order_relaxed);
@@ -222,10 +230,11 @@ bool ResonanceEngine::processBlock(float* out_l, float* out_r, int n_samples,
     // 1) Per-blok decay last_excite + update target_gain podle pedalu.
     //    Aplikujeme jen na hlasy, ktere NEJSOU ve fade-out (rule B / target=0)
     //    — ty si rampu drzi po cele dobe fade-out.
+    const float decay = decay_per_block_.load(std::memory_order_relaxed);
     for (int N = 0; N < 128; ++N) {
         auto& slot = voices_[(size_t)N];
         if (!slot || !slot->active() || slot->fadingOut()) continue;
-        excite_state_[N].last_excite *= decay_per_block_;
+        excite_state_[N].last_excite *= decay;
         const float target = excite_state_[N].last_excite * pedal.dampingFor(N);
         slot->setTargetGain(target);
     }

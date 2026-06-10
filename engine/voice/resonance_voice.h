@@ -85,6 +85,10 @@ public:
     bool  active()       const { return active_; }
     int   midi()         const { return midi_; }
     float currentLevel() const noexcept { return gain_; }
+    // Cilovy gain (rampa k nemu tece). Budget gate v ResonanceEngine porovnava
+    // max(currentLevel, targetGain) — cerstve spawnuty hlas ma gain_ 0, ale
+    // target uz plny; bez toho gate fadl prave spawnle hlasy (spawn-churn).
+    float targetGain()   const noexcept { return target_gain_; }
     // True kdyz hlas je v rezimu fade-out (rule B nebo target_gain → 0). Pouziva
     // ResonanceEngine, aby pri nove excitaci NEPRZAL fade probehajici v ramci
     // pravidla B (note-on na rezonujici notu): novou rezonanci od dalsiho
@@ -141,7 +145,8 @@ private:
     int64_t  ring_lo_idx_ = -1;
 
     // Recompute `gain_step_` z (gain_, target_gain_, ramp_frames_).
-    // Pri is_fading_out_ se nepocita znovu (uz nastaveny ostry step z fadeOut).
+    // Volajici (setTargetGain/addExcitation) prepisuji i ostry step z fadeOut
+    // — ResonanceEngine fading hlasy preskakuje, takze se to nestava.
     void recomputeGainStep() noexcept;
 };
 

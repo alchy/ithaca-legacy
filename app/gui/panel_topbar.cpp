@@ -25,8 +25,13 @@ void renderTopBar(AppContext& ctx) {
     if (Fonts::brand) ImGui::PopFont();
     ImGui::SameLine(0, 24);
 
-    // MIDI IN dropdown + ⟳ rescan.
-    auto ports = ithaca::MidiInput::listPorts();
+    // MIDI IN dropdown + RESCAN. Seznam portu je CACHOVANY — listPorts()
+    // konstruuje RtMidi klienta (OS IPC) a per-frame volani bylo nejdrazsi
+    // operace celeho GUI. Rescan: prvni frame, otevreni comba, tlacitko RESCAN.
+    static std::vector<std::string> ports;
+    static bool ports_scanned  = false;
+    static bool combo_was_open = false;
+    if (!ports_scanned) { ports = ithaca::MidiInput::listPorts(); ports_scanned = true; }
     // Popisek v body fontu (stejna velikost jako tlacitko RESCAN), tlumena barva.
     // AlignTextToFramePadding → vertikalni stred s combo/tlacitkem na radku.
     ImGui::AlignTextToFramePadding();
@@ -38,6 +43,10 @@ void renderTopBar(AppContext& ctx) {
     const char* cur = ctx.state.midi_port_name.empty() ? "(none)"
                     : ctx.state.midi_port_name.c_str();
     if (ImGui::BeginCombo("##midi", cur)) {
+        if (!combo_was_open) {   // rescan pri otevreni comba (1x per open)
+            ports = ithaca::MidiInput::listPorts();
+            combo_was_open = true;
+        }
         if (ImGui::Selectable("(none)", ctx.state.midi_port_name.empty())) {
             ctx.midi.close();
             ctx.state.midi_port_name.clear();
@@ -55,11 +64,12 @@ void renderTopBar(AppContext& ctx) {
             }
         }
         ImGui::EndCombo();
+    } else {
+        combo_was_open = false;
     }
     ImGui::SameLine();
-    // ⟳ rescan: listPorts() se vola kazdy frame (zive), tlacitko je vizualni
-    // hook (a misto pro budouci cache-clear). U+21BB = ↻.
-    ImGui::Button("RESCAN##reload");
+    if (ImGui::Button("RESCAN##reload"))
+        ports = ithaca::MidiInput::listPorts();
     ImGui::SameLine(0, 18);
 
     // CHANNEL dropdown: OMNI + 1..16. Popisek v body fontu (jako RESCAN).

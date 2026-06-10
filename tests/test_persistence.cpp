@@ -168,3 +168,34 @@ TEST_CASE("Persistence escape v cestach") {
     CHECK(loaded->bank_path == s.bank_path);
     std::filesystem::remove(p);
 }
+
+TEST_CASE("poskozena numericka hodnota nezahodi cely stav (bank_path prezije)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_test_state_corrupt.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 4,\n  \"bank_path\": \"/moje/banka\",\n"
+             "  \"master_gain_db\": abc,\n  \"window_w\": 1280\n}\n";
+    }
+    auto st = loadState(p);
+    REQUIRE(st.has_value());
+    CHECK(st->bank_path == "/moje/banka");
+    CHECK(st->master_gain_db == doctest::Approx(GuiState{}.master_gain_db));
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("window geometrie se sanitizuje (0x0 z minimalizovaneho okna nezabije start)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_test_state_geom.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 4,\n  \"window_w\": 0,\n  \"window_h\": -5,\n"
+             "  \"midi_channel\": 99\n}\n";
+    }
+    auto st = loadState(p);
+    REQUIRE(st.has_value());
+    CHECK(st->window_w >= 320);
+    CHECK(st->window_h >= 240);
+    CHECK(st->midi_channel == -1);   // mimo rozsah → OMNI
+    std::filesystem::remove(p);
+}

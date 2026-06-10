@@ -11,15 +11,18 @@ The file is **auto-managed** by ithaca-gui — you normally never edit it by han
 
 - It is created on first clean exit if it does not exist (the GUI starts from
   built-in defaults when no file is present).
-- During a session it is written with a **debounced save**: after any tracked
-  value changes, the GUI waits until **~1 second of idle** (no further change)
-  and then writes the file. This avoids writing on every frame while a slider is
-  being dragged.
+- During a session it is written with a **debounced save**: the file is written
+  **~1 second after the first tracked change** (not after 1 s of idle — the
+  timer starts at the first change and is not reset by further changes). While
+  a slider is being dragged continuously, the file is therefore written about
+  once per second instead of on every frame.
 - It is also written **unconditionally on clean exit** (when the window is closed),
   capturing the final window geometry.
 
-Writes are atomic: the GUI writes to `state.json.tmp` and then renames it over
-`state.json` (see `saveState` in `app/gui/persistence.cpp`).
+Writes are atomic: the GUI writes to `state.json.tmp`, flushes and checks the
+stream state, and only then renames it over `state.json`. On an I/O error (e.g.
+a full disk) the truncated `.tmp` is deleted and the existing good config is
+left untouched (see `saveState` in `app/gui/persistence.cpp`).
 
 The format is a flat JSON object (no nested objects or arrays). It is parsed by a
 minimal hand-written parser, not a full JSON library, so keep it flat if you do
@@ -49,24 +52,28 @@ save.
   (or a missing `schema_version`) causes the load to fail and the GUI starts from
   defaults. After a successful load, `schema_version` is unconditionally set to
   `4` in memory, so the **next save rewrites the file as v4**.
-- **Most keys are read defensively** — a missing key falls back to the `GuiState`
-  struct default. This is what makes old files forward-compatible: the schema has
-  grown well beyond the original v4 (Convolver, Enhancer, the resonance gain/layer
-  split, `resonance_window_ms`, the audio device fields), yet a file that predates
-  those keys still loads, with each absent key taking its default. Defensively-read
-  keys: all `agc_*`, `enhancer_*`, `limiter_*`, `convolver_*`, `resonance_enabled`,
-  `resonance_gain_db`, `resonance_layer_db`, `resonance_window_ms`, `preload_ms`,
-  `cache_budget_mb`, `config_page`, `audio_block_size`, `audio_sample_rate`.
+- **All keys are read defensively** — a missing **or corrupted** (non-numeric)
+  key falls back to the `GuiState` struct default *for that field only*; the rest
+  of the file still loads. (`loadState` reads every numeric/bool field through
+  `readF`/`readB`/`readI` helpers with a per-field `try/catch`.) This is what
+  makes old files forward-compatible: the schema has grown well beyond the
+  original v4 (Convolver, Enhancer, the resonance gain/layer split,
+  `resonance_window_ms`, the audio device fields), yet a file that predates
+  those keys still loads, with each absent key taking its default. A single bad
+  key no longer discards the whole state — only a missing/foreign
+  `schema_version` makes `loadState` return `nullopt` (full fallback to
+  defaults).
+- **Value sanitization on load:** `midi_channel` is clamped to `[-1, 15]`
+  (out-of-range → `-1` = OMNI); window geometry is sanitized — `window_w < 320`
+  falls back to `1280`, `window_h < 240` falls back to `720` (a minimized window
+  on Windows persists 0×0, and `glfwCreateWindow(0,0)` would fail on the next
+  start).
 - **BBE → Enhancer migration.** The old "BBE" stage was renamed to "Enhancer".
   The `enhancer_*` keys fall back to the legacy `bbe_*` keys when absent:
   `enhancer_process` ← `bbe_definition`, `enhancer_contour` ← `bbe_bass`,
   `enhancer_enabled` ← `bbe_enabled`. So a file written before the rename migrates
   its old BBE values into the Enhancer on first load, then is rewritten with the
   new keys.
-- **Non-defensive keys throw on absence.** `master_gain_db`, `release_ms`,
-  `excite_decay_ms`, `max_resonance_voices` and the four `window_*` keys are read
-  with `std::stof`/`std::stoi` directly — if any is missing or non-numeric the
-  whole load fails and the GUI drops back to all defaults.
 - `log_level` defaults to `"info"` if empty/absent; `midi_channel` defaults to
   `-1` if empty/absent.
 
@@ -90,8 +97,8 @@ control, and the DSP stages additionally clamp on `set()`.
 |------------|------|---------|-------|---------|--------|
 | `window_x` | int  | `100`   | any (off-screen clamped) | Window X position (screen px) | GUI (tracked every frame) |
 | `window_y` | int  | `100`   | any (off-screen clamped) | Window Y position (screen px) | GUI (tracked every frame) |
-| `window_w` | int  | `1280`  | any | Window width (px) | GUI (tracked every frame) |
-| `window_h` | int  | `720`   | any | Window height (px). Default targets a 1280×720 HW display. | GUI (tracked every frame) |
+| `window_w` | int  | `1280`  | ≥ 320 (smaller → falls back to 1280 on load) | Window width (px) | GUI (tracked every frame) |
+| `window_h` | int  | `720`   | ≥ 240 (smaller → falls back to 720 on load) | Window height (px). Default targets a 1280×720 HW display. | GUI (tracked every frame) |
 
 Window geometry is updated into the in-memory state every frame and is persisted
 on exit (and via the debounce if other fields change). See the off-screen clamp
@@ -124,7 +131,7 @@ the **MASTER** and **RESONANCE** CONFIG pages.
 | `resonance_gain_db`    | float | `-12.0`  | `-60` … `0`    | dB   | Resonance output gain | GUI (RESONANCE) |
 | `resonance_layer_db`   | float | `-30.0`  | `-60` … `0`    | dB   | Target velocity-layer (peak RMS) the resonance picks per note (`nearestSlotByRms`) | GUI (RESONANCE) |
 | `excite_decay_ms`      | float | `5000.0` | `500` … `30000`| ms   | Excitation decay time | GUI (RESONANCE) |
-| `max_resonance_voices` | int   | `32`     | `1` … `64`     | —    | Max resonance voice count. **Init-only** — the RESONANCE "MAX RESONANCE" control is read-only; applied at engine init. | init only |
+| `max_resonance_voices` | int   | `32`     | `1` … `64`     | —    | Max resonance voice count. **Live** — the RESONANCE "MAX RESONANCE" slider (param 3) calls `engine.setMaxResonanceVoices`; also applied at engine init and tracked by the debounced save. | GUI (RESONANCE) |
 | `resonance_window_ms`  | int   | `12000`  | ≥ 0 (ms)       | ms   | RAM-cache window of the resonance target layer per note. **JSON-only — there is intentionally no GUI control**; edit by hand. Larger = longer resonance tails held in RAM (more memory). | JSON only |
 | `preload_ms`           | int   | `150`    | ≥ 0 (ms)       | ms   | Per-sample preload head length kept in RAM (rest streams from disk). **JSON-only.** Larger = more RAM resident, less disk streaming (fewer underruns) — useful on embedded with fast RAM / slow storage; load whole short samples by raising this. | JSON only |
 | `cache_budget_mb`      | int   | `0`      | `0`=auto, else MB | MB | RAM budget for bank load. `0` = **auto** (~60 % of physical RAM, via `sysinfo`). `>0` = hard cap. On exceed, loading is **aborted** (incomplete bank + error log) instead of crashing on `bad_alloc`. **JSON-only.** Protects embedded (RPi5/4 GB) from OOM. | JSON only |
@@ -245,7 +252,7 @@ file.)
   "resonance_layer_db": -30,           // -60 .. 0 dB (target layer)
   "release_ms": 200,                   // 50 .. 2000 ms
   "excite_decay_ms": 5000,             // 500 .. 30000 ms
-  "max_resonance_voices": 32,          // 1 .. 64 (init-only)
+  "max_resonance_voices": 32,          // 1 .. 64 (live GUI slider)
   "resonance_window_ms": 12000,        // RAM cache window (JSON-only, no GUI)
   "preload_ms": 150,                   // preload head per sample (JSON-only)
   "cache_budget_mb": 0,                // 0=auto (~60% RAM); RAM budget (JSON-only)
@@ -290,8 +297,8 @@ Booleans are written as `true`/`false`; floats use the default `<<` formatting
   `3`=AGC, `4`=ENHANCER, `5`=LIMITER. Values outside `0`–`5` are reset to `0`.
 - **`resonance_window_ms`, `preload_ms`, `cache_budget_mb` and `audio_sample_rate`
   have no GUI control** — set only via this file (engine-init tuning, handy for
-  embedded targets like RPi5). `max_resonance_voices` is editable in the file but
-  its GUI control is read-only (applied at engine init).
+  embedded targets like RPi5). `max_resonance_voices` *does* have a live GUI
+  control (the RESONANCE "MAX RESONANCE" slider).
 - **OOM guard.** `cache_budget_mb` (auto = ~60 % RAM) caps bank load; exceeding it
   aborts the load with an error (incomplete bank) instead of crashing. Stream
   worker-thread counts are **auto-sized** from CPU core count at engine init (no
@@ -304,12 +311,11 @@ Booleans are written as `true`/`false`; floats use the default `<<` formatting
   `midi_port_name` only logs a warning; the GUI still starts. A matched MIDI port
   has its exact label written back into `midi_port_name`.
 - **Tracked-for-debounce vs. saved fields.** The debounce change-detection in
-  `main.cpp` watches the bank/MIDI/voice/resonance/DSP/log/config-page fields (not
-  the `window_*` fields, not `bank_search_dir`, `max_resonance_voices`,
-  `resonance_window_ms` or `audio_sample_rate`). Those non-tracked fields are still
-  persisted because the full state is written on exit (and whenever any debounce
-  save fires).
-```
+  `main.cpp` watches the bank/MIDI/voice/resonance/DSP/log/config-page fields
+  (including `max_resonance_voices` and all six `convolver_*` fields), but not
+  the `window_*` fields, `bank_search_dir`, `resonance_window_ms` or
+  `audio_sample_rate`. Those non-tracked fields are still persisted because the
+  full state is written on exit (and whenever any debounce save fires).
 
 The default ranges in `persistence.h` and the `Param` tables **agree** — see
 section 4 (no discrepancies found).

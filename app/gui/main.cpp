@@ -149,6 +149,9 @@ int main(int argc, char* argv[]) {
     AppContext ctx;
     if (!ctx.initFromState(st)) {
         std::fprintf(stderr, "AppContext init failed\n");
+        // Odregistruj log subscriber (lambda drzi this) — jinak by Logger
+        // singleton po zaniku ctx volal use-after-free pri pozdnim logu.
+        ctx.shutdown();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -179,7 +182,7 @@ int main(int argc, char* argv[]) {
     std::optional<std::chrono::steady_clock::time_point> layer_dirty_since;
     GuiState last_saved = ctx.state;
 
-    // CONFIG stranky: VOICE (engine voice params) + 3 DSP stage z chainu.
+    // CONFIG stranky (6): MASTER + RESONANCE + 4 DSP stage z chainu.
     MasterPage    master_page(ctx);
     ResonancePage resonance_page(ctx);
     ithaca::dsp::IParamPage* pages[6] = {

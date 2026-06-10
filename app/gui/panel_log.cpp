@@ -2,8 +2,8 @@
 //
 // Snapshot 50 nejnovejsich zaznamu (lokalni kopie na stacku/staticky array, takze
 // nikdo nedrzi mutex bufferu behem renderu). Barva podle severity: Info=seda,
-// Warning=zluta, Error=cervena. Auto-scroll k novemu eventu jen kdyz user je na
-// konci — pri rucnim scrollovani nahoru se nesnaze "uchytit" nove zpravy.
+// Warning=zluta, Error/Fatal=cervena. Auto-scroll k novemu eventu jen kdyz user
+// je na konci — pri rucnim scrollovani nahoru se nesnaze "uchytit" nove zpravy.
 #include "panel_log.h"
 #include "app_context.h"
 #include "theme.h"
@@ -21,7 +21,8 @@ void renderLogPanel(AppContext& ctx) {
             const auto& e = tmp[i];
             ImU32 col = Colors::muted;
             if (e.sev == log::Severity::Warning) col = Colors::gold;
-            if (e.sev == log::Severity::Error)   col = IM_COL32(0xd0,0x5a,0x4a,255);
+            if ((int)e.sev >= (int)log::Severity::Error)   // Error i Fatal cervene
+                col = IM_COL32(0xd0,0x5a,0x4a,255);
             ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(col));
             ImGui::Text("[%s] %s", e.topic.c_str(), e.message.c_str());
             ImGui::PopStyleColor();

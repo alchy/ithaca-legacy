@@ -1,8 +1,8 @@
 // app/gui/persistence.cpp - viz persistence.h.
 //
 // Mini JSON: flat key:value bez nesting. Pro slozitejsi schema (vnorene
-// objekty, pole) by se hodilo vendorovat nlohmann/json, ale na nasich 12
-// klicu staci primitivni parser.
+// objekty, pole) by se hodilo vendorovat nlohmann/json, ale na nasich ~40
+// klicich staci primitivni parser.
 #include "persistence.h"
 #include <cctype>
 #include <cstdlib>
@@ -105,21 +105,37 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.midi_port_name        = findValue(json, "midi_port_name");
         s.log_level             = findValue(json, "log_level");
         if (s.log_level.empty()) s.log_level = "info";
-        { std::string mc = findValue(json, "midi_channel");
-          s.midi_channel = mc.empty() ? -1 : std::stoi(mc); }
-        s.master_gain_db        = std::stof(findValue(json, "master_gain_db"));
-        s.release_ms            = std::stof(findValue(json, "release_ms"));
-        s.excite_decay_ms       = std::stof(findValue(json, "excite_decay_ms"));
-        s.max_resonance_voices  = std::stoi(findValue(json, "max_resonance_voices"));
-        s.window_x = std::stoi(findValue(json, "window_x"));
-        s.window_y = std::stoi(findValue(json, "window_y"));
-        s.window_w = std::stoi(findValue(json, "window_w"));
-        s.window_h = std::stoi(findValue(json, "window_h"));
-        // DSP pole (schema v4). Cteno obranne — chybejici klic (napr. v3 soubor)
-        // -> default ze struktury, takze stara konfigurace nacte cisty (DSP off).
-        auto readF = [&](const char* k, float dv){ std::string v = findValue(json, k); return v.empty() ? dv : std::stof(v); };
-        auto readB = [&](const char* k, bool dv){ std::string v = findValue(json, k); return v.empty() ? dv : (v == "true" || v == "1"); };
-        auto readI = [&](const char* k, int dv){ std::string v = findValue(json, k); return v.empty() ? dv : std::stoi(v); };
+        // Defenzivni ctecky: chybejici NEBO poskozeny klic → default ze
+        // struktury. Drive stof("")/stof("abc") → vyjimka → cely stav zahozen
+        // vc. bank_path a MIDI (jeden vadny klic smazal nesouvisejici pole).
+        auto readF = [&](const char* k, float dv){
+            std::string v = findValue(json, k);
+            if (v.empty()) return dv;
+            try { return std::stof(v); } catch (...) { return dv; }
+        };
+        auto readB = [&](const char* k, bool dv){
+            std::string v = findValue(json, k);
+            return v.empty() ? dv : (v == "true" || v == "1");
+        };
+        auto readI = [&](const char* k, int dv){
+            std::string v = findValue(json, k);
+            if (v.empty()) return dv;
+            try { return std::stoi(v); } catch (...) { return dv; }
+        };
+        s.midi_channel = readI("midi_channel", -1);
+        if (s.midi_channel < -1 || s.midi_channel > 15) s.midi_channel = -1;
+        s.master_gain_db        = readF("master_gain_db", s.master_gain_db);
+        s.release_ms            = readF("release_ms", s.release_ms);
+        s.excite_decay_ms       = readF("excite_decay_ms", s.excite_decay_ms);
+        s.max_resonance_voices  = readI("max_resonance_voices", s.max_resonance_voices);
+        s.window_x = readI("window_x", s.window_x);
+        s.window_y = readI("window_y", s.window_y);
+        s.window_w = readI("window_w", s.window_w);
+        s.window_h = readI("window_h", s.window_h);
+        // Sanitizace geometrie: minimalizovane okno (Windows) uklada 0x0 a
+        // glfwCreateWindow(0,0) pri pristim startu selze → app nejde spustit.
+        if (s.window_w < 320) s.window_w = 1280;
+        if (s.window_h < 240) s.window_h = 720;
         s.agc_enabled          = readB("agc_enabled", s.agc_enabled);
         s.agc_target           = readF("agc_target", s.agc_target);
         s.agc_release_ms       = readF("agc_release_ms", s.agc_release_ms);
@@ -205,6 +221,15 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate    << "\n";
         f << "}\n";
+        f.flush();
+        if (!f.good()) {
+            // Plny disk / IO chyba: NIKDY neprepisuj dobry config torzem —
+            // smysl tmp+rename vzoru je prave atomicita proti poskozeni.
+            f.close();
+            std::error_code rec;
+            std::filesystem::remove(tmp, rec);
+            return false;
+        }
     }
     std::filesystem::rename(tmp, path, ec);
     return !ec;

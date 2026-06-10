@@ -17,7 +17,7 @@ celého zdrojáku.
                     panely → ctx.state → engine settery       MidiInput → noteOn/CC
                           (atomiky)                                 │
                                                                     ▼
-                                                            MidiQueue (lock-free SPSC)
+                                                            MidiQueue (lock-free MPSC)
                                                                     │
   [audio vlákno] Engine::processBlock(out_l, out_r, n):             │
     1. drain MidiQueue  ◀───────────────────────────────────────────┘
@@ -44,7 +44,7 @@ celého zdrojáku.
 | E | Rezonance | [E-resonance.md](E-resonance.md) | `resonance/resonance_engine.{h,cpp}`, `harmonic_proximity.{h,cpp}`, `voice/resonance_voice.{h,cpp}` |
 | F | Loader | [F-loader.md](F-loader.md) | `sample/bank_index.{h,cpp}`, `sample_loader.{h,cpp}`, `sample_store.{h,cpp}`, `sample_types.h`, `io/wav_reader.{h,cpp}`, `io/wav_writer.{h,cpp}` |
 | G | DSP | [G-dsp.md](G-dsp.md) | `dsp/dsp_stage.h`, `dsp_math.h`, `dsp_chain.{h,cpp}`, `convolver.{h,cpp}`, `ir_modal.{h,cpp}`, `ir_wav.{h,cpp}`, `agc.{h,cpp}`, `enhancer.{h,cpp}`, `limiter.{h,cpp}` |
-| H | GUI | [H-gui.md](H-gui.md) | `app/gui/main.cpp`, `app_context.{h,cpp}`, `persistence.{h,cpp}`, `log_subscriber.{h,cpp}`, `voice_page.h`, `theme.h`, `layout.h`, `widgets.h`, `panel_*.{h,cpp}` |
+| H | GUI | [H-gui.md](H-gui.md) | `app/gui/main.cpp`, `app_context.{h,cpp}`, `persistence.{h,cpp}`, `log_subscriber.{h,cpp}`, `master_page.h`, `resonance_page.h`, `theme.h`, `layout.h`, `widgets.h`, `panel_*.{h,cpp}` |
 | I | Multithreading | [I-multithreading.md](I-multithreading.md) | *cross-cutting* — vlákna + synchronizace napříč A–H |
 
 ## Konvence dokumentů

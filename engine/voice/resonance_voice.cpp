@@ -58,11 +58,17 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
 
     underrun_step_ = -1.f / (kUnderrunFadeMs * 0.001f * engine_sr);
 
-    // Validni stav?
+    // Validni stav? Cache mod cte preload_resonance (resonance_frames);
+    // stream mod streamuje od resonance_start_frame → rozhoduje file.frames.
+    // Behem cache rebuilu (use_cache=false) se resonance_frames NESMI cist —
+    // bg thread ho prave prepisuje (review E-nizka).
+    const int eff_res_frames0 = (mic_ && use_cache_) ? mic_->resonance_frames : 0;
     active_ = (mic_ != nullptr) &&
               (mic_->mode == MicLayerMode::FullyLoaded
                    ? mic_->head_frames > mic_->resonance_start_frame
-                   : (mic_->resonance_frames > 0 || mic_->head_frames > mic_->resonance_start_frame));
+                   : (eff_res_frames0 > 0 ||
+                      (int64_t)mic_->file.frames
+                          > (int64_t)mic_->resonance_start_frame));
 
     // Streamed → alokuj ring a zazadat o data za preload_resonance regionem.
     if (active_ && mic_->mode == MicLayerMode::Streamed && stream_) {
@@ -81,10 +87,14 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
             } else {
                 const int64_t want    = (cap < total_after) ? cap : total_after;
                 const bool    eof_done = (want >= total_after);
-                file_request_off_ = res_end + want;
-                stream_->requestRead(ring_, mic_->file.path,
-                                     res_end, want, eof_done);
-                stream_pending_ = true;
+                if (stream_->requestRead(ring_, mic_->file.path,
+                                         res_end, want, eof_done)) {
+                    file_request_off_ = res_end + want;
+                    stream_pending_   = true;
+                } else {
+                    // Fronta plna: offset neposouvat, refill v process() zopakuje.
+                    file_request_off_ = res_end;
+                }
             }
         }
         // Ring pool plny → ResonanceVoice doplyne preload_resonance a tise utichne
@@ -239,7 +249,9 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                         underrun_gain_   = 1.f;
                         LOG_RT_WARN("resonance_voice", "underrun midi=%d", midi_);
                     }
-                    sL = 0.f; sR = 0.f;
+                    // Drz posledni znamy vzorek — underrun rampa ho fadne k 0
+                    // (nuly by fade obesly = tvrdy strih).
+                    sL = ring_lo_l_; sR = ring_lo_r_;
                 } else {
                     float frac = (float)(position_ - (double)ring_lo_idx_);
                     if (frac < 0.f) frac = 0.f;
@@ -339,10 +351,12 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                 int64_t want = (int64_t)(ring_->capacity_frames - avail);
                 if (want > remain) want = remain;
                 const bool eof_done = (file_request_off_ + want >= (int64_t)total_frames);
-                stream_->requestRead(ring_, mic_->file.path,
-                                     file_request_off_, want, eof_done);
-                file_request_off_ += want;
-                stream_pending_    = true;
+                if (stream_->requestRead(ring_, mic_->file.path,
+                                         file_request_off_, want, eof_done)) {
+                    file_request_off_ += want;
+                    stream_pending_    = true;
+                }
+                // false → drop; zadny posun offsetu (retry pristi blok).
             }
         }
     }

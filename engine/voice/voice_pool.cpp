@@ -10,7 +10,8 @@
 namespace ithaca {
 
 namespace {
-// Pan z MIDI noty: stred + rozprostreni dle vzdalenosti od C4 (midi 60).
+// Pan z MIDI noty: stred + rozprostreni dle vzdalenosti od stredu klaviatury
+// (~midi 64.5).
 void panForNote(int midi, float spread, float& pan_l, float& pan_r) {
     constexpr float kPi = 3.14159265f;
     float angle = (kPi / 4.f) + ((float)midi - 64.5f) / 87.f * spread * 0.5f;
@@ -87,9 +88,8 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
     int slot = findSlot(pedal);
     Voice& v = voices_[slot];
 
-    // DEBUG (NE RT-safe — produkcni build by ho nemel mit; v ladici fazi pomuze
-    // videt skutecne stealy a noteOn frequenci). Pozn.: tady volame non-RT
-    // logger primo (mutex + file/console flush), takze pojede do souboru ihned.
+    // DEBUG diagnostika stealu/noteOn frekvence. RT-safe: LOG_RT_* do lock-free
+    // ringu (audio thread nesmi zamykat log mutex — priority inversion).
     {
         int active = activeCount();
         int releasing = 0, held = 0;
@@ -99,7 +99,7 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
             if (pedal && pedal->isHeld(vv.midi())) held++;
         }
         if (v.active() && v.midi() != midi) {
-            log::Logger::default_().log("voice_steal", log::Severity::Warning,
+            LOG_RT_WARN("voice_steal",
                 "STEAL victim_midi=%d victim_lvl=%.3f victim_releasing=%d "
                 "victim_held=%d → new_midi=%d new_vel=%.2f pool=%d/%d "
                 "rel=%d held=%d",
@@ -108,7 +108,7 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
                 midi, spec.vel_gain, active, (int)voices_.size(),
                 releasing, held);
         } else {
-            log::Logger::default_().log("voice_on", log::Severity::Info,
+            LOG_RT_INFO("voice_on",
                 "noteOn midi=%d vel=%.2f slot=%d pool=%d/%d rel=%d held=%d",
                 midi, spec.vel_gain, slot, active, (int)voices_.size(),
                 releasing, held);
@@ -176,7 +176,10 @@ bool VoicePool::processBlock(float* out_l, float* out_r, int n_samples,
     (void)engine_sr;
     bool any = false;
     for (auto& v : voices_) {
-        if (!v.active()) continue;
+        // Dampujici hlas po prepareDamp je !active(), ale crossfade ocas MUSI
+        // doznit i kdyz novy hlas dostal jiny slot (jinak tvrdy strih = lupnuti
+        // + "duch" zdedeny pozdejsim noteOn na tomto slotu).
+        if (!v.active() && !v.isDamping()) continue;
         if (v.process(out_l, out_r, n_samples)) any = true;
     }
     return any;

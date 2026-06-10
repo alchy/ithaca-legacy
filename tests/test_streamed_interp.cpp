@@ -9,7 +9,9 @@
 
 #include "engine.h"
 #include "io/wav_writer.h"
+#include "stream/stream_engine.h"
 #include "util/log.h"
+#include "voice/voice_pool.h"
 
 #include <algorithm>
 #include <chrono>
@@ -168,8 +170,8 @@ TEST_CASE("Streamed 48k regrese: vystup = vstup (frac=0)") {
 TEST_CASE("Streamed clean end loguje END-OF-SAMPLE (Info), ne UNDERRUN (Warning)") {
     // Cisty konec streamovaneho vzorku: ring se vyprazdni az kdyz uz byl cely
     // soubor vyzadan → ma se logovat jako Info "END-OF-SAMPLE", NE jako
-    // Warning "UNDERRUN" (to je matouci). Engine bezi single-thread v testu,
-    // takze subscriber fire je synchronni a deterministicky.
+    // Warning "UNDERRUN" (to je matouci). Voice loguje pres RT ring (LOG_RT_*),
+    // subscriberum se zpravy doruci pri flushRTBuffer() — v testu explicitne.
     TempDir tmp{"cleanend"};
     constexpr int frames = 20000;
     writeRamp(tmp.path, frames, 48000, "48");
@@ -196,6 +198,7 @@ TEST_CASE("Streamed clean end loguje END-OF-SAMPLE (Info), ne UNDERRUN (Warning)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     (void)renderNote(eng, 1200);
+    lg.flushRTBuffer();   // doruc RT zpravy (voice_end) subscriberum
 
     lg.clearSubscribers();
     lg.setOutputMode(true, false);    // restore
@@ -203,4 +206,32 @@ TEST_CASE("Streamed clean end loguje END-OF-SAMPLE (Info), ne UNDERRUN (Warning)
     CHECK(eng.activeVoices() == 0);
     CHECK(saw_end_of_sample_info);
     CHECK_FALSE(saw_underrun_warning);
+}
+
+TEST_CASE("underrun fade tvaruje drzeny posledni vzorek, ne tvrdy strih do nuly") {
+    // Streamed mic s headem plnym 0.5, workery NEbezi → ring prazdny → underrun
+    // hned za headem. Fade musi tvarovat POSLEDNI DRZENY vzorek (~0.5 → 0);
+    // drive sL=sR=0 a 5ms rampa nasobila nuly = tvrdy strih/klik.
+    StreamEngine se(2, 64, 1);                 // start() nevolame
+    SampleAsset a;
+    MicLayer m;
+    m.file.frames      = 100000;
+    m.file.sample_rate = 48000;
+    m.file.valid       = true;
+    m.mode             = MicLayerMode::Streamed;
+    m.head_frames      = 64;
+    m.preload_head.assign(64 * 2, 0.5f);
+    a.mics.push_back(std::move(m));
+    VoicePool pool(1);
+    pool.setStreamEngine(&se);
+    VoiceSpec vs; vs.asset = &a; vs.pitch_ratio = 1.0; vs.vel_gain = 1.0f;
+    pool.noteOn(60, vs, 48000.f);
+    std::vector<float> L(256, 0.f), R(256, 0.f);
+    pool.processBlock(L.data(), R.data(), 256, 48000.f);
+    // Za headem (frame >64) underrun: 5ms fade drzeneho 0.5 → nenulove vzorky.
+    CHECK(std::fabs(L[100]) > 0.05f);
+    // Fade dobehne do nuly (64+240 < 512) → druhy blok konci tichem.
+    std::vector<float> L2(256, 0.f), R2(256, 0.f);
+    pool.processBlock(L2.data(), R2.data(), 256, 48000.f);
+    CHECK(std::fabs(L2[255]) == doctest::Approx(0.f));
 }

@@ -20,7 +20,9 @@ namespace {
 // my interleavujem do miniaudio bufferu.
 void audioCallback(void* userdata, float* output, uint32_t frames) {
     auto* eng = static_cast<ithaca::Engine*>(userdata);
-    static std::vector<float> L, R;
+    // Predalokovano na engine max (8192) — zadna alokace na audio threadu.
+    // Guard zustava jen defenzivne (nemelo by nastat).
+    static std::vector<float> L(8192), R(8192);
     if ((uint32_t)L.size() < frames) { L.resize(frames); R.resize(frames); }
     std::fill(L.begin(), L.begin() + frames, 0.f);
     std::fill(R.begin(), R.begin() + frames, 0.f);
@@ -67,6 +69,7 @@ bool AppContext::initFromState(const GuiState& s) {
     cfg.resonance_window_ms  = state.resonance_window_ms;  // jen JSON, ne GUI
     cfg.preload_ms           = state.preload_ms;           // jen JSON, ne GUI
     cfg.cache_budget_mb      = state.cache_budget_mb;      // jen JSON, ne GUI (0=auto)
+    cfg.rt_priority          = true;   // realna audio aplikace → RT priorita audio threadu
     if (!engine.init(cfg)) {
         log::Logger::default_().log("gui", log::Severity::Error,
             "Engine init selhal");
@@ -136,9 +139,11 @@ bool AppContext::initFromState(const GuiState& s) {
         const auto ports = ithaca::MidiInput::listPorts();
         for (size_t i = 0; i < ports.size(); ++i) {
             if (ports[i].find(state.midi_port_name) != std::string::npos) {
+                // Kanal nastavit PRED open — callback muze bezet hned po
+                // otevreni portu a filtroval by podle stareho kanalu.
+                midi.setChannel(state.midi_channel);
                 if (midi.open(engine, (int)i)) {
                     state.midi_port_name = ports[i];   // ulozit presnou jmenovku
-                    midi.setChannel(state.midi_channel);
                     opened = true;
                     break;
                 }

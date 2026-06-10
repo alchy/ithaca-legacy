@@ -1,13 +1,25 @@
 # Ithaca Sample-Bank Format — LEGACY (Reference)
 
-> Status: **implemented and current**. This is the only bank format the engine
-> can load today (`loadLegacyBank`). For a forward-looking, manifest-based
-> alternative see the **[proposed format](bank-format-proposed.md)** — note that
-> the proposed format is a design document only and has **no loader in code**.
+> ## ⚠️ HISTORICKÝ DOKUMENT
+>
+> Popisuje stav loaderu **před zavedením dynamic-velocity formátu a OOM
+> guardu**. Aktuální chování viz **[docs/reference/F-loader.md](reference/F-loader.md)**.
+> Hlavní rozdíly proti dnešnímu kódu:
+>
+> - `loadLegacyBank` / `BankFormat::Legacy` už neexistují — dnes `loadBank` +
+>   `BankFormat::FixedVelocity` (tento „legacy" formát se nyní jmenuje
+>   **fixed-velocity**); navíc je implementovaný **dynamic-velocity** formát
+>   (podsložky `m###/`) včetně autodetekce — viz
+>   [bank-format-proposed.md](bank-format-proposed.md).
+> - Sken už není čistě nerekurzivní: `scanBank` nejdřív hledá podsložky `m###/`
+>   (dynamic-velocity má při detekci přednost), teprve pak ploché soubory.
+> - `cache_budget_mb` už není jen diagnostický WARNING — překročení rozpočtu
+>   načítání **přeruší** (ERROR, neúplná banka; OOM guard).
 
 This document describes the legacy sample-bank format used by the Ithaca
-streaming piano sampler. Everything below is grounded in the engine source; the
-key parsing logic is cited by `file:line`.
+streaming piano sampler. The text below is preserved as originally written; the
+`file:line` citations refer to the historical source tree and may no longer
+match the current code.
 
 ---
 

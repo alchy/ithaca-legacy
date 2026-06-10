@@ -69,3 +69,28 @@ TEST_CASE("buildResonanceCache plni jen cilovou vrstvu") {
     }
     (void)ready;
 }
+
+#include "engine.h"
+#include <chrono>
+#include <thread>
+#include <vector>
+
+TEST_CASE("rebuildResonanceCache: coalesce neztrati pending a rebuild dobehne") {
+    // Lost-update z revize: GUI nastavil pending tesne po exchange workeru →
+    // pending=true, zadne vlakno nebezi, cache navzdy stream-mode. Stavovy
+    // automat pod mutexem to vylucuje; test overi, ze coalesce dobehne.
+    ithaca::Engine e;
+    ithaca::EngineConfig cfg; cfg.sample_rate = 48000; cfg.block_size = 64;
+    cfg.midi_from = 59; cfg.midi_to = 61;
+    REQUIRE(e.init(cfg));
+    e.rebuildResonanceCache(-25.f);
+    e.rebuildResonanceCache(-20.f);   // okamzite znovu → pending/coalesce
+    bool done = false;
+    std::vector<float> L(64, 0.f), R(64, 0.f);
+    for (int i = 0; i < 500 && !done; ++i) {
+        e.processBlock(L.data(), R.data(), 64);   // tick epoch (quiesce handshake)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        done = !e.recacheInProgress();
+    }
+    CHECK(done);
+}

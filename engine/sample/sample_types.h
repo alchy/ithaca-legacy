@@ -4,8 +4,8 @@
 // Datovy model banky. Hierarchie (spec 3.2):
 //   Bank → NoteSlots[128] → VelocitySlot → SampleAsset → MicLayer
 // Dve nezavisle osy: VelocitySlot drzi round-robin varianty, SampleAsset drzi
-// mic perspektivy. Faze 2 je all-in-RAM (MicLayer.data = cely sampl); preload/
-// disk rozdeleni a round-robin/multi-mic naplno prijdou v dalsich fazich.
+// mic perspektivy. MicLayer drzi v RAM jen preload regiony (head + resonance
+// okno); dlouhe samply maji mode=Streamed a zbytek se cte z disku za behu.
 
 #include <cstddef>
 #include <string>
@@ -87,7 +87,8 @@ struct Bank {
     NoteSlots   notes[128];
     // diagnostika
     size_t resident_frames = 0;     // frames rezidentni v RAM (head + resonance regiony)
-    size_t total_bytes  = 0;        // odhad RAM (data.size()*sizeof(float))
+    size_t total_bytes  = 0;        // odhad RAM preload bufferu
+                                    // ((preload_head + preload_resonance).size()*sizeof(float))
     int    loaded_samples = 0;      // pocet uspesne nactenych SampleAssetu
 };
 

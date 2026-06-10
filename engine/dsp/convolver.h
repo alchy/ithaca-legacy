@@ -1,7 +1,10 @@
 #pragma once
 // engine/dsp/convolver.h — Convolver (cabinet/body sim) jako DspStage.
 // Direct time-domain FIR, mono IR na L/R, wet/dry MIX. Fixni max ring; RT-safe
-// 2-slot IR swap (atomicky publikovany aktivni slot). Viz spec 2026-06-03.
+// 2-slot IR swap (atomicky publikovany aktivni slot + ack od audio threadu:
+// process() hlasi cteny slot pres seen_, setIR pred prepsanim slotu pocka, az
+// ho audio opusti — dve publikace behem jednoho in-flight bloku uz nemohou
+// dealokovat vector pod rukama audio threadu). Viz spec 2026-06-03.
 #include "dsp/dsp_stage.h"
 #include <atomic>
 #include <string>
@@ -69,6 +72,7 @@ private:
 
     std::vector<float> ir_[2];
     std::atomic<int>   active_{0};
+    std::atomic<int>   seen_{-1};   // slot prave cteny v process(); -1 = audio necte
     std::vector<float> buf_l_, buf_r_;
     int                write_pos_ = 0;
 

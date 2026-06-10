@@ -19,6 +19,11 @@
 
 namespace ithaca {
 
+// Predpocita 128x128 coupling matici (drahy build: ~4M iteraci s log2f/expf,
+// na RPi5 az ~1 s). Volat z off-RT kontextu (Engine::init) PRED prvnim pouzitim
+// — jinak lazy init probehne pri prvnim note-onu NA AUDIO VLAKNE → dropout.
+void initHarmonicProximity();
+
 float harmonicProximity(int target_midi, int source_midi);
 
 } // namespace ithaca

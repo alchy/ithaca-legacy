@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -57,6 +58,11 @@ struct EngineConfig {
     float resonance_layer_db    = -30.f;  // dB cil pro vyber velocity vrstvy
     int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
     float excite_decay_ms       = 5000.f; // tau prirozeneho decay last_excite
+    // RT priorita audio vlakna (SCHED_FIFO/time-constraint/MMCSS) — nastavi se
+    // pri prvnim processBlock NA VOLAJICIM VLAKNE. Default OFF: zapinaji jen
+    // realne audio aplikace (GUI, CLI --play). Jinak by testy/offline render
+    // dostaly SCHED_FIFO na main threadu (vyhladoveni systemu, RLIMIT_RTTIME).
+    bool  rt_priority           = false;
 };
 
 class Engine {
@@ -65,17 +71,20 @@ public:
     ~Engine();
 
     bool init(const EngineConfig& cfg);
-    // Nacti legacy banku do RAM (respektuje cfg.midi_from/to). Vrati false kdyz nic.
+    // Nacti banku (fixed-velocity i dynamic-velocity format) do RAM
+    // (respektuje cfg.midi_from/to). Vrati false kdyz nic.
     bool loadBank(const std::string& dir);
     // Thread-safe reload banky z GUI/CLI threadu, pres "graceful pause":
     //   1) push AllNotesOff do MIDI fronty (audio drain ji zpracuje pristi blok),
     //   2) pockej ~50 ms aby release dobehl,
     //   3) zapni bank_loading_ flag → audio thread zacne vracet ticho a preskoci
     //      drain MIDI / voice render (viz processBlock top),
-    //   4) pockej ~10 ms aby pripadny in-flight processBlock dobehl,
-    //   5) loadBank(path) (disk I/O je teď bezpecne, audio mlci),
+    //   4) handshake waitForAudioQuiesce(epoch+2): in-flight processBlock
+    //      dobehl a dalsi blok uz videl flag (timeout 500 ms kryje stojici audio),
+    //   5) join recache threadu, hard-stop hlasu, loadBank(path) (disk I/O je
+    //      teď bezpecne, audio mlci),
     //   6) bank_loading_=false → audio thread se obnovi.
-    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~60 ms.
+    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~55 ms + 1-2 audio bloky.
     bool reloadBank(const std::string& dir);
 
     // -- Thread-safe MIDI vstup (volat z MIDI/GUI threadu) --
@@ -152,7 +161,11 @@ public:
     // Runtime prestavba rezonancni cache pro novy layer target (GUI slider).
     // Fadene aktivni rezonance + ready=false (nove streamuji), pak na pozadi
     // znovu nacte cilove vrstvy a ready=true. Volat z GUI threadu (debounced).
+    // Opakovane volani behem rebuilu se coalescuje (bg vlakno prebuduje znovu
+    // na nejnovejsi cil).
     void rebuildResonanceCache(float target_db) noexcept;
+    // True dokud bezi background rebuild rezonancni cache (GUI indikace).
+    bool recacheInProgress() const noexcept;
     // Min/max peak RMS [dB] napric nactenou bankou (pro dynamicky rozsah GUI
     // slideru "Resonance Layer"). Bez banky default -60 / 0.
     float bankPeakRmsMinDb() const noexcept { return bank_peak_rms_min_db_; }
@@ -166,6 +179,12 @@ public:
     // Cteni je lock-free, GUI muze vzorkovat libovolne casto.
     float masterPeakL() const noexcept { return master_peak_l_.load(std::memory_order_relaxed); }
     float masterPeakR() const noexcept { return master_peak_r_.load(std::memory_order_relaxed); }
+
+    // Pocitadlo zapocatych audio bloku (diagnostika + reload/recache handshake,
+    // viz waitForAudioQuiesce). Atomic, thread-safe cteni odkudkoli.
+    uint64_t blockEpoch() const noexcept {
+        return block_epoch_.load(std::memory_order_seq_cst);
+    }
 
     // -- DSP load meter (GUI; atomic) --
     // Peak-hold zatizeni audio threadu = cas renderu / perioda bloku. 1.0 = na
@@ -181,6 +200,13 @@ public:
 private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;
+
+    // Pocka (z non-RT threadu), az audio thread ZAPOCNE aspon min_epochs
+    // novych bloku — tj. pripadny in-flight processBlock dobehl a nasledujici
+    // blok uz cetl aktualni atomic flagy (bank_loading_/fade request).
+    // Timeout kryje zastavene audio (testy, odpojene zarizeni) — pak je
+    // mutace sdileneho stavu trivialne bezpecna.
+    void waitForAudioQuiesce(int min_epochs, int timeout_ms) noexcept;
 
     // Half-pedal continuous release scaling (spec 5.4). Vraci skalovany
     // release_ms podle aktualniho cc64_ (CC0 → ×1, CC127 → ~×20).
@@ -209,14 +235,21 @@ private:
     // Bank reload guard. Pokud true, processBlock vraci ticho a preskoci
     // veskery render / drain — chrani pred race s loadBank na non-RT threadu.
     std::atomic<bool>                 bank_loading_{false};
+    // Pocitadlo zapocatych bloku (inkrement na zacatku processBlock).
+    std::atomic<uint64_t>             block_epoch_{0};
     // Indikator note-on/off blikani: timestamp (steady_clock micros) posledniho
     // eventu. Psano z MIDI/GUI threadu pri noteOn/noteOff, cteno z GUI.
     std::atomic<uint64_t>             last_note_on_us_{0};
     std::atomic<uint64_t>             last_note_off_us_{0};
+    int                  dbg_reso_count_ = -1;  // audio-thread only (DIAG zmeny poctu rezonanci)
     std::thread          recache_thread_;
-    std::atomic<bool>    recache_running_{false};
+    // Stav rebuilu pod mutexem (vsechny strany jsou non-RT: GUI + bg thread).
+    // Drive dvojice atomiku → lost-update okno (pending nastaveny tesne po
+    // exchange workeru se uz nevyzvedl). Review F-nizka / 1.4c.
+    mutable std::mutex   recache_mtx_;
+    bool                 recache_running_ = false;
+    bool                 recache_pending_ = false;
     std::atomic<float>   recache_target_{-30.f};   // zadany cil (cte bg thread; bez torn readu cfg_)
-    std::atomic<bool>    recache_has_pending_{false};
     bool                              initialized_ = false;
 };
 

@@ -110,6 +110,12 @@ RingHandle* StreamEngine::acquireRing() {
         bool expected = false;
         if (uptr->in_use_.compare_exchange_strong(expected, true,
                 std::memory_order_acquire, std::memory_order_relaxed)) {
+            // Stale worker push muze prave dobehat (producer lock se drzi jen
+            // pres memcpy, gen check uvnitr zamku uz dalsi zapis nepusti).
+            // Bounded spin → reset kurzoru nebezi soubezne s pushem.
+            for (int spin = 0;
+                 uptr->producers_.load(std::memory_order_acquire) != 0
+                     && spin < 1000000; ++spin) { /* ~max desitky us */ }
             // Restartujeme stav ringu pred predanim novemu konzumentovi.
             uptr->resetForReuse();
             return uptr.get();
@@ -131,28 +137,28 @@ int StreamEngine::numRingsUsed() const noexcept {
 
 void StreamEngine::releaseRing(RingHandle* r) {
     if (!r) return;
-    // Reset PRED uvolnenim flagu — kdyby si jiny thread chnel ring po flagu
-    // a my zacali resetovat data, ktera prave producent zapsal. Voice musi
-    // zaroven garantovat, ze pri releaseRing uz neexistuje pending request
-    // (Voice nepushuje refill mezi posledni pop a release). Worker, ktery
-    // pripadne stale drzi request na tento ring, zapise data do ringu, ale
-    // Voice uz je necte — nic strasneho, jen plyvanie.
-    r->resetForReuse();
+    // Zneplatni in-flight requesty (worker overuje gen_ pred kazdym zapisem
+    // i pred eof_ store). Kurzory NEresetujeme zde — reset dela az acquireRing
+    // po kratke synchronizaci s pripadnym prave probihajicim push (producers_).
+    // Tim je vyloucena ABA recyklace: stale request po re-acquire uz do ringu
+    // noveho vlastnika nic nezapise.
+    r->gen_.fetch_add(1, std::memory_order_acq_rel);
     r->in_use_.store(false, std::memory_order_release);
 }
 
-void StreamEngine::requestRead(RingHandle* ring, const std::string& path,
+bool StreamEngine::requestRead(RingHandle* ring, const std::string& path,
                                int64_t frame_off, int64_t n_frames,
                                bool eof_when_done) noexcept {
-    if (!ring) return;
+    if (!ring) return false;
     StreamRequest req;
     req.ring          = ring;
     req.path          = path;       // kopie (SBO casto staci)
     req.frame_off     = frame_off;
     req.n_frames      = n_frames;
     req.eof_when_done = eof_when_done;
-    // Drop-on-full je RT-safe; voice prezije diky underrun fade.
-    (void)req_q_.push(req);
+    req.gen           = ring->gen_.load(std::memory_order_acquire);
+    // Drop-on-full je RT-safe; false → caller neposune offset a zopakuje.
+    return req_q_.push(req);
 }
 
 void StreamEngine::workerLoop() {
@@ -176,6 +182,9 @@ void StreamEngine::workerLoop() {
         bool    eof    = false;
 
         while (remain > 0 && run_.load(std::memory_order_acquire)) {
+            // Stale request? Ring byl mezitim uvolnen/preprideleny (gen bump
+            // v releaseRing) → s requestem koncime, nic uz nezapisujeme.
+            if (req.ring->gen_.load(std::memory_order_acquire) != req.gen) break;
             // Maximalni chunk = volne misto v ringu (do capacity).
             int free_frames = req.ring->capacity_frames - req.ring->available();
             if (free_frames <= 0) {
@@ -201,21 +210,34 @@ void StreamEngine::workerLoop() {
                 eof = true;
                 break;
             }
-            int wrote = req.ring->push(data.samples.data(), data.frames);
-            // wrote by mel byt presne data.frames (free_frames jsme spocitali).
-            // Pokud Voice mezi-tim odebral, jsme OK (push vrati ten kus, co
-            // se vejde; zbytek si pomyslne ukrojime z remain a posuneme off).
+            // Producer try-lock + gen re-check: do ringu zapisuje vzdy max
+            // jeden worker (SPSC kontrakt i pri 2 in-flight requestech tehoz
+            // ringu) a nikdy do ringu, ktery uz byl uvolnen. Zbytkove okno
+            // (gen bump BEHEM memcpy) kryje acquireRing spinem na producers_.
+            bool stale = false;
+            int  wrote = 0;
+            int  exp0  = 0;
+            while (!req.ring->producers_.compare_exchange_weak(
+                       exp0, 1, std::memory_order_acq_rel,
+                       std::memory_order_relaxed)) {
+                exp0 = 0;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                if (!run_.load(std::memory_order_acquire)) { stale = true; break; }
+            }
+            if (!stale) {
+                if (req.ring->gen_.load(std::memory_order_acquire) == req.gen)
+                    wrote = req.ring->push(data.samples.data(), data.frames);
+                else
+                    stale = true;
+                req.ring->producers_.store(0, std::memory_order_release);
+            }
+            if (stale) break;
+
+            // wrote by mel byt presne data.frames (free_frames jsme spocitali;
+            // konzument muze volne misto jen zvetsit). Pripadny zbytek dotahne
+            // pristi iterace od posunuteho off.
             off    += wrote;
             remain -= wrote;
-            if (wrote < data.frames) {
-                // Cast dat se nezmestila — neztraceji se: pristi iterace
-                // pocita s posunutym off a doctene v dalsim chunku.
-                // To je OK protoze readWavRange umi cist od libovolneho offsetu.
-                // POZN.: efektivnost je sub-optimalni (precteme znovu i tu cast,
-                // co uz mame v dat). Pro prvni iteraci akceptujeme; FUTURE:
-                // partial-push s pamatovanim zbytku.
-                // (V praxi ring je vetsi nez chunk → wrote == data.frames vzdy.)
-            }
             if (data.frames < chunk) {
                 // Mene nez pozadovano → soubor skoncil, EOF.
                 eof = true;
@@ -223,7 +245,8 @@ void StreamEngine::workerLoop() {
             }
         }
 
-        if (eof && req.eof_when_done) {
+        if (eof && req.eof_when_done &&
+            req.ring->gen_.load(std::memory_order_acquire) == req.gen) {
             req.ring->eof_.store(true, std::memory_order_release);
         }
     }

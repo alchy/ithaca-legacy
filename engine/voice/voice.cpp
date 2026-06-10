@@ -29,6 +29,7 @@ void Voice::prepareDamp(float engine_sr) {
         const int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
                                            kDampMaxFrames);
         float env = vel_gain_;
+        if (in_onset_)        env *= onset_gain_;   // steal behem onsetu: bez skoku nahoru
         if (releasing_)       env *= rel_gain_;
         if (underrun_fading_) env *= underrun_gain_;
         const int pos = (int)position_;
@@ -77,8 +78,8 @@ void Voice::prepareDamp(float engine_sr) {
         ring_ = nullptr;
     }
     stream_pending_  = false;
-    // DEBUG: zaloguj deaktivaci v dusledku retrigger/steal damping.
-    log::Logger::default_().log("voice_end", log::Severity::Info,
+    // DEBUG: zaloguj deaktivaci v dusledku retrigger/steal damping (RT ring).
+    LOG_RT_INFO("voice_end",
         "DEACTIVATE midi=%d reason=damped_for_retrigger_or_steal damp_len=%d",
         midi_, damp_len_);
     active_          = false;   // pool ho ted muze rovnou ukrast / pouzit znovu
@@ -150,10 +151,15 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
                                        - (int64_t)mic_->head_frames;
             const bool eof_done = (want >= total_stream);
             const int64_t actual = (want < total_stream) ? want : total_stream;
-            file_request_off_ = (int64_t)mic_->head_frames + actual;
-            stream_->requestRead(ring_, mic_->file.path,
-                                 (int64_t)mic_->head_frames, actual, eof_done);
-            stream_pending_ = true;
+            if (stream_->requestRead(ring_, mic_->file.path,
+                                     (int64_t)mic_->head_frames, actual, eof_done)) {
+                file_request_off_ = (int64_t)mic_->head_frames + actual;
+                stream_pending_   = true;
+            } else {
+                // Fronta plna: offset NEposouvat → refill heuristika v process()
+                // request prirozene zopakuje.
+                file_request_off_ = (int64_t)mic_->head_frames;
+            }
         }
         // Kdyz acquireRing selhal (pool plny), Voice prozatim hraje jen do
         // konce head a pak utichne (zadny crash). FUTURE: voice steal podle
@@ -163,9 +169,13 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
 
 void Voice::release(float release_ms, float engine_sr) {
     if (!active_ || releasing_) return;
+    if (release_ms < 0.1f) release_ms = 0.1f;   // guard: 0 → -inf step
     releasing_ = true;
-    rel_gain_  = in_onset_ ? onset_gain_ : 1.f;
-    rel_step_  = -rel_gain_ / (release_ms * 0.001f * engine_sr);
+    // Soucin onset*release je spojity: release startuje VZDY z 1.0 a onset
+    // rampa dobiha dal. (Drive rel_gain_=onset_gain_ pri onsetu → v process
+    // se nasobi OBE rampy → env skok g0 → g0^2 = klik pri staccatu.)
+    rel_gain_  = 1.f;
+    rel_step_  = -1.f / (release_ms * 0.001f * engine_sr);
 }
 
 float Voice::currentLevel() const noexcept {
@@ -178,11 +188,9 @@ float Voice::currentLevel() const noexcept {
 
 bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
     // DEBUG helper: zaloguj kazdou cestu deaktivace s konkretnim duvodem.
-    // Pozn.: pouziva non-RT logger (mutex) — to porusi RT-safety, ale je to
-    // ladici nastroj. V produkcni faze odstranit nebo nahradit RT ringem +
-    // periodickym flushem.
+    // RT-safe: LOG_RT_* pise do lock-free ringu (flush dela non-RT thread).
     auto log_end = [this](const char* reason) {
-        log::Logger::default_().log("voice_end", log::Severity::Info,
+        LOG_RT_INFO("voice_end",
             "DEACTIVATE midi=%d reason=%s pos=%lld total=%d head=%d "
             "ring=%s ring_avail=%d ring_eof=%d releasing=%d in_onset=%d "
             "underrun_fading=%d damping=%d",
@@ -262,29 +270,37 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 ring_lo_idx_++;
             }
             if (underrun) {
+                // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
+                // dosahl konce) a ring je prazdny → legitimni konec, Info.
+                // Jinak worker nestihl dodat data → skutecny underrun, Warning.
+                // noteUnderrun() razitkujeme JEN pri skutecnem underrunu (ne
+                // pri cistem konci samplu) — jinak by MAIN ring indikator
+                // blikal cervene po kazde normalne dohraje dlouhe note.
+                const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
                     underrun_gain_   = 1.f;
-                    // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
-                    // dosahl konce) a ring je prazdny → legitimni konec, Info.
-                    // Jinak worker nestihl dodat data → skutecny underrun, Warning.
-                    // noteUnderrun() razitkujeme JEN pri skutecnem underrunu (ne
-                    // pri cistem konci samplu) — jinak by MAIN ring indikator
-                    // blikal cervene po kazde normalne dohraje dlouhe note.
-                    const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
                     if (clean_end) {
-                        log::Logger::default_().log("voice_end", log::Severity::Info,
+                        LOG_RT_INFO("voice_end",
                             "END-OF-SAMPLE midi=%d pos=%lld total=%d", midi_,
                             (long long)position_, total_frames);
                     } else {
                         if (stream_) stream_->noteUnderrun();
-                        log::Logger::default_().log("voice_end", log::Severity::Warning,
+                        LOG_RT_WARN("voice_end",
                             "UNDERRUN midi=%d pos=%lld total=%d head=%d ring_avail=%d",
                             midi_, (long long)position_, total_frames,
                             head_frames, ring_->available());
                     }
                 }
-                sL = 0.f; sR = 0.f;
+                if (clean_end) {
+                    // Cisty EOF: deactivate+zero (reference chovani icr — sampl
+                    // prirozene dohral do ~ticha, neni co drzet).
+                    sL = 0.f; sR = 0.f;
+                } else {
+                    // Skutecny underrun: drz posledni znamy vzorek, fade ho
+                    // tvaruje (nuly by 5ms rampu obesly = tvrdy strih/klik).
+                    sL = ring_lo_l_; sR = ring_lo_r_;
+                }
             } else {
                 float frac = (float)(position_ - (double)ring_lo_idx_);
                 if (frac < 0.f) frac = 0.f;
@@ -361,10 +377,13 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 int64_t want = (int64_t)(ring_->capacity_frames - avail);
                 if (want > remain) want = remain;
                 const bool eof_done = (file_request_off_ + want >= (int64_t)total_frames);
-                stream_->requestRead(ring_, mic_->file.path,
-                                     file_request_off_, want, eof_done);
-                file_request_off_ += want;
-                stream_pending_    = true;
+                if (stream_->requestRead(ring_, mic_->file.path,
+                                         file_request_off_, want, eof_done)) {
+                    file_request_off_ += want;
+                    stream_pending_    = true;
+                }
+                // false → drop (fronta plna); zadny posun offsetu, jinak by se
+                // underrun maskoval jako END-OF-SAMPLE a framy se uz nedozadaly.
             } else {
                 // Cely zbytek souboru uz byl pozadan; jakmile worker dohraje,
                 // nastavi eof_ a Voice doplyne hlas cisto. Zadny dalsi request.

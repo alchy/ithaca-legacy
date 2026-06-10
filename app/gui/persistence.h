@@ -38,7 +38,7 @@ struct GuiState {
     float  convolver_decay   = 0.5f;
     float  convolver_tone    = 0.6f;
     float  convolver_size    = 0.5f;
-    int   config_page = 0;         // 0 = VOICE, 1 = AGC, 2 = ENHANCER, 3 = LIMITER
+    int   config_page = 0;         // 0 = MASTER, 1 = RESONANCE, 2 = CONVOLVER, 3 = AGC, 4 = ENHANCER, 5 = LIMITER
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
     int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only
