@@ -24,6 +24,8 @@
 
 namespace ithaca {
 
+struct BankLoadProgress;   // viz sample/sample_store.h (GUI progress overlay)
+
 struct EngineConfig {
     int   sample_rate    = 48000;
     int   block_size     = 256;
@@ -73,7 +75,9 @@ public:
     bool init(const EngineConfig& cfg);
     // Nacti banku (fixed-velocity i dynamic-velocity format) do RAM
     // (respektuje cfg.midi_from/to). Vrati false kdyz nic.
-    bool loadBank(const std::string& dir);
+    // progress (volitelne): loader plni atomiky pro GUI overlay (faze, done/
+    // total, bytes_loaded, budget_bytes, truncated). Vlastni ho caller.
+    bool loadBank(const std::string& dir, BankLoadProgress* progress = nullptr);
     // Thread-safe reload banky z GUI/CLI threadu, pres "graceful pause":
     //   1) push AllNotesOff do MIDI fronty (audio drain ji zpracuje pristi blok),
     //   2) pockej ~50 ms aby release dobehl,
@@ -84,8 +88,9 @@ public:
     //   5) join recache threadu, hard-stop hlasu, loadBank(path) (disk I/O je
     //      teď bezpecne, audio mlci),
     //   6) bank_loading_=false → audio thread se obnovi.
-    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~55 ms + 1-2 audio bloky.
-    bool reloadBank(const std::string& dir);
+    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~55 ms + 1-2 audio bloky
+    // + disk load (GUI ho proto vola z worker threadu, viz AppContext).
+    bool reloadBank(const std::string& dir, BankLoadProgress* progress = nullptr);
 
     // -- Thread-safe MIDI vstup (volat z MIDI/GUI threadu) --
     // `channel` = MIDI kanal 0..15 (default 0 pro non-MIDI callery: CLI ton,
