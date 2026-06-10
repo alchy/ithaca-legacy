@@ -4,6 +4,12 @@
 
 **Goal:** Opravit kritické a vysoké nálezy z `docs/review-2026-06-10.md` (RT-safety, race conditions, audio artefakty, GUI/persistence chybové cesty), doplnit testy a uvést dokumentaci do souladu s kódem.
 
+> **STAV: ✅ VŠECHNY TASKY 0–14 DOKONČENY** (commity `c5be9b9..e26a600` na větvi
+> `fix/revize-2026-06-10`). 33/33 testových binárek PASS v Release, ASan/UBSan
+> i TSan buildu. Jediná odchylka od plánu: underrun hold-last (Task 4) se
+> aplikuje JEN na skutečný underrun — čistý EOF zůstal deactivate+zero
+> (reference icr; odhalily to regresní testy seam/EOF).
+
 **Architecture:** RT audio engine (C++20, lock-free SPSC vzory, audio vlákno bez zámků/alokací). Opravy zachovávají stávající architekturu: logy v audio cestě přechází na existující `LOG_RT_*` ring, sleep-heuristiky se nahrazují epoch handshake (`block_epoch_`), ringy dostávají generation counter, MidiQueue přechází na Vyukov bounded MPSC.
 
 **Tech Stack:** CMake + doctest (testy v `tests/`, jeden TU = jedna binárka, registrace v `tests/CMakeLists.txt` — nové testy přidáváme do EXISTUJÍCÍCH souborů, CMake se nemění). Build: `cmake --build build -j` ; testy: `ctest --test-dir build --output-on-failure`.
