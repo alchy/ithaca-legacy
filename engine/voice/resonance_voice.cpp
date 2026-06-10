@@ -81,10 +81,14 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
             } else {
                 const int64_t want    = (cap < total_after) ? cap : total_after;
                 const bool    eof_done = (want >= total_after);
-                file_request_off_ = res_end + want;
-                stream_->requestRead(ring_, mic_->file.path,
-                                     res_end, want, eof_done);
-                stream_pending_ = true;
+                if (stream_->requestRead(ring_, mic_->file.path,
+                                         res_end, want, eof_done)) {
+                    file_request_off_ = res_end + want;
+                    stream_pending_   = true;
+                } else {
+                    // Fronta plna: offset neposouvat, refill v process() zopakuje.
+                    file_request_off_ = res_end;
+                }
             }
         }
         // Ring pool plny → ResonanceVoice doplyne preload_resonance a tise utichne
@@ -341,10 +345,12 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                 int64_t want = (int64_t)(ring_->capacity_frames - avail);
                 if (want > remain) want = remain;
                 const bool eof_done = (file_request_off_ + want >= (int64_t)total_frames);
-                stream_->requestRead(ring_, mic_->file.path,
-                                     file_request_off_, want, eof_done);
-                file_request_off_ += want;
-                stream_pending_    = true;
+                if (stream_->requestRead(ring_, mic_->file.path,
+                                         file_request_off_, want, eof_done)) {
+                    file_request_off_ += want;
+                    stream_pending_    = true;
+                }
+                // false → drop; zadny posun offsetu (retry pristi blok).
             }
         }
     }

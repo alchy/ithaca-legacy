@@ -151,10 +151,15 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
                                        - (int64_t)mic_->head_frames;
             const bool eof_done = (want >= total_stream);
             const int64_t actual = (want < total_stream) ? want : total_stream;
-            file_request_off_ = (int64_t)mic_->head_frames + actual;
-            stream_->requestRead(ring_, mic_->file.path,
-                                 (int64_t)mic_->head_frames, actual, eof_done);
-            stream_pending_ = true;
+            if (stream_->requestRead(ring_, mic_->file.path,
+                                     (int64_t)mic_->head_frames, actual, eof_done)) {
+                file_request_off_ = (int64_t)mic_->head_frames + actual;
+                stream_pending_   = true;
+            } else {
+                // Fronta plna: offset NEposouvat → refill heuristika v process()
+                // request prirozene zopakuje.
+                file_request_off_ = (int64_t)mic_->head_frames;
+            }
         }
         // Kdyz acquireRing selhal (pool plny), Voice prozatim hraje jen do
         // konce head a pak utichne (zadny crash). FUTURE: voice steal podle
@@ -372,10 +377,13 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 int64_t want = (int64_t)(ring_->capacity_frames - avail);
                 if (want > remain) want = remain;
                 const bool eof_done = (file_request_off_ + want >= (int64_t)total_frames);
-                stream_->requestRead(ring_, mic_->file.path,
-                                     file_request_off_, want, eof_done);
-                file_request_off_ += want;
-                stream_pending_    = true;
+                if (stream_->requestRead(ring_, mic_->file.path,
+                                         file_request_off_, want, eof_done)) {
+                    file_request_off_ += want;
+                    stream_pending_    = true;
+                }
+                // false → drop (fronta plna); zadny posun offsetu, jinak by se
+                // underrun maskoval jako END-OF-SAMPLE a framy se uz nedozadaly.
             } else {
                 // Cely zbytek souboru uz byl pozadan; jakmile worker dohraje,
                 // nastavi eof_ a Voice doplyne hlas cisto. Zadny dalsi request.

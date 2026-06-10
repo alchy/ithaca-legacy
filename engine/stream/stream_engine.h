@@ -46,6 +46,17 @@ struct RingHandle {
     // Allocator flag (acquireRing / releaseRing).
     std::atomic<bool>   in_use_{false};
 
+    // Generace vlastnictvi: inkrement pri kazdem releaseRing. StreamRequest
+    // nese snapshot — worker pred zapisem overi shodu, takze pozdni/stale
+    // request nikdy nezapise data/EOF do ringu noveho vlastnika (ABA guard
+    // pro steal/retrigger streamovaneho hlasu s in-flight requestem).
+    std::atomic<uint32_t> gen_{0};
+
+    // Producer try-lock (0/1): per-ring smi zapisovat jen jeden worker a
+    // acquireRing na nej kratce pocka pred resetem kurzoru. Drzi se JEN pres
+    // push (memcpy), ne pres disk I/O → ceka se max ~desitky us.
+    std::atomic<int>    producers_{0};
+
     // Producent (worker): zapise az n_frames stereo frames. Vrati pocet
     // skutecne zapsanych (kdyz se ring zaplni). Bez alokaci.
     int push(const float* src_interleaved, int n_frames);
@@ -79,6 +90,7 @@ struct StreamRequest {
     int64_t     frame_off     = 0;
     int64_t     n_frames      = 0;
     bool        eof_when_done = false;   // worker po dokonceni nastavi ring->eof_
+    uint32_t    gen           = 0;       // snapshot RingHandle::gen_ pri odeslani
 };
 
 // SP-MC fronta StreamRequestu. Producent (audio thread) je single lock-free;
@@ -147,8 +159,10 @@ public:
     void releaseRing(RingHandle* r);
 
     // Naplnovac (volat z Voice po vypoctu, ze je v ringu malo dat). Drop-on-full
-    // pri zaplneni fronty; tim padem RT-safe.
-    void requestRead(RingHandle* ring, const std::string& path,
+    // pri zaplneni fronty; tim padem RT-safe. Vraci false pri plne fronte —
+    // caller pak NEPOSOUVA file_request_off_ (request prirozene zopakuje
+    // pristi blok; drive tichy drop maskoval underrun jako END-OF-SAMPLE).
+    bool requestRead(RingHandle* ring, const std::string& path,
                      int64_t frame_off, int64_t n_frames,
                      bool eof_when_done = false) noexcept;
 
