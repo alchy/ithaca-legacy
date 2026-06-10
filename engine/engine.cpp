@@ -136,9 +136,11 @@ bool Engine::reloadBank(const std::string& dir) {
     // 3) Zapni bank_loading_ flag. processBlock to uvidi a vrati ticho;
     //    pripadny prave bezici processBlock dobehne s puvodnim bank_.
     bank_loading_.store(true, std::memory_order_release);
-    // 4) Pockej ~10 ms aby in-flight processBlock dobehl. Audio bloky maji
-    //    typicky pod 6 ms (256 vz / 48k), 10 ms je bezpecna rezerva.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // 4) Handshake misto pevneho sleepu: epoch+2 garantuje dobeh in-flight
+    //    bloku + ze dalsi blok videl bank_loading_ (vraci ticho). Timeout
+    //    500 ms pokryva i block_size 8192 (~170 ms perioda) a stojici audio
+    //    (testy / zastavene zarizeni — pak je mutace trivialne bezpecna).
+    waitForAudioQuiesce(2, 500);
     // Join pripadny bezici recache thread — pristupuje k bank_/cfg_, musi
     // dobehnout DRIV nez loadBank prepise banku (jinak race / use-after-free).
     if (recache_thread_.joinable()) recache_thread_.join();
@@ -153,6 +155,17 @@ bool Engine::reloadBank(const std::string& dir) {
     // 7) Pust audio thread zpet.
     bank_loading_.store(false, std::memory_order_release);
     return ok;
+}
+
+void Engine::waitForAudioQuiesce(int min_epochs, int timeout_ms) noexcept {
+    const uint64_t e0 = block_epoch_.load(std::memory_order_seq_cst);
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds(timeout_ms);
+    while (block_epoch_.load(std::memory_order_seq_cst)
+               < e0 + (uint64_t)min_epochs) {
+        if (std::chrono::steady_clock::now() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 namespace {
@@ -261,6 +274,10 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     }
 
     if (!initialized_ || !pool_) return;
+    // Epoch tick: zapocaty blok. reloadBank/recache cekaji na epoch+2 = "in-flight
+    // blok dobehl a dalsi uz vidi aktualni flagy" (nahrazuje sleep heuristiku,
+    // ktera neplatila pro block_size az 8192 ≈ 170 ms periody).
+    block_epoch_.fetch_add(1, std::memory_order_seq_cst);
     // Bank reload v progressu? Vrat ticho — nesahej na bank_ (race s reloadBank
     // na non-RT threadu) a preskoc drain MIDI / voice render. Resetneme i peak
     // metr aby GUI videlo, ze nic neteche. Caller buffery nemusi mit vynulovane,

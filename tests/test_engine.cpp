@@ -58,3 +58,15 @@ TEST_CASE("Engine: prazdna banka → processBlock je ticho, ne crash") {
     eng.processBlock(L.data(), R.data(), 256);
     CHECK(energy(L) == doctest::Approx(0.0));
 }
+
+TEST_CASE("processBlock inkrementuje block epoch (podklad reload/recache handshake)") {
+    Engine e;
+    EngineConfig cfg; cfg.sample_rate = 48000; cfg.block_size = 64;
+    cfg.midi_from = 59; cfg.midi_to = 61;
+    REQUIRE(e.init(cfg));
+    const uint64_t e0 = e.blockEpoch();
+    std::vector<float> L(64, 0.f), R(64, 0.f);
+    e.processBlock(L.data(), R.data(), 64);
+    e.processBlock(L.data(), R.data(), 64);
+    CHECK(e.blockEpoch() == e0 + 2);
+}

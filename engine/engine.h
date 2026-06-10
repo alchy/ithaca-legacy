@@ -72,10 +72,12 @@ public:
     //   2) pockej ~50 ms aby release dobehl,
     //   3) zapni bank_loading_ flag → audio thread zacne vracet ticho a preskoci
     //      drain MIDI / voice render (viz processBlock top),
-    //   4) pockej ~10 ms aby pripadny in-flight processBlock dobehl,
-    //   5) loadBank(path) (disk I/O je teď bezpecne, audio mlci),
+    //   4) handshake waitForAudioQuiesce(epoch+2): in-flight processBlock
+    //      dobehl a dalsi blok uz videl flag (timeout 500 ms kryje stojici audio),
+    //   5) join recache threadu, hard-stop hlasu, loadBank(path) (disk I/O je
+    //      teď bezpecne, audio mlci),
     //   6) bank_loading_=false → audio thread se obnovi.
-    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~60 ms.
+    // Volat POUZE z non-RT threadu (GUI/main); blokuje ~55 ms + 1-2 audio bloky.
     bool reloadBank(const std::string& dir);
 
     // -- Thread-safe MIDI vstup (volat z MIDI/GUI threadu) --
@@ -167,6 +169,12 @@ public:
     float masterPeakL() const noexcept { return master_peak_l_.load(std::memory_order_relaxed); }
     float masterPeakR() const noexcept { return master_peak_r_.load(std::memory_order_relaxed); }
 
+    // Pocitadlo zapocatych audio bloku (diagnostika + reload/recache handshake,
+    // viz waitForAudioQuiesce). Atomic, thread-safe cteni odkudkoli.
+    uint64_t blockEpoch() const noexcept {
+        return block_epoch_.load(std::memory_order_seq_cst);
+    }
+
     // -- DSP load meter (GUI; atomic) --
     // Peak-hold zatizeni audio threadu = cas renderu / perioda bloku. 1.0 = na
     // hranici deadline, > 1.0 = blok se nestihl (dropout riziko). Decay ~0.5 s.
@@ -181,6 +189,13 @@ public:
 private:
     // Prepocita StreamEngine refill threshold dle aktualniho block_size.
     void recomputeRefillThreshold() noexcept;
+
+    // Pocka (z non-RT threadu), az audio thread ZAPOCNE aspon min_epochs
+    // novych bloku — tj. pripadny in-flight processBlock dobehl a nasledujici
+    // blok uz cetl aktualni atomic flagy (bank_loading_/fade request).
+    // Timeout kryje zastavene audio (testy, odpojene zarizeni) — pak je
+    // mutace sdileneho stavu trivialne bezpecna.
+    void waitForAudioQuiesce(int min_epochs, int timeout_ms) noexcept;
 
     // Half-pedal continuous release scaling (spec 5.4). Vraci skalovany
     // release_ms podle aktualniho cc64_ (CC0 → ×1, CC127 → ~×20).
@@ -209,6 +224,8 @@ private:
     // Bank reload guard. Pokud true, processBlock vraci ticho a preskoci
     // veskery render / drain — chrani pred race s loadBank na non-RT threadu.
     std::atomic<bool>                 bank_loading_{false};
+    // Pocitadlo zapocatych bloku (inkrement na zacatku processBlock).
+    std::atomic<uint64_t>             block_epoch_{0};
     // Indikator note-on/off blikani: timestamp (steady_clock micros) posledniho
     // eventu. Psano z MIDI/GUI threadu pri noteOn/noteOff, cteno z GUI.
     std::atomic<uint64_t>             last_note_on_us_{0};
