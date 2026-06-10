@@ -144,7 +144,11 @@ bool Engine::reloadBank(const std::string& dir) {
     // Join pripadny bezici recache thread — pristupuje k bank_/cfg_, musi
     // dobehnout DRIV nez loadBank prepise banku (jinak race / use-after-free).
     if (recache_thread_.joinable()) recache_thread_.join();
-    recache_running_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(recache_mtx_);
+        recache_running_ = false;
+        recache_pending_ = false;
+    }
     // 5) TVRDE zastav vsechny hlasy DRIV nez uvolnime bank_ — jinak by Voice/
     //    ResonanceVoice drzely const MicLayer*/SampleAsset* do uvolnene pameti
     //    stare banky (release ~200 ms >> 60 ms pauza) => use-after-free.
@@ -562,32 +566,51 @@ void Engine::rebuildResonanceCache(float target_db) noexcept {
     cfg_.resonance_layer_db = target_db;            // GUI-thread zapis (pamet aktualniho cile)
     recache_target_.store(target_db, std::memory_order_release);  // cil pro bg thread (bez torn read)
     resonance_->setLayerTargetDb(target_db);        // nove spawny vyberou novou vrstvu hned
-    // VZDY (i pri coalesce) sraz ready flagy → nove hlasy stream mod, a fadene aktivni
-    // cache-mod hlasy. Tim odpada okno, kdy by ready=true ukazoval na jeste nepostavenou
-    // novou cilovou vrstvu (jinak benigni — hlas by degradoval na ring stream — ale takhle
-    // je stav konzistentni). RT-safety: ResonanceVoice re-fetchuje preload_resonance kazdy
-    // blok; fade + 120ms sleep zaruci, ze cache-mod hlas je !active driv, nez bg realokuje.
-    resonance_->clearCacheReady();
-    resonance_->requestRecacheFade();
-    // Pokud uz rebuild bezi, jen oznac pending (bezici thread znovu prebuduje na novy cil).
-    if (recache_running_.exchange(true, std::memory_order_acq_rel)) {
-        recache_has_pending_.store(true, std::memory_order_release);
-        return;
+    {
+        std::lock_guard<std::mutex> lk(recache_mtx_);
+        if (recache_running_) {
+            // Bezici rebuild si pending vyzvedne POD TYMZE mutexem, kterym
+            // shazuje running → lost-update (pending nastaveny tesne po
+            // dokonceni workeru, ktery uz ho nevyzvedl) nemuze nastat.
+            recache_pending_ = true;
+            return;
+        }
+        recache_running_ = true;
     }
     if (recache_thread_.joinable()) recache_thread_.join();   // predchozi uz dobehl
-    recache_thread_ = std::thread([this]() {
-        for (;;) {
-            const float t = recache_target_.load(std::memory_order_acquire);
-            std::this_thread::sleep_for(std::chrono::milliseconds(120));  // dobeh fade
-            auto ready = ithaca::buildResonanceCache(
-                bank_, t, cfg_.resonance_window_ms, log::Logger::default_());
-            if (resonance_) resonance_->setCacheReady(ready);
-            // Prisel mezitim novy cil? (GUI uz srazil ready + fade) → prebuduj znovu.
-            if (recache_has_pending_.exchange(false, std::memory_order_acquire)) continue;
-            break;
-        }
-        recache_running_.store(false, std::memory_order_release);
-    });
+    try {
+        recache_thread_ = std::thread([this]() {
+            for (;;) {
+                const float t = recache_target_.load(std::memory_order_acquire);
+                // KAZDA iterace (i coalesce — drive chybelo!): sraz ready flagy
+                // (nove spawny jedou stream modem a preload_resonance nectou)
+                // + fade aktivnich hlasu. Pak pockej, az audio fade request
+                // zkonzumuje (epoch+2) a 5ms fade dobehne — teprve potom je
+                // realokace preload_resonance bezpecna.
+                resonance_->clearCacheReady();
+                resonance_->requestRecacheFade();
+                waitForAudioQuiesce(2, 500);
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+                auto ready = ithaca::buildResonanceCache(
+                    bank_, t, cfg_.resonance_window_ms, log::Logger::default_());
+                if (resonance_) resonance_->setCacheReady(ready);
+                std::lock_guard<std::mutex> lk(recache_mtx_);
+                if (recache_pending_) { recache_pending_ = false; continue; }
+                recache_running_ = false;
+                break;
+            }
+        });
+    } catch (...) {
+        // Spawn vlakna selhal (extremni stav) — vrat stav; cache zustane
+        // stream-mode do dalsiho pohybu slideru.
+        std::lock_guard<std::mutex> lk(recache_mtx_);
+        recache_running_ = false;
+    }
+}
+
+bool Engine::recacheInProgress() const noexcept {
+    std::lock_guard<std::mutex> lk(recache_mtx_);
+    return recache_running_;
 }
 
 void Engine::setExciteDecayMs(float ms) noexcept {

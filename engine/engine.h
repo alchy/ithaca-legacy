@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -154,7 +155,11 @@ public:
     // Runtime prestavba rezonancni cache pro novy layer target (GUI slider).
     // Fadene aktivni rezonance + ready=false (nove streamuji), pak na pozadi
     // znovu nacte cilove vrstvy a ready=true. Volat z GUI threadu (debounced).
+    // Opakovane volani behem rebuilu se coalescuje (bg vlakno prebuduje znovu
+    // na nejnovejsi cil).
     void rebuildResonanceCache(float target_db) noexcept;
+    // True dokud bezi background rebuild rezonancni cache (GUI indikace).
+    bool recacheInProgress() const noexcept;
     // Min/max peak RMS [dB] napric nactenou bankou (pro dynamicky rozsah GUI
     // slideru "Resonance Layer"). Bez banky default -60 / 0.
     float bankPeakRmsMinDb() const noexcept { return bank_peak_rms_min_db_; }
@@ -232,9 +237,13 @@ private:
     std::atomic<uint64_t>             last_note_off_us_{0};
     int                  dbg_reso_count_ = -1;  // audio-thread only (DIAG zmeny poctu rezonanci)
     std::thread          recache_thread_;
-    std::atomic<bool>    recache_running_{false};
+    // Stav rebuilu pod mutexem (vsechny strany jsou non-RT: GUI + bg thread).
+    // Drive dvojice atomiku → lost-update okno (pending nastaveny tesne po
+    // exchange workeru se uz nevyzvedl). Review F-nizka / 1.4c.
+    mutable std::mutex   recache_mtx_;
+    bool                 recache_running_ = false;
+    bool                 recache_pending_ = false;
     std::atomic<float>   recache_target_{-30.f};   // zadany cil (cte bg thread; bez torn readu cfg_)
-    std::atomic<bool>    recache_has_pending_{false};
     bool                              initialized_ = false;
 };
 

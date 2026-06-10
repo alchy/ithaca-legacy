@@ -58,11 +58,17 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
 
     underrun_step_ = -1.f / (kUnderrunFadeMs * 0.001f * engine_sr);
 
-    // Validni stav?
+    // Validni stav? Cache mod cte preload_resonance (resonance_frames);
+    // stream mod streamuje od resonance_start_frame → rozhoduje file.frames.
+    // Behem cache rebuilu (use_cache=false) se resonance_frames NESMI cist —
+    // bg thread ho prave prepisuje (review E-nizka).
+    const int eff_res_frames0 = (mic_ && use_cache_) ? mic_->resonance_frames : 0;
     active_ = (mic_ != nullptr) &&
               (mic_->mode == MicLayerMode::FullyLoaded
                    ? mic_->head_frames > mic_->resonance_start_frame
-                   : (mic_->resonance_frames > 0 || mic_->head_frames > mic_->resonance_start_frame));
+                   : (eff_res_frames0 > 0 ||
+                      (int64_t)mic_->file.frames
+                          > (int64_t)mic_->resonance_start_frame));
 
     // Streamed → alokuj ring a zazadat o data za preload_resonance regionem.
     if (active_ && mic_->mode == MicLayerMode::Streamed && stream_) {
