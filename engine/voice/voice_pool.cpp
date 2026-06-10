@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace ithaca {
 
@@ -29,7 +30,10 @@ void VoicePool::setStreamEngine(StreamEngine* se) {
     for (auto& v : voices_) v.setStreamEngine(se);
 }
 
-void VoicePool::reset() noexcept { for (auto& v : voices_) v.hardStop(); }
+void VoicePool::reset() noexcept {
+    for (auto& v : voices_) v.hardStop();
+    std::memset(note_active_count_, 0, sizeof(note_active_count_));
+}
 
 int VoicePool::findSlot(const PedalState* pedal) {
     // 1. Volny slot — vzdy preferovany.
@@ -82,8 +86,10 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
     // ktery povolil koexistenci releasing voice + retrigger voice → akumulace
     // hlasu + ring leak pri opakovanem retriggeru pod pedalem.
     for (auto& v : voices_)
-        if (v.active() && v.midi() == midi)
-            v.prepareDamp(engine_sr);
+        if (v.active() && v.midi() == midi) {
+            v.prepareDamp(engine_sr);                  // deaktivuje hlas
+            if (note_active_count_[midi]) note_active_count_[midi]--;
+        }
 
     int slot = findSlot(pedal);
     Voice& v = voices_[slot];
@@ -116,12 +122,18 @@ void VoicePool::noteOn(int midi, const VoiceSpec& spec, float engine_sr,
     }
 
     // Kdyz krademe aktivni hlas, damp i jeho (jiny ton) → bez lupnuti.
-    if (v.active()) v.prepareDamp(engine_sr);
+    if (v.active()) {
+        const int om = v.midi();
+        v.prepareDamp(engine_sr);                      // deaktivuje obet
+        if (om >= 0 && om < 128 && note_active_count_[om])
+            note_active_count_[om]--;
+    }
 
     float pl, pr;
     panForNote(midi, keyboard_spread, pl, pr);
     v.start(spec.asset, spec.pitch_ratio, spec.vel_gain, pl, pr, engine_sr);
     v.setMidi(midi);
+    if (v.active()) note_active_count_[midi]++;        // start mohl selhat (bez micu)
 }
 
 void VoicePool::noteOff(int midi, float release_ms, float engine_sr) {
@@ -180,7 +192,13 @@ bool VoicePool::processBlock(float* out_l, float* out_r, int n_samples,
         // doznit i kdyz novy hlas dostal jiny slot (jinak tvrdy strih = lupnuti
         // + "duch" zdedeny pozdejsim noteOn na tomto slotu).
         if (!v.active() && !v.isDamping()) continue;
+        const bool was = v.active();
         if (v.process(out_l, out_r, n_samples)) any = true;
+        if (was && !v.active()) {                      // deaktivace v process
+            const int m = v.midi();
+            if (m >= 0 && m < 128 && note_active_count_[m])
+                note_active_count_[m]--;
+        }
     }
     return any;
 }
@@ -193,12 +211,10 @@ int VoicePool::activeCount() const noexcept {
 
 bool VoicePool::hasActiveMainVoice(int midi) const noexcept {
     // Eligibility filter 5.5.1 (1): rezonance N je ineligible, dokud existuje
-    // hlavni hlas N v jakemkoli stavu (HELD / RELEASING / pedal-sustained dozvuk).
-    // `Voice::active()` je true ve vsech tech stavech, takze stacik kontrolovat ji
-    // (releasing se nehlasi separe — je to subset active).
-    for (const auto& v : voices_)
-        if (v.active() && v.midi() == midi) return true;
-    return false;
+    // hlavni hlas N v jakemkoli stavu (HELD / RELEASING / pedal-sustained
+    // dozvuk). O(1) pres per-nota citac (drive O(pool) scan volany az 127x
+    // na jeden note-on z rezonancni eligibility).
+    return midi >= 0 && midi < 128 && note_active_count_[midi] > 0;
 }
 
 } // namespace ithaca

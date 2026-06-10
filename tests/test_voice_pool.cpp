@@ -131,3 +131,30 @@ TEST_CASE("retrigger tehoz tonu neztrati hlas (porad 1 aktivni)") {
     // Po retriggeru hraje (nove) tlo + pripadny damping; aktivni aspon 1.
     CHECK(pool.activeCount() >= 1);
 }
+
+TEST_CASE("note_active_count sleduje presne active() stav (ekvivalence se scanem)") {
+    SampleAsset a = makeAsset(0.5f, 2000);
+    VoicePool pool(2);
+    VoiceSpec vs; vs.asset = &a; vs.pitch_ratio = 1.0; vs.vel_gain = 1.0f;
+    auto groundTruth = [&](int midi) {
+        for (const auto& v : pool.voicesView())
+            if (v.active() && v.midi() == midi) return true;
+        return false;
+    };
+    auto checkAll = [&] {
+        for (int n = 0; n < 128; ++n)
+            CHECK(pool.hasActiveMainVoice(n) == groundTruth(n));
+    };
+    std::vector<float> L(256, 0.f), R(256, 0.f);
+    pool.noteOn(60, vs, 48000.f); checkAll();
+    pool.noteOn(64, vs, 48000.f); checkAll();
+    pool.noteOn(67, vs, 48000.f); checkAll();          // steal (pool 2)
+    pool.noteOn(60, vs, 48000.f); checkAll();          // retrigger (damp)
+    pool.noteOff(60, 5.f, 48000.f);
+    for (int i = 0; i < 12; ++i) {                      // release dozni + EOF
+        std::fill(L.begin(), L.end(), 0.f); std::fill(R.begin(), R.end(), 0.f);
+        pool.processBlock(L.data(), R.data(), 256, 48000.f);
+        checkAll();
+    }
+    pool.reset(); checkAll();
+}
