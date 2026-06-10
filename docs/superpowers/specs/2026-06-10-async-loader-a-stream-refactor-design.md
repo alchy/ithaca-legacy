@@ -1,6 +1,6 @@
 # Async loader banky + StreamedSampleReader refactor — design
 
-Datum: 2026-06-10 · Větev: `feat/async-loader-a-stream-refactor` · Stav: schváleno uživatelem
+Datum: 2026-06-10 · Větev: `feat/async-loader-a-stream-refactor` · Stav: implementováno (části A i B)
 
 Navazuje na merge `fix/revize-2026-06-10` (revize `docs/review-2026-06-10.md`).
 Dvě nezávislé části v jedné větvi; část A přistane první, část B následuje.
