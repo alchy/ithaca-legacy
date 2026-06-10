@@ -29,6 +29,7 @@ void Voice::prepareDamp(float engine_sr) {
         const int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
                                            kDampMaxFrames);
         float env = vel_gain_;
+        if (in_onset_)        env *= onset_gain_;   // steal behem onsetu: bez skoku nahoru
         if (releasing_)       env *= rel_gain_;
         if (underrun_fading_) env *= underrun_gain_;
         const int pos = (int)position_;
@@ -163,9 +164,13 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
 
 void Voice::release(float release_ms, float engine_sr) {
     if (!active_ || releasing_) return;
+    if (release_ms < 0.1f) release_ms = 0.1f;   // guard: 0 → -inf step
     releasing_ = true;
-    rel_gain_  = in_onset_ ? onset_gain_ : 1.f;
-    rel_step_  = -rel_gain_ / (release_ms * 0.001f * engine_sr);
+    // Soucin onset*release je spojity: release startuje VZDY z 1.0 a onset
+    // rampa dobiha dal. (Drive rel_gain_=onset_gain_ pri onsetu → v process
+    // se nasobi OBE rampy → env skok g0 → g0^2 = klik pri staccatu.)
+    rel_gain_  = 1.f;
+    rel_step_  = -1.f / (release_ms * 0.001f * engine_sr);
 }
 
 float Voice::currentLevel() const noexcept {
@@ -260,16 +265,16 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                 ring_lo_idx_++;
             }
             if (underrun) {
+                // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
+                // dosahl konce) a ring je prazdny → legitimni konec, Info.
+                // Jinak worker nestihl dodat data → skutecny underrun, Warning.
+                // noteUnderrun() razitkujeme JEN pri skutecnem underrunu (ne
+                // pri cistem konci samplu) — jinak by MAIN ring indikator
+                // blikal cervene po kazde normalne dohraje dlouhe note.
+                const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
                 if (!underrun_fading_) {
                     underrun_fading_ = true;
                     underrun_gain_   = 1.f;
-                    // Cisty konec: cely soubor uz byl vyzadan (file_request_off_
-                    // dosahl konce) a ring je prazdny → legitimni konec, Info.
-                    // Jinak worker nestihl dodat data → skutecny underrun, Warning.
-                    // noteUnderrun() razitkujeme JEN pri skutecnem underrunu (ne
-                    // pri cistem konci samplu) — jinak by MAIN ring indikator
-                    // blikal cervene po kazde normalne dohraje dlouhe note.
-                    const bool clean_end = (file_request_off_ >= (int64_t)total_frames);
                     if (clean_end) {
                         LOG_RT_INFO("voice_end",
                             "END-OF-SAMPLE midi=%d pos=%lld total=%d", midi_,
@@ -282,7 +287,15 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
                             head_frames, ring_->available());
                     }
                 }
-                sL = 0.f; sR = 0.f;
+                if (clean_end) {
+                    // Cisty EOF: deactivate+zero (reference chovani icr — sampl
+                    // prirozene dohral do ~ticha, neni co drzet).
+                    sL = 0.f; sR = 0.f;
+                } else {
+                    // Skutecny underrun: drz posledni znamy vzorek, fade ho
+                    // tvaruje (nuly by 5ms rampu obesly = tvrdy strih/klik).
+                    sL = ring_lo_l_; sR = ring_lo_r_;
+                }
             } else {
                 float frac = (float)(position_ - (double)ring_lo_idx_);
                 if (frac < 0.f) frac = 0.f;

@@ -239,7 +239,9 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
                         underrun_gain_   = 1.f;
                         LOG_RT_WARN("resonance_voice", "underrun midi=%d", midi_);
                     }
-                    sL = 0.f; sR = 0.f;
+                    // Drz posledni znamy vzorek — underrun rampa ho fadne k 0
+                    // (nuly by fade obesly = tvrdy strih).
+                    sL = ring_lo_l_; sR = ring_lo_r_;
                 } else {
                     float frac = (float)(position_ - (double)ring_lo_idx_);
                     if (frac < 0.f) frac = 0.f;

@@ -103,6 +103,22 @@ TEST_CASE("damping crossfade dozni i kdyz novy hlas dostane jiny slot (osirely d
     CHECK(std::fabs(L[0]) > 0.1f);
 }
 
+TEST_CASE("release behem onsetu nezpusobi skok obalky (g0 -> g0*rel, ne g0^2)") {
+    SampleAsset a = makeAsset(1.0f, 48000);
+    VoicePool pool(2);
+    VoiceSpec vs; vs.asset = &a; vs.pitch_ratio = 1.0; vs.vel_gain = 1.0f;
+    pool.noteOn(60, vs, 48000.f);
+    std::vector<float> L(64, 0.f), R(64, 0.f);
+    pool.processBlock(L.data(), R.data(), 64, 48000.f);   // uprostred 3ms onsetu
+    const float before = std::fabs(L[63]);
+    pool.noteOff(60, 50.f, 48000.f);
+    std::vector<float> L2(64, 0.f), R2(64, 0.f);
+    pool.processBlock(L2.data(), R2.data(), 64, 48000.f);
+    const float after = std::fabs(L2[0]);
+    CHECK(after > before * 0.8f);    // spojitost (drive ~0.63x = skok -4 dB)
+    CHECK(after < before * 1.2f);
+}
+
 TEST_CASE("retrigger tehoz tonu neztrati hlas (porad 1 aktivni)") {
     SampleAsset a = makeAsset(0.5f, 48000);
     VoicePool pool(8);
