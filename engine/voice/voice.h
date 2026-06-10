@@ -8,13 +8,13 @@
 // click-free retrigger/kradez. Adaptovano z icr sampler_core.
 
 #include "sample/sample_types.h"
+#include "stream/streamed_reader.h"
 
 #include <cstdint>
 
 namespace ithaca {
 
 class StreamEngine;
-struct RingHandle;
 
 // Konstanty hlasu.
 constexpr float  kOnsetMs        = 3.f;   // nabeh proti lupnuti pri note-on
@@ -90,37 +90,16 @@ private:
 
     // -- Faze 4: streaming z disku --
     StreamEngine* stream_  = nullptr;   // nullptr = streaming nedostupny
-    RingHandle*   ring_    = nullptr;   // alokovano pri start() jen pro Streamed
-    // Aktualni file offset (v stereo frames), ze ktereho jsme posledne POZADALI
-    // worker, aby cetl. Init = head_frames pri prvnim requestu; navysuje se
-    // o size kazdeho dalsiho requestu, aby na sebe casti navazaly.
-    int64_t  file_request_off_ = 0;
-    // Pendujici flag: zabrani spamovani requestu kazdy audio blok.
-    // Voice si ho castuje sam (po push request → true; ringuv naskok ho zase
-    // shodi). FUTURE: idealnejsi je dedicated atomic na ring, kterou worker
-    // shodi po dokonceni. Pro prvni iteraci stacne flag voice-local + heuristika
-    // "kdyz ring uz neni pod prahem, mam volno na novy request".
-    bool     stream_pending_   = false;
+    // Ring + lo/hi interpolacni okno + refill heuristika ziji ve sdilenem
+    // StreamedSampleReader (kompozice, sdileno s ResonanceVoice). Voice drzi
+    // jen POLICY pri prazdnem ringu: cisty EOF (cleanEnd → zero + 5ms fade,
+    // deaktivace) vs skutecny underrun (drzi posledni vzorek + 5ms fade).
+    // Sev head->ring: seed lo = posledni head frame, hi = prvni ring pop.
+    StreamedSampleReader reader_;
     // Fast underrun fade: pri prazdnem ringu pred EOF → ramp do 0 a deaktivace.
     bool     underrun_fading_  = false;
     float    underrun_gain_    = 1.f;
     float    underrun_step_    = 0.f;
-
-    // -- SR konverze ve streamovane (ring) casti: lo/hi sliding window --
-    // Pro lin. interpolaci drzime DVA sousedni framy: ring_lo_* na indexu
-    // floor(position_) a ring_hi_* na floor(position_)+1 (lookahead). Vystup =
-    // lo*(1-frac) + hi*frac. Okno se posouva popovanim z ringu dokud lo
-    // nedosahne floor(position_). Seed pri prvnim vstupu: lo = posledni head
-    // frame, hi = prvni ring pop (plynuly sev head->ring); kdyz ring jeste nic
-    // nema, seed clampne hi=lo. V hlavni smycce prazdny ring znamena: cisty
-    // EOF (cely soubor uz vyzadan) → deaktivace, zero + 5ms fade; skutecny
-    // underrun → drz posledni vzorek (ring_lo) a 5ms fade ho tvaruje.
-    // Na 48k (pos_inc=1) je frac=0 → vystup = puvodni vzorek.
-    float    ring_lo_l_   = 0.f;
-    float    ring_lo_r_   = 0.f;
-    float    ring_hi_l_   = 0.f;
-    float    ring_hi_r_   = 0.f;
-    int64_t  ring_lo_idx_ = -1;   // -1 = neseedovano
 };
 
 } // namespace ithaca
