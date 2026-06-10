@@ -2,7 +2,9 @@
 #include "dsp/ir_modal.h"
 #include "dsp/ir_wav.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 namespace ithaca::dsp {
 
@@ -18,6 +20,7 @@ void Convolver::prepare(float sr, int /*max_block*/) {
     buf_l_.assign(kMaxIr, 0.f);
     buf_r_.assign(kMaxIr, 0.f);
     write_pos_ = 0;
+    seen_.store(-1, std::memory_order_relaxed);   // prepare = audio stoji
     choice_names_ = {"Body soft (modal)", "Body bright (modal)"};
     base_ir_ = generateModalIr(IrPreset::BodySoft, sr_, kMaxIr);
     rebuildIr();
@@ -32,6 +35,15 @@ void Convolver::reset() {
 
 void Convolver::setIR(const std::vector<float>& ir) {
     const int inactive = 1 - active_.load(std::memory_order_relaxed);
+    // Dve publikace behem jednoho in-flight process() by prepsaly (a move-assign
+    // dealokoval) slot, ktery audio prave cte → use-after-free. Pockej, dokud
+    // audio cilovy slot necte (seen_ != inactive); bounded ~1 perioda bloku,
+    // deadline kryje zastavene/visici audio (pak je prepis bezpecny prakticky).
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds(250);
+    while (seen_.load(std::memory_order_acquire) == inactive &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
     std::vector<float> tmp = ir;
     if ((int)tmp.size() > kMaxIr) tmp.resize(kMaxIr);
     float peak = 0.f; for (float v : tmp) peak = std::max(peak, std::fabs(v));
@@ -63,9 +75,13 @@ int trimmedIrLength(const std::vector<float>& ir, double drop_frac) {
 
 void Convolver::process(float* L, float* R, int n) {
     if (!enabled_.load(std::memory_order_relaxed)) return;
-    const auto& ir = ir_[(size_t)active_.load(std::memory_order_acquire)];
+    const int active = active_.load(std::memory_order_acquire);
+    // Oznam GUI threadu cteny slot — setIR pak neprepise slot pod rukama
+    // in-flight bloku. Na vsech navratovych cestach se vraci -1 (audio necte).
+    seen_.store(active, std::memory_order_release);
+    const auto& ir = ir_[(size_t)active];
     const int M = (int)ir.size();
-    if (M == 0) return;
+    if (M == 0) { seen_.store(-1, std::memory_order_release); return; }
     const float wet = mix_.load(std::memory_order_relaxed);
     const float dry = 1.f - wet;
     // Early-out pri MIX~0: cisty dry, ale udrz historii koherentni (O(1)/vzorek
@@ -78,6 +94,7 @@ void Convolver::process(float* L, float* R, int n) {
             br0[write_pos_] = R[i];
             if (++write_pos_ >= kMaxIr) write_pos_ = 0;
         }
+        seen_.store(-1, std::memory_order_release);
         return;
     }
     // Dva flat passy misto jednoho cyklu s wraparound branchem:
@@ -111,6 +128,7 @@ void Convolver::process(float* L, float* R, int n) {
         R[i] = dry * R[i] + wet * oR;
         if (++write_pos_ >= kMaxIr) write_pos_ = 0;
     }
+    seen_.store(-1, std::memory_order_release);
 }
 
 int Convolver::choiceCount() const { return (int)choice_names_.size(); }
