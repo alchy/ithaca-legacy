@@ -258,3 +258,26 @@ TEST_CASE("bankLoadFraction mapuje faze na 0..1 (heads 60 %, cache 40 %)") {
     CHECK(bankLoadFraction(3, 0, 0)   == doctest::Approx(1.f));
     CHECK(bankLoadFraction(1, 0, 0)   == doctest::Approx(0.f));   // total 0 -> 0
 }
+
+TEST_CASE("BankLoadProgress: bytes_loaded roste a truncated se nastavi pri prekroceni budgetu") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_fixture_budget_prog";
+    fs::remove_all(dir); fs::create_directories(dir);
+    // Streamed head = preload 150 ms = 7200 frames ≈ 57,6 kB float/soubor →
+    // 24 souboru ≈ 1,38 MB > budget 1 MB (break po ~18; presny pocet
+    // nezarucen — ERROR pripad s neuplnou bankou).
+    for (int n = 40; n < 64; ++n) {
+        char name[40];
+        std::snprintf(name, sizeof(name), "/m%03d-vel0-f48.wav", n);
+        writeConstWav(dir + name, 0.3f, 48000, 48000);   // 1 s → Streamed
+    }
+    auto& L = log::Logger::default_();
+    L.setOutputMode(false, false);
+    BankLoadProgress prog;
+    prog.budget_bytes.store(1024 * 1024);   // caller (Engine) nastavuje pred loadem
+    Bank bank = loadBank(dir, L, /*cache_budget_mb=*/1, 0, 127, 150, 500, &prog);
+    fs::remove_all(dir);
+    CHECK(prog.truncated.load());                         // budget prekrocen
+    CHECK(prog.bytes_loaded.load() == bank.total_bytes);  // zrcadli ucetnictvi banky
+    CHECK(bank.loaded_samples < 24);                      // neuplna banka
+}

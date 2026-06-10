@@ -25,6 +25,13 @@ struct BankLoadProgress {
     std::atomic<int> phase{0};
     std::atomic<int> done{0};
     std::atomic<int> total{0};
+    // Pametove info pro overlay (GUI zobrazuje "X / Y MB" + varovani):
+    // bytes_loaded zrcadli bank.total_bytes (heads) + bajty rezonancni cache;
+    // budget_bytes nastavuje CALLER (Engine zna efektivni auto-budget ~60 % RAM);
+    // truncated = budget prekrocen → banka nactena NEUPLNA (ERROR jde i do logu).
+    std::atomic<size_t> bytes_loaded{0};
+    std::atomic<size_t> budget_bytes{0};   // 0 = bez limitu
+    std::atomic<bool>   truncated{false};
 };
 
 // Mapovani fazi na jeden progress bar 0..1: heads = 0..0.6, cache = 0.6..1.0

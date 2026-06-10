@@ -197,11 +197,16 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
                        "resonance_window_ms, nebo zvys cache_budget_mb.",
                        bank.name.c_str(), cache_budget_mb,
                        bank.total_bytes / (1024 * 1024));
+            if (progress) progress->truncated.store(true, std::memory_order_relaxed);
             break;
         }
         ingestSampleFile(bank, p.midi, entry.full_path, p.filename, logger,
                          preload_ms, resonance_window_ms);
-        if (progress) progress->done.fetch_add(1, std::memory_order_relaxed);
+        if (progress) {
+            progress->done.fetch_add(1, std::memory_order_relaxed);
+            progress->bytes_loaded.store(bank.total_bytes,
+                                         std::memory_order_relaxed);
+        }
     }
 
     sortBankSlotsByRms(bank);
@@ -250,6 +255,10 @@ std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
                 m.resonance_frames  = rd.frames;
                 m.preload_resonance = std::move(rd.samples);
                 ready[(size_t)n] = true;
+                if (progress)
+                    progress->bytes_loaded.fetch_add(
+                        m.preload_resonance.size() * sizeof(float),
+                        std::memory_order_relaxed);
             } else {
                 logger.log("bank", log::Severity::Warning,
                            "buildResonanceCache: read failed note %d", n);

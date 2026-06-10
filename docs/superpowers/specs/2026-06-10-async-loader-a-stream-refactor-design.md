@@ -79,6 +79,17 @@ fullscreen ImGui okno (ztmavení, název banky, progress bar 0–100 %, text fá
 nerenderují interaktivně (skip input). ESC nic nedělá (load nelze přerušit —
 zrušitelnost je YAGNI pro první iteraci).
 
+**4b. Paměťové info a nestandardní stavy (doplněk schválený uživatelem):**
+`BankLoadProgress` nese navíc `bytes_loaded` (průběžně načtené bajty: heads +
+rezonanční cache), `budget_bytes` (efektivní RAM strop — nastavuje Engine,
+auto ~60 % fyzické RAM) a `truncated` (budget překročen → banka NEÚPLNÁ).
+Overlay zobrazuje řádek „RAM: X / Y MB (budget)" + celkovou fyzickou RAM;
+při `truncated` zlatě/červeně varování „Banka překročila RAM budget — načtena
+NEÚPLNÁ (detail v LOG)". Stav zůstává viditelný i po dokončení loadu:
+`AppContext::bank_truncated_` (plní completion handler z progress) a BANK
+panel u faktů zobrazuje zlatý dovětek „· NEÚPLNÁ (RAM)". Nestandardní stavy
+jdou nadále i do loggeru (GUI LOG strip je zobrazuje jako dosud).
+
 **5. Paralelní ingest** (`engine/sample/sample_store.cpp`):
 
 - Fáze heads: seznam souborů ze scanu se zpracuje worker poolem

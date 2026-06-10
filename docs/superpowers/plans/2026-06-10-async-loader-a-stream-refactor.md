@@ -293,6 +293,15 @@ Starý `ingestSampleFile` smaž (nahrazen prepare+commit). Pozn.: `BankFileEntry
 - [ ] **A2.4:** Build + nové testy → PASS; celé ctest → PASS (zvlášť test_sample_store, test_resonance_cache_build, test_sample_rate_and_reload).
 - [ ] **A2.5: Commit** `feat(loader): paralelni ingest (prepare/commit) + paralelni stavba rezonancni cache`
 
+### Task A1b (doplněk uživatele, HOTOVO souběžně s A1): paměťové atomiky
+
+`BankLoadProgress` rozšířen o `bytes_loaded`/`budget_bytes`/`truncated`;
+loadBank zrcadlí `bank.total_bytes` + nastavuje truncated při budget breaku;
+buildResonanceCache přičítá bajty cache. Test „bytes_loaded roste a truncated
+se nastavi" v test_sample_store.cpp. Navazuje: A3 nastaví `budget_bytes`
+z efektivního auto-budgetu, A4 přenese truncated do `bank_truncated_`,
+A5 vykreslí RAM řádek + varování v overlay a badge v BANK panelu.
+
 ### Task A3: Engine pass-through progress
 
 **Files:** Modify `engine/engine.h` (fwd decl + signatury), `engine/engine.cpp`
