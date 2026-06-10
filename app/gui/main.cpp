@@ -149,6 +149,9 @@ int main(int argc, char* argv[]) {
     AppContext ctx;
     if (!ctx.initFromState(st)) {
         std::fprintf(stderr, "AppContext init failed\n");
+        // Odregistruj log subscriber (lambda drzi this) — jinak by Logger
+        // singleton po zaniku ctx volal use-after-free pri pozdnim logu.
+        ctx.shutdown();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();

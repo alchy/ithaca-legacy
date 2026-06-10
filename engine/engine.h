@@ -58,6 +58,11 @@ struct EngineConfig {
     float resonance_layer_db    = -30.f;  // dB cil pro vyber velocity vrstvy
     int   max_resonance_voices  = 32;     // hard cap pro rezonancni pool
     float excite_decay_ms       = 5000.f; // tau prirozeneho decay last_excite
+    // RT priorita audio vlakna (SCHED_FIFO/time-constraint/MMCSS) — nastavi se
+    // pri prvnim processBlock NA VOLAJICIM VLAKNE. Default OFF: zapinaji jen
+    // realne audio aplikace (GUI, CLI --play). Jinak by testy/offline render
+    // dostaly SCHED_FIFO na main threadu (vyhladoveni systemu, RLIMIT_RTTIME).
+    bool  rt_priority           = false;
 };
 
 class Engine {

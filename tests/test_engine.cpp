@@ -70,3 +70,17 @@ TEST_CASE("processBlock inkrementuje block epoch (podklad reload/recache handsha
     e.processBlock(L.data(), R.data(), 64);
     CHECK(e.blockEpoch() == e0 + 2);
 }
+
+TEST_CASE("noteOn/noteOff s out-of-range parametry jsou bezpecne (clamp/zahozeni)") {
+    Engine e;
+    EngineConfig cfg; cfg.sample_rate = 48000; cfg.block_size = 64;
+    cfg.midi_from = 59; cfg.midi_to = 61;
+    REQUIRE(e.init(cfg));
+    e.noteOn(200, 100);    // midi mimo rozsah → zahodit ((uint8_t)200 by hral jinou notu)
+    e.noteOn(-3, 100);
+    e.noteOn(60, 300);     // velocity > 127 → clamp ((uint8_t)300==44, 256==0 → falesny NoteOff)
+    e.noteOff(-5);
+    std::vector<float> L(64, 0.f), R(64, 0.f);
+    e.processBlock(L.data(), R.data(), 64);   // nesmi spadnout / UB (overi i ASan)
+    CHECK(true);
+}

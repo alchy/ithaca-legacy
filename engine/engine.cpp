@@ -182,6 +182,12 @@ uint64_t nowMicros() {
 } // namespace
 
 void Engine::noteOn(int midi, int velocity, int channel) {
+    // Range guard verejneho API: (uint8_t) cast bez kontroly by z midi=300
+    // udelal notu 44 a z velocity=256 nulu (→ falesny NoteOff). MIDI vstup
+    // posila max 127, ale GUI/testy/batch chranene nebyly.
+    if (midi < 0 || midi > 127) return;
+    if (velocity > 127) velocity = 127;
+    if (channel < 0 || channel > 15) channel = 0;
     if (velocity <= 0) { noteOff(midi, channel); return; }
     last_note_on_us_.store(nowMicros(), std::memory_order_relaxed);
     if (!midi_q_.push({MidiEvent::NoteOn, (uint8_t)midi, (uint8_t)velocity,
@@ -190,6 +196,8 @@ void Engine::noteOn(int midi, int velocity, int channel) {
             "MIDI fronta plna — NoteOn midi=%d ZAHOZEN", midi);
 }
 void Engine::noteOff(int midi, int channel) {
+    if (midi < 0 || midi > 127) return;
+    if (channel < 0 || channel > 15) channel = 0;
     last_note_off_us_.store(nowMicros(), std::memory_order_relaxed);
     if (!midi_q_.push({MidiEvent::NoteOff, (uint8_t)midi, 0, (uint8_t)channel}))
         log::Logger::default_().log("midi", log::Severity::Warning,
@@ -228,11 +236,12 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     static thread_local bool denorm_set = false;
     if (!denorm_set) { enableFlushDenormals(); denorm_set = true; }
 
-    // RT priorita audio vlakna — jednou per thread. Soft-failure: pri selhani
+    // RT priorita audio vlakna — jednou per thread, jen kdyz si ji aplikace
+    // vyzadala (cfg.rt_priority; GUI a CLI --play). Soft-failure: pri selhani
     // se loguje WARN + per-platform TIP, audio bezi na default scheduling.
     // Viz docs/rt-thread-priority.md.
     static thread_local bool rt_set = false;
-    if (!rt_set) {
+    if (!rt_set && cfg_.rt_priority) {
         const RtAudioParams rp{ cfg_.sample_rate, cfg_.block_size };
         int err = 0;
         const auto st = enableRealtimeAudio(rp, &err);

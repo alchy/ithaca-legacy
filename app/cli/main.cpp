@@ -34,7 +34,8 @@ void playAudioCb(void* userdata, float* output, uint32_t frames) {
     // Rozdel interleaved výstup na docasne L/R? Jednodussi: engine renderuje
     // do docasnych L/R bufferu a pak interleave. Pro jednoduchost pouzij
     // staticky scratch (audio thread, jeden konzument).
-    static std::vector<float> L, R;
+    // Predalokovano na engine max (8192) — zadna alokace na audio threadu.
+    static std::vector<float> L(8192), R(8192);
     if ((int)L.size() < (int)frames) { L.resize(frames); R.resize(frames); }
     std::fill(L.begin(), L.begin() + frames, 0.f);
     std::fill(R.begin(), R.begin() + frames, 0.f);
@@ -166,6 +167,7 @@ int main(int argc, char* argv[]) {
         cfg.block_size = block_size;
         cfg.resonance_gain_db  = resonance_gain_db;
         cfg.resonance_layer_db = resonance_layer_db;
+        cfg.rt_priority        = true;   // --play = realne audio → RT priorita
         if (!eng.init(cfg) || !eng.loadBank(play_dir)) {
             LOG_ERROR("play", "Nelze nacist banku: %s", play_dir.c_str());
             return 1;

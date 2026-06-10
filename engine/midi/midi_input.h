@@ -13,6 +13,7 @@
 // Engine API uz frontuje vse pres lock-free MidiQueue, takze callback z RtMidi
 // threadu nemusi resit thread-safety. listPorts() vraci dostupne porty.
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -34,8 +35,12 @@ public:
     static std::vector<std::string> listPorts();
 
     // Channel filtr: -1 = OMNI (vse), 0..15 = jen ten MIDI kanal (0-based).
-    void setChannel(int ch) { channel_ = (ch < 0 || ch > 15) ? -1 : ch; }
-    int  channel() const { return channel_; }
+    // Atomic: zapisuje GUI (combo CH i za otevreneho portu), cte RtMidi
+    // callback thread — plain int byl formalni data race.
+    void setChannel(int ch) {
+        channel_.store((ch < 0 || ch > 15) ? -1 : ch, std::memory_order_relaxed);
+    }
+    int  channel() const { return channel_.load(std::memory_order_relaxed); }
     // Cista testovatelna logika: prijmout zpravu se status bytem `status`
     // pri zvolenem `channel` (-1 OMNI)? Channel = status & 0x0F.
     static bool channelAccepts(int channel, uint8_t status) {
@@ -62,7 +67,7 @@ private:
     RtMidiIn*   midi_   = nullptr;
     Engine*     engine_ = nullptr;
     std::string port_name_;
-    int channel_ = -1;  // OMNI default
+    std::atomic<int> channel_{-1};  // OMNI default
 };
 
 } // namespace ithaca
