@@ -178,6 +178,8 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
     const int    total_frames = mic_->file.frames;
 
     bool produced = false;
+    // Bulk rezim ringu: 1 acquire + 1 release za blok misto 3 atomik/vzorek.
+    if (reader_.hasRing()) reader_.beginBlock();
 
     for (int i = 0; i < n_samples; ++i) {
         // Damping crossfade (zbytek predchoziho tonu pri retriggeru).
@@ -294,6 +296,8 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
 
         if (!active_) break;
     }
+
+    reader_.endBlock();   // commit r_ pred refill (ten cte available z atomik)
 
     // Refill heuristika zije v readeru (prah z StreamEngine, half-cap reset
     // pendingu, no-advance-on-drop).

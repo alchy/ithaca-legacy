@@ -54,9 +54,17 @@ public:
     void    holdHiFromLo() noexcept { ring_hi_l_ = ring_lo_l_; ring_hi_r_ = ring_lo_r_; }
     void    bumpLoIdx() noexcept { ring_lo_idx_++; }
 
+    // -- Bulk rezim (perf): 1x za blok snapshot w_ (acquire) + lokalni kurzor,
+    //    1x za blok commit r_ (release) — misto 3 atomickych operaci na kazdy
+    //    frame. Hodnoty bit-exact shodne s popFrame. Volat z process():
+    //    beginBlock() pred render smyckou, endBlock() po ni (PRED refill(),
+    //    ktery cte available() z atomik). release() commitne automaticky.
+    void beginBlock() noexcept;
+    void endBlock() noexcept;
+
     // Per-blok refill heuristika (prah z StreamEngine, half-cap reset
     // pendingu, no-advance-on-drop). Volat na konci process() u aktivniho
-    // hlasu s ringem.
+    // hlasu s ringem, PO endBlock().
     void refill(StreamEngine* se, const std::string& path) noexcept;
 
     // Vypopuj az max_frames do interleaved dst (prepareDamp). Vraci pocet.
@@ -81,6 +89,11 @@ private:
     int64_t  total_frames_     = 0;
     int64_t  file_request_off_ = 0;
     bool     stream_pending_   = false;
+    // Bulk rezim: lokalni kurzory mezi beginBlock/endBlock. blk_w_ je mutable
+    // kvuli re-snapshotu v const ringAvailable() (semantika atomic available).
+    size_t          blk_r_    = 0;
+    mutable size_t  blk_w_    = 0;
+    bool            blk_open_ = false;
     float    ring_lo_l_ = 0.f, ring_lo_r_ = 0.f;
     float    ring_hi_l_ = 0.f, ring_hi_r_ = 0.f;
     int64_t  ring_lo_idx_ = -1;   // -1 = neseedovano

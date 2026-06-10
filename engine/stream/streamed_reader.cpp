@@ -105,8 +105,28 @@ int StreamedSampleReader::popInto(float* dst_interleaved,
     return n;
 }
 
+void StreamedSampleReader::beginBlock() noexcept {
+    if (!ring_ || blk_open_) return;
+    blk_w_    = ring_->snapshotW();
+    blk_r_    = ring_->cursorR();
+    blk_open_ = true;
+}
+
+void StreamedSampleReader::endBlock() noexcept {
+    if (!blk_open_) return;
+    if (ring_) ring_->commitR(blk_r_);
+    blk_open_ = false;
+}
+
 int StreamedSampleReader::ringAvailable() const noexcept {
-    return ring_ ? ring_->available() : -1;
+    if (!ring_) return -1;
+    if (blk_open_) {
+        // Pri 0 refreshni snapshot (stejna semantika jako atomic available();
+        // EOF hard-guard nesmi deaktivovat kvuli stale snapshotu).
+        if (blk_r_ >= blk_w_) blk_w_ = ring_->snapshotW();
+        return (int)(blk_w_ - blk_r_);
+    }
+    return ring_->available();
 }
 
 bool StreamedSampleReader::eofAcquire() const noexcept {
@@ -118,6 +138,7 @@ bool StreamedSampleReader::eofRelaxed() const noexcept {
 }
 
 void StreamedSampleReader::release(StreamEngine* se) noexcept {
+    endBlock();   // pripadny otevreny bulk blok commitni pred vracenim ringu
     if (ring_ && se) se->releaseRing(ring_);
     ring_              = nullptr;
     total_frames_      = 0;
@@ -129,7 +150,21 @@ void StreamedSampleReader::release(StreamEngine* se) noexcept {
 }
 
 bool StreamedSampleReader::popFrameRaw(float& L, float& R) noexcept {
-    return ring_ && ring_->popFrame(L, R);
+    if (!ring_) return false;
+    if (!blk_open_) return ring_->popFrame(L, R);
+    // Bulk rezim: lokalni kurzor nad snapshotem (commit dela endBlock).
+    if (blk_r_ >= blk_w_) {
+        // Re-snapshot pri vycerpani: worker mohl dodat data BEHEM bloku —
+        // semantika prazdneho ringu zustava shodna s per-frame popFrame
+        // (jinak by mid-block dodavka vedla k falesnemu underrunu).
+        blk_w_ = ring_->snapshotW();
+        if (blk_r_ >= blk_w_) return false;
+    }
+    const size_t off = blk_r_ % (size_t)ring_->capacity_frames;
+    L = ring_->buf[off * 2];
+    R = ring_->buf[off * 2 + 1];
+    ++blk_r_;
+    return true;
 }
 
 } // namespace ithaca

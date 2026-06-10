@@ -165,6 +165,8 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
     const bool    streamed     = (mic_->mode == MicLayerMode::Streamed);
 
     bool produced = false;
+    // Bulk rezim ringu: 1 acquire + 1 release za blok misto 3 atomik/vzorek.
+    if (reader_.hasRing()) reader_.beginBlock();
 
     for (int i = 0; i < n_samples; ++i) {
         int p0 = (int)position_;
@@ -311,6 +313,8 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
 
         if (!active_) break;
     }
+
+    reader_.endBlock();   // commit r_ pred refill (ten cte available z atomik)
 
     // Refill heuristika (Streamed) zije v readeru — stejny vzor jako Voice.
     if (streamed && reader_.hasRing() && stream_ && active_) {
