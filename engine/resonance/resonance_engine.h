@@ -84,7 +84,9 @@ public:
     int  maxVoices() const noexcept { return max_voices_.load(std::memory_order_relaxed); }
 
     // Aktualni decay koeficient (vystaven kvuli testum + diagnostice).
-    float exciteDecayPerBlock() const { return decay_per_block_; }
+    float exciteDecayPerBlock() const {
+        return decay_per_block_.load(std::memory_order_relaxed);
+    }
     // Spocti decay tak, aby `last_excite` mel pozadovany tau v ms za audio blok.
     void  setExciteDecayTimeMs(float tau_ms, int block_size, float engine_sr);
 
@@ -138,7 +140,9 @@ private:
     std::atomic<float>  gain_lin_{0.251f};       // ~ -12 dB default
     std::atomic<float>  layer_target_db_{-30.f};
     std::atomic<bool>   enabled_{true};
-    float               decay_per_block_ = 0.998f;  // ~5 s @ 256 samples/48k
+    // Atomic: zapisuje GUI (setExciteDecayTimeMs pres slider), cte audio
+    // thread v processBlock — jedine ne-atomic pole mezi settery byl bug.
+    std::atomic<float>  decay_per_block_{0.998f};   // ~5 s @ 256 samples/48k
     std::atomic<int>    max_voices_{kDefaultMaxResonanceVoices};
     StreamEngine*       stream_          = nullptr;
 

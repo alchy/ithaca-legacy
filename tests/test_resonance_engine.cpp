@@ -275,3 +275,23 @@ TEST_CASE("ResonanceEngine cache-ready API") {
     CHECK_NOTHROW(res.clearCacheReady());
     CHECK_NOTHROW(res.requestRecacheFade());
 }
+
+TEST_CASE("budget gate pri plnem rozpoctu: prezije nejsilnejsi harmonika (targetGain srovnani)") {
+    Fixture fx;
+    PedalState pedal;
+    VoicePool  pool(16);
+    ResonanceEngine res;
+    res.setEnabled(true); res.setGainDb(0.f);
+    res.setMaxVoices(1);
+    const float sr = 48000.f;
+    pedal.setSustainCC(127);
+    res.onPlayedNoteOn(48, 100, fx.bank, pool, pedal, sr);
+    renderNBlocks(res, pedal, 2);   // fading (gain~0) hlasy se hned deaktivuji
+    // Nejsilnejsi harmonika zdroje 48 je 60 (oktava nahoru, harm ~1.0).
+    // Drive gate srovnaval init_gain s currentLevel()==0 cerstve spawnutych →
+    // kazda dalsi harmonika ukradla predchozi a prezila POSLEDNI (72) +
+    // spawn-churn (ring acquire + diskove cteni na kazdou harmoniku).
+    CHECK(res.isResonating(60));
+    CHECK_FALSE(res.isResonating(72));
+    CHECK(res.activeCount() == 1);
+}
