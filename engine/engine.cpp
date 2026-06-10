@@ -195,10 +195,14 @@ bool Engine::overloadRecent(float ms) const noexcept {
     return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
 }
 void Engine::allNotesOff() {
-    midi_q_.push({MidiEvent::AllNotesOff, 0, 0});
+    if (!midi_q_.push({MidiEvent::AllNotesOff, 0, 0}))
+        log::Logger::default_().log("midi", log::Severity::Warning,
+            "MIDI fronta plna — AllNotesOff ZAHOZEN");
 }
 void Engine::sustainPedal(uint8_t cc) {
-    midi_q_.push({MidiEvent::Sustain, cc, 0});
+    if (!midi_q_.push({MidiEvent::Sustain, cc, 0}))
+        log::Logger::default_().log("midi", log::Severity::Warning,
+            "MIDI fronta plna — Sustain CC64=%d ZAHOZEN", (int)cc);
 }
 
 void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {

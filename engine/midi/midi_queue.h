@@ -1,9 +1,12 @@
 #pragma once
 // engine/midi/midi_queue.h
 // ------------------------
-// Lock-free SPSC fronta MIDI udalosti: producent = MIDI/GUI thread, konzument
-// = audio thread. Stejny princip jako RT logger (publish write indexu
-// release/acquire, drop-on-full). Audio thread NIKDY neblokuje.
+// Lock-free MPSC fronta MIDI udalosti: producenti = MIDI callback thread,
+// GUI thread (allNotesOff pri reloadu) a CLI/main thread; konzument = audio
+// thread. Vyukov bounded queue: CAS claim slotu + per-slot seq publish —
+// soubezni producenti se nikdy neperou o tentyz slot (drive SPSC push =
+// ztraceny event + torn write pri kolizi). Drop-on-full. Audio thread
+// NIKDY neblokuje.
 
 #include <atomic>
 #include <cstddef>
@@ -23,28 +26,55 @@ class MidiQueue {
 public:
     static constexpr int MIDI_Q_SIZE = 1024;
 
-    // Producent (MIDI/GUI thread). Vrati false kdyz je fronta plna (drop).
+    MidiQueue() {
+        for (size_t i = 0; i < MIDI_Q_SIZE; ++i)
+            cells_[i].seq.store(i, std::memory_order_relaxed);
+    }
+
+    // Producent (MIDI/GUI/CLI thread — MULTI-producer safe). Slot se claimuje
+    // CAS na w_, data se publikuji per-slot seq store (release). Vrati false
+    // kdyz je fronta plna (drop). Bez zamku a alokaci.
     bool push(const MidiEvent& e) {
-        const size_t w = w_.load(std::memory_order_relaxed);
-        const size_t r = r_.load(std::memory_order_acquire);
-        if (w - r >= MIDI_Q_SIZE) return false;          // plna → drop
-        buf_[w % MIDI_Q_SIZE] = e;
-        w_.store(w + 1, std::memory_order_release);
+        size_t pos = w_.load(std::memory_order_relaxed);
+        Cell* c;
+        for (;;) {
+            c = &cells_[pos % MIDI_Q_SIZE];
+            const size_t   seq = c->seq.load(std::memory_order_acquire);
+            const intptr_t dif = (intptr_t)seq - (intptr_t)pos;
+            if (dif == 0) {
+                if (w_.compare_exchange_weak(pos, pos + 1,
+                                             std::memory_order_relaxed))
+                    break;                       // slot claimnut
+            } else if (dif < 0) {
+                return false;                    // plna → drop
+            } else {
+                pos = w_.load(std::memory_order_relaxed);
+            }
+        }
+        c->e = e;
+        c->seq.store(pos + 1, std::memory_order_release);   // publish
         return true;
     }
 
-    // Konzument (audio thread). Vrati false kdyz je fronta prazdna.
+    // Konzument (JEDINY — audio thread). Vrati false kdyz je prazdna NEBO
+    // slot jeste neni publikovan (probihajici push → event dorazi pristim pop).
     bool pop(MidiEvent& out) {
-        const size_t r = r_.load(std::memory_order_relaxed);
-        const size_t w = w_.load(std::memory_order_acquire);
-        if (r >= w) return false;
-        out = buf_[r % MIDI_Q_SIZE];
-        r_.store(r + 1, std::memory_order_release);
+        const size_t pos = r_.load(std::memory_order_relaxed);
+        Cell* c = &cells_[pos % MIDI_Q_SIZE];
+        const size_t seq = c->seq.load(std::memory_order_acquire);
+        if ((intptr_t)seq - (intptr_t)(pos + 1) < 0) return false;
+        out = c->e;
+        c->seq.store(pos + MIDI_Q_SIZE, std::memory_order_release);
+        r_.store(pos + 1, std::memory_order_relaxed);
         return true;
     }
 
 private:
-    MidiEvent           buf_[MIDI_Q_SIZE];
+    struct Cell {
+        std::atomic<size_t> seq{0};
+        MidiEvent           e;
+    };
+    Cell                cells_[MIDI_Q_SIZE];
     std::atomic<size_t> w_{0};
     std::atomic<size_t> r_{0};
 };
