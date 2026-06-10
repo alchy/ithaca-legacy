@@ -24,6 +24,12 @@ void panForNote(int midi, float spread, float& pan_l, float& pan_r) {
 VoicePool::VoicePool(int pool_size) {
     int n = (std::max)(1, (std::min)(pool_size, kMaxPoolSize));
     voices_.resize((size_t)n);
+    // Damp buffery mimo Voice: jeden souvisly pool (pointery pridelene AZ po
+    // resize — vektor voices_ se uz nikdy nerealokuje, damp_pool_ taky ne).
+    damp_pool_.assign((size_t)n * 2 * kDampMaxFrames, 0.f);
+    for (int i = 0; i < n; ++i)
+        voices_[(size_t)i].setDampBuffer(
+            damp_pool_.data() + (size_t)i * 2 * kDampMaxFrames);
 }
 
 void VoicePool::setStreamEngine(StreamEngine* se) {

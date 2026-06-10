@@ -25,7 +25,7 @@ void Voice::prepareDamp(float engine_sr) {
     damping_  = false;
     damp_len_ = 0;
     damp_pos_ = 0;
-    if (active_ && mic_) {
+    if (active_ && mic_ && damp_buf_) {
         const int damp_frames = (std::min)((int)(kDampingMs * 0.001f * engine_sr),
                                            kDampMaxFrames);
         float env = vel_gain_;

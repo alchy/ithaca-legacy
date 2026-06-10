@@ -158,3 +158,7 @@ TEST_CASE("note_active_count sleduje presne active() stav (ekvivalence se scanem
     }
     pool.reset(); checkAll();
 }
+
+TEST_CASE("sizeof(Voice) je maly (damp buffer zije v poolu, ne inline)") {
+    CHECK(sizeof(Voice) < 512);   // drive ~16.5 kB (16kB damp_buf_ inline)
+}

@@ -55,6 +55,10 @@ public:
     // Renderuj n_samples additivne do out_l/out_r. Vrati true kdyz stale aktivni.
     bool process(float* out_l, float* out_r, int n_samples) noexcept;
 
+    // Pripoji damp buffer (2*kDampMaxFrames floatu) vlastneny VoicePool.
+    // Vola pool pri konstrukci; bez bufferu prepareDamp damp preskoci.
+    void setDampBuffer(float* p) { damp_buf_ = p; }
+
     bool  active()    const { return active_; }
     // True dokud dohrava damping crossfade po prepareDamp (hlas uz je !active,
     // ale ocas MUSI doznit — VoicePool::processBlock ho proto stale zpracovava).
@@ -83,8 +87,11 @@ private:
     float  rel_gain_   = 1.f, rel_step_   = 0.f;
     float  pan_l_ = 0.707f, pan_r_ = 0.707f;
 
-    // Damping crossfade buffer (interleaved stereo).
-    float  damp_buf_[2 * kDampMaxFrames] = {};
+    // Damping crossfade buffer (interleaved stereo, 2*kDampMaxFrames floatu).
+    // Pamet vlastni VoicePool v jednom souvislem poolu — sizeof(Voice) tak
+    // klesl z ~16,5 kB na ~stovky B a skeny poolu (processBlock/findSlot/
+    // citace) nekrokuji pres cache po 16 kB.
+    float* damp_buf_ = nullptr;
     int    damp_len_ = 0, damp_pos_ = 0;
     bool   damping_  = false;
 
