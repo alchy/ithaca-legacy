@@ -38,6 +38,12 @@ TEST_CASE("tritonus / sekunda = slabe (< 0.05)") {
     CHECK(harmonicProximity(61, 60) < 0.05f);   // m2
 }
 
+TEST_CASE("initHarmonicProximity predpocita matici off-RT (idempotentni)") {
+    initHarmonicProximity();
+    initHarmonicProximity();   // druhe volani = no-op
+    CHECK(harmonicProximity(72, 60) == doctest::Approx(1.0f).epsilon(0.05));
+}
+
 TEST_CASE("rozsah [0,1] a koncne hodnoty") {
     for (int t = 0; t < 128; ++t) {
         float v = harmonicProximity(t, 60);

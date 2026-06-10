@@ -1,6 +1,7 @@
 // engine/engine.cpp — viz engine.h.
 #include "engine.h"
 
+#include "resonance/harmonic_proximity.h"
 #include "sample/sample_store.h"
 #include "util/log.h"
 #include "util/sysinfo.h"
@@ -65,6 +66,9 @@ bool Engine::init(const EngineConfig& cfg) {
     resonance_->setStreamEngine(stream_resonance_.get());
     resonance_->setExciteDecayTimeMs(cfg.excite_decay_ms, cfg.block_size,
                                      (float)cfg.sample_rate);
+    // Warm-up 128x128 harmonicke matice (off-RT). Lazy init na audio vlakne
+    // by pri prvni note kazde session stal stovky ms → deterministicky dropout.
+    initHarmonicProximity();
     master_gain_.store(cfg.master_gain, std::memory_order_relaxed);
     dsp_.prepare((float)cfg.sample_rate, cfg.block_size);
     initialized_ = true;
