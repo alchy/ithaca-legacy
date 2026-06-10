@@ -39,8 +39,10 @@ struct RingHandle {
     std::atomic<size_t> r_{0};
 
     // Worker po dokonceni posledniho streamovaciho chunku (kdyz frame_off
-    // dosahl konce souboru) nastavi eof_=true → Voice po precteni vseho
-    // ukonci hlas cisto bez underrun fade.
+    // dosahl konce souboru) nastavi eof_=true. Voice ho cte jen diagnosticky
+    // (do logu) — cisty konec vs. underrun rozlisuje pres file_request_off_
+    // a OBA dozni stejnym 5ms fade (cisty konec = Info, underrun = Warning).
+    // ResonanceVoice eof_ cte (acquire) pro hold-last-sample / konec hlasu.
     std::atomic<bool>   eof_{false};
 
     // Allocator flag (acquireRing / releaseRing).
@@ -184,7 +186,8 @@ public:
     int  refillThresholdFrames() const noexcept {
         return refill_threshold_.load(std::memory_order_relaxed);
     }
-    // Engine to vola po setBlockSize: max(capacity/2, block_size*4).
+    // Engine::recomputeRefillThreshold (init/setBlockSize) sem posila
+    // min(max(capacity/2, block_size*4), capacity-64).
     void setRefillThresholdFrames(int v) noexcept {
         refill_threshold_.store(v, std::memory_order_relaxed);
     }

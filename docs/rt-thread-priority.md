@@ -1,6 +1,12 @@
-# RT priorita audio vlakna — plan napric platformami
+# RT priorita audio vlakna — napric platformami
 
-> Status: **plan / navrh**, neimplementovano. Vychazi z pozorovani na Windows
+> Status: **implementovano** (`engine/util/rt_priority.{h,cpp}` + hook
+> v `Engine::processBlock`; viz Pull-time briefing nize). Od vetve
+> `fix/revize-2026-06-10` je RT priorita **opt-in pres `EngineConfig::rt_priority`**
+> (default `false`): zapinaji ji jen realne audio aplikace — GUI
+> (`app_context.cpp`) a CLI `--play`. Testy a offline batch render RT prioritu
+> NEDOSTAVAJI (SCHED_FIFO na main threadu by hrozil vyhladovenim systemu /
+> RLIMIT_RTTIME killem). Puvodni motivace: pozorovani na Windows
 > (main, commit `cd53292`): DSP LOAD osciluje 40–120 % i bez aktivniho hrani —
 > indicator pocita `render_us / block_period_us`, pri konstantnim mnozstvi prace
 > kolisani znamena, ze kolisa **rychlost CPU nebo dostupnost casu**. Bezne priciny
@@ -22,22 +28,26 @@
 Pattern presne kopiruje `engine/util/denormals.h`:
 
 ```cpp
-// engine/util/rt_priority.h
+// engine/util/rt_priority.h (implementovany stav)
 namespace ithaca {
 
 // Nastavi RT prioritu / kernel-level RT politiku na aktualnim vlakne.
 // Idempotentni — pri opakovanem volani zustane RT zapnute.
-// Vraci true pri uspechu, false pri chybe (typicky EPERM na Linuxu,
-// AvSet failure na Windows, mach status non-zero na macOS).
-// Nezhazi proces — caller loguje warning a pokracuje na default priorite.
+// Nezhazi proces — caller loguje a pokracuje na default priorite.
 //
 // Parametry pripadne tunuji kernel hint (macOS time_constraint, Linux rtprio
 // hodnotu) podle realne periody audio bloku.
+enum class RtAudioStatus {
+    Full    = 0,   // ok
+    Partial = 1,   // castecny — primary API ok, sekundarni (MMCSS) ne
+    Failed  = 2,   // primary API selhalo, default scheduling
+};
 struct RtAudioParams {
     int sample_rate;   // napr. 48000
     int block_size;    // napr. 256
 };
-bool enableRealtimeAudio(const RtAudioParams& p) noexcept;
+// err_code je out param (errno / GetLastError / kern_return_t; smi byt nullptr).
+RtAudioStatus enableRealtimeAudio(const RtAudioParams& p, int* err_code) noexcept;
 
 // Vrati ven OS zdroje (pouze Windows MMCSS task handle, jinde no-op).
 // Volat pri shutdown audio vlakna; nevolat z RT.
@@ -46,19 +56,27 @@ void disableRealtimeAudio() noexcept;
 } // namespace ithaca
 ```
 
-Pouziti v `Engine::processBlock` (analog k existujicimu FTZ/DAZ guardu):
+Pouziti v `Engine::processBlock` (analog k existujicimu FTZ/DAZ guardu) — guard
+je **opt-in pres `cfg_.rt_priority`** (default `false`; GUI a CLI `--play`
+nastavuji `true`):
 
 ```cpp
 static thread_local bool rt_set = false;
-if (!rt_set) {
-    enableFlushDenormals();
-    ithaca::RtAudioParams p{ cfg_.sample_rate, cfg_.block_size };
-    if (enableRealtimeAudio(p)) {
-        LOG_RT_INFO("audio", "RT priorita aktivni (sr=%d block=%d)",
-                    p.sample_rate, p.block_size);
-    } else {
-        LOG_RT_WARN("audio",
-                    "RT priorita selhala — bezi na default priorite (jitter risk)");
+if (!rt_set && cfg_.rt_priority) {
+    const RtAudioParams rp{ cfg_.sample_rate, cfg_.block_size };
+    int err = 0;
+    switch (enableRealtimeAudio(rp, &err)) {
+        case RtAudioStatus::Full:
+            LOG_RT_INFO("audio", "RT priorita aktivni (sr=%d block=%d)", ...);
+            break;
+        case RtAudioStatus::Partial:   // Win: TIME_CRITICAL ano, MMCSS ne
+            LOG_RT_INFO("audio", "RT priorita castecna ... (err=%d)", err);
+            break;
+        case RtAudioStatus::Failed:
+            LOG_RT_WARN("audio", "RT priorita selhala (err=%d) — default "
+                        "scheduling, jitter risk", err);
+            // + per-platform LOG_RT_INFO TIP (limits.conf / secpol / sandbox)
+            break;
     }
     rt_set = true;
 }

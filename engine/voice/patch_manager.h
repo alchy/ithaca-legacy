@@ -23,7 +23,8 @@ struct VoiceSpec {
 // Jednoduchy deterministicky RNG (LCG) — bez globalniho stavu, testovatelne.
 struct RoundRobinState {
     // last[midi][slot] = index naposledy hrane varianty (-1 = jeste nehrano).
-    // Pole je rezervovano lazy az pri pouziti, aby struct zustal levny.
+    // Cele pole inicializuje konstruktor eager na -1 (~8 KB, zije po celou
+    // dobu behu — zadna lazy alokace).
     int  last[128][16];
     uint32_t rng = 0x12345678u;            // seed; meni se pri kazdem vyberu
     RoundRobinState() { for (auto& n : last) for (int& s : n) s = -1; }

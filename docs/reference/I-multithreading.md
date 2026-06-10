@@ -4,10 +4,11 @@ Dokument popisuje **model vláken a synchronizace napříč celým enginem**. Ne
 tabulka souborů — je to cross-cutting pohled na to, která vlákna existují, jak
 mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 
-> Přehled: engine má 5 + N kategorií vláken. Ústřední princip je, že **audio
+> Přehled: engine má 6 + N kategorií vláken. Ústřední princip je, že **audio
 > vlákno nikdy neblokuje ani nealokuje** — veškerý sdílený stav přechází přes
-> lock-free struktury (SPSC fronty, atomiky) nebo protokol „graceful pause"
-> (bank reload). Disk I/O se děje výhradně ve worker vláknech.
+> lock-free struktury (MPSC/SPSC fronty, atomiky) nebo protokol „graceful pause"
+> s **block-epoch handshake** (bank reload, recache). Disk I/O se děje výhradně
+> ve worker vláknech.
 
 ---
 
@@ -15,12 +16,13 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 
 | Vlákno | Co dělá | Co NESMÍ (RT pravidla) | Spouští / joinuje kdo |
 |--------|---------|------------------------|-----------------------|
-| **Audio vlákno** (`processBlock`) | Drainuje `MidiQueue` → aktualizuje `PedalState`, `VoicePool`, `ResonanceEngine`; renderuje hlasy; aplikuje master gain + `DspChain`; počítá peak metr. | Alokovat paměť, volat blokující I/O, zamykat mutexy (vyjma atomik), volat ne-RT logger (`log()`). | miniaudio (interní OS audio thread); `AudioDevice::start()` / `AudioDevice::stop()`. |
+| **Audio vlákno** (`processBlock`) | Při prvním bloku per thread: FTZ/DAZ + (jen při `cfg_.rt_priority`, tj. GUI a CLI `--play`) `enableRealtimeAudio()` — SCHED_FIFO / time-constraint / MMCSS, soft-failure s `LOG_RT_*` TIPem. Tikne `block_epoch_`; drainuje `MidiQueue` → aktualizuje `PedalState`, `VoicePool`, `ResonanceEngine`; renderuje hlasy; aplikuje master gain + `DspChain`; počítá peak + DSP load metr. | Alokovat paměť, volat blokující I/O, zamykat mutexy (vyjma atomik), volat ne-RT logger (`log()`) — diagnostika jde přes `LOG_RT_*`. | miniaudio (interní OS audio thread); `AudioDevice::start()` / `AudioDevice::stop()`. |
 | **GUI hlavní vlákno** | GLFW event loop + ImGui render loop (~60 Hz vsync); čte diagnostické atomiky z `Engine`; volá `engine.setMasterGain/setReleaseMs/…`; volá `engine.reloadBank()`. | Nic specificky zakázáno — GUI je non-RT. | `main()` ve `app/gui/main.cpp`; žije po celou dobu procesu. |
 | **MIDI callback vlákno** | RtMidi interní vlákno; `MidiInput::callback()` překládá MIDI bajty → `engine.noteOn/noteOff/sustainPedal/allNotesOff()` (vše jen `midi_q_.push()`). | Volat cokoli blokujícího; přímý přístup na engine state mimo frontu. | RtMidi knihovna; `MidiInput::open()` / `MidiInput::close()`. |
 | **Stream worker thready — main pool** | `StreamEngine::workerLoop()` (N vláken, **auto-sized** v `Engine::init` z `hardware_concurrency()`: `clamp(jádra/2, 2, 8)`; configem lze přebít); vybírají `StreamRequest` z `StreamRequestQueue` (mutex na pop); čtou WAV z disku pres `readWavRange()`; zapisují do `RingHandle::buf` (`push()`); nastavují `ring->eof_`. | — (non-RT; mohou blokovat na disk I/O). | `StreamEngine::start()` v `engine/stream/stream_engine.cpp`; `StreamEngine::stop()` (join). Engine::init() → stream_main_->start(). |
 | **Stream worker thready — resonance pool** | Totéž pro druhý `StreamEngine` (`stream_resonance_`); izolovaný od main poolu (separátní ringy + fronta). Auto-sized `clamp(jádra/4, 1, 4)`. | — | Stejný vzor; `Engine::init()` → `stream_resonance_->start()`; `Engine::~Engine()` → `stop()`. |
 | **Log-flush vlákno** | Každých 10 ms volá `Logger::default_().flushRTBuffer()` — přesouvá záznamy z RT ring bufferu do konzole/souboru/subscriberů. | — | `main()` ve `app/gui/main.cpp`; `std::thread log_thr`; joinován před `ctx.shutdown()`. |
+| **Recache vlákno** (`recache_thread_`) | Background přestavba RAM cache rezonance po pohybu GUI slideru „Resonance Layer" (`Engine::rebuildResonanceCache`): per iteraci `clearCacheReady` + `requestRecacheFade` + `waitForAudioQuiesce(2, 500)` + 15 ms, pak `buildResonanceCache` (disk I/O) + `setCacheReady`; coalescing přes `recache_pending_`. Stav {running, pending} pod mutexem `recache_mtx_` (všechny strany non-RT). | — (non-RT; smí blokovat na disk I/O) | Spawnuje `Engine::rebuildResonanceCache` (GUI vlákno); **join** v `Engine::reloadBank` (před přepisem banky; po joinu reset stavu pod mutexem) a v `Engine::~Engine()`. |
 
 > **Poznámka k CLI:** `app/cli/main.cpp` má tentýž log-flush vzor (100 Hz sleep
 > v `log_thr`) a identický audio callback.
@@ -29,19 +31,23 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 
 ## Sdílení dat / synchronizace
 
-### MidiQueue — SPSC lock-free (1024 slotů)
+### MidiQueue — MPSC lock-free, Vyukov bounded (1024 slotů)
 
-- **Typ:** SPSC fronta (`engine/midi/midi_queue.h`); producent = MIDI/GUI vlákno,
-  konzument = audio vlákno.
-- **Memory ordering:** `push`: čte `r_` s `acquire`, zapisuje `w_` s `release`.
-  `pop`: čte `w_` s `acquire`, zapisuje `r_` s `release`. Standardní SPSC pattern.
+- **Typ:** MPSC fronta (`engine/midi/midi_queue.h`); producenti = MIDI callback,
+  GUI i CLI/main vlákno (souběžně legální), konzument = jediný — audio vlákno.
+- **Memory ordering:** Vyukov pattern přes per-slot `seq`: producent `seq.load(acquire)`
+  → CAS claim `w_` → zápis dat → `seq.store(pos+1, release)` (publish). Konzument
+  `seq.load(acquire)` (páruje s publish) → kopie dat → `seq.store(pos+N, release)`
+  (vrácení slotu). `r_` vlastní výhradně konzument.
 - **Co řeší:** přenos MIDI událostí (NoteOn/Off/Sustain/AllNotesOff) z libovolného
-  non-RT vlákna na audio vlákno bez zámku a bez blokování.
+  non-RT vlákna na audio vlákno bez zámku a bez blokování; souběžní producenti se
+  díky CAS claimu nikdy neperou o tentýž slot (dřívější SPSC push = ztracený
+  event / torn write při kolizi).
 - **Drop-on-full:** fronta je kapacity 1024; při přetečení `push` vrátí `false`
-  a událost se zahodí. Na audio vláknu nedojde k čekání.
+  a událost se zahodí — `Engine` to loguje Warning z non-RT producenta. Na audio
+  vláknu nedojde k čekání.
 - **Použití:** `Engine::noteOn/noteOff/sustainPedal/allNotesOff()` — volatelné z
-  MIDI callback threadu i GUI threadu současně (producent je single-thread z pohledu
-  `w_`, ale MIDI a GUI mohou volat interleaveně — viz Nálezy revize).
+  MIDI callback threadu, GUI threadu i CLI současně.
 
 ---
 
@@ -55,8 +61,9 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 - **Co řeší:** `Voice`/`ResonanceVoice` na audio vlákně posílají refill požadavky
   do worker poolu bez blokování. Více workerů soutěží o pop — mutex na pop side
   je správné řešení pro SPMC bez lock-free MPMC struktury.
-- **Drop-on-full:** při plné frontě `requestRead()` zahazuje požadavek (bez chyby).
-  Voice přežije díky underrun fade (`kUnderrunFadeMs = 5 ms`).
+- **Drop-on-full:** při plné frontě `requestRead()` požadavek zahodí a vrátí
+  `false` (caller pozná, že request nebyl zařazen). Voice přežije díky underrun
+  fade (`kUnderrunFadeMs = 5 ms`).
 
 ---
 
@@ -65,12 +72,22 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 - **Typ:** SPSC kruhový buffer stereo float; producent = worker vlákno,
   konzument = přesně jeden `Voice`/`ResonanceVoice` (audio vlákno).
 - **Memory ordering:** `push`: `r_` acquire, `w_` release. `popFrame`: `w_`
-  acquire, `r_` release. `eof_`: worker zapisuje `release`, voice čte `acquire`.
+  acquire, `r_` release. `eof_`: worker zapisuje `release`, čtení `acquire`.
+  Pozn.: `Voice` `eof_` pro detekci konce **nečte** — čistý konec samplu pozná
+  přes proxy `file_request_off_` (celý soubor už byl vyžádán + ring prázdný)
+  → deactivate + nulový vzorek; skutečný underrun (worker nestíhá) drží poslední
+  známý vzorek a tvaruje ho 5ms fade (viz [D-polyphony.md](D-polyphony.md)).
 - **Co řeší:** přenos streamovaných audio dat z disku (worker) do audio vlákna
   bez alokací a bez blokování.
 - **Alokátor slotů:** `in_use_` atomic bool na každém `RingHandle`. `acquireRing()`
   CAS (`acquire`/`relaxed`); `releaseRing()` store `false` s `release` — po resetu
   kurzorů.
+- **ABA guard (fix/revize-2026-06-10):** `RingHandle::gen_` — generation counter,
+  bump v `releaseRing()`; každý `StreamRequest` nese snapshot `gen` a worker ho
+  ověřuje před každým zápisem (zastaralý request do recyklovaného ringu se
+  zahodí). `producers_` je producer try-lock (jen jeden worker zapisuje do ringu
+  současně). `requestRead()` nově vrací `bool` (false = fronta plná / ring
+  neplatný). Detaily viz [C-buffers.md](C-buffers.md).
 - **Kapacita:** default 8192 stereo frames (~170 ms @ 48 kHz). Dva oddělené pooly:
   `stream_main_` (256 ringů) a `stream_resonance_` (48 ringů).
 
@@ -87,8 +104,9 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
   `MESSAGE_MAX = 256` bajtů; `COMPONENT_MAX = 32` bajtů — vše na zásobníku.
 - **Drop-on-full:** `rt_dropped_` počítá zahozené zprávy (GUI/diag).
 - **Flush vlákno:** `log_thr` v `main.cpp`, 10 ms sleep mezi průchody.
-  Záznamy z RT cesty **nejsou** posílány subscriberům (GUI log strip) — flush
-  jde jen na konzoli/soubor. Subscribery dostávají jen non-RT logy (`log()`).
+  Záznamy z RT cesty **jsou** od fix/revize-2026-06-10 doručovány i subscriberům
+  (GUI log strip): `flushRTBuffer` po vytištění dávky (a po uvolnění `log_mutex_`)
+  notifikuje pod `subscriber_mtx_` — GUI vidí underruny i stav RT priority.
 
 ---
 
@@ -101,6 +119,15 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 | `bank_loading_` | `atomic<bool>` | GUI vlákno / `reloadBank` (`store release`) → audio vlákno (`load acquire`) | release/acquire | „Graceful pause" guard pro bank reload; při `true` audio vrátí ticho |
 | `last_note_on_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOn`) → GUI vlákno (`noteOnRecent`) | relaxed/relaxed | Blikání NOTE indikátoru; 64b write je atomické na x86/arm64 |
 | `last_note_off_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOff`) → GUI vlákno (`noteOffRecent`) | relaxed/relaxed | Blikání OFF indikátoru |
+| `dsp_load_peak_` | `atomic<float>` | audio vlákno (processBlock, peak-hold s decay ~0.5 s) → GUI vlákno (`dspLoadPeak`) | relaxed/relaxed | DSP LOAD dlaždice: čas renderu / perioda bloku |
+| `last_overload_us_` | `atomic<uint64_t>` | audio vlákno (load ≥ 1.0) → GUI vlákno (`overloadRecent`) | relaxed/relaxed | Červené blikání DSP LOAD při minutí deadline |
+| `block_epoch_` | `atomic<uint64_t>` | audio vlákno (tik na začátku každého `processBlock`) → non-RT (`waitForAudioQuiesce`, `blockEpoch()`) | seq_cst/seq_cst | **Block-epoch handshake** pro reload/recache: epoch+2 = in-flight blok doběhl a další blok viděl aktuální flagy |
+| `recache_target_` | `atomic<float>` | GUI vlákno (`rebuildResonanceCache`) → recache vlákno | release/acquire | Cílové layer dB pro bg rebuild bez torn readu `cfg_` |
+
+Pozn.: stav recache `recache_running_` / `recache_pending_` jsou **obyčejné bool
+pod mutexem `recache_mtx_`** (všechny strany jsou non-RT: GUI + bg vlákno) —
+dřívější dvojice atomiků měla lost-update okno (pending nastavený těsně po
+exchange workeru se už nevyzvedl).
 
 ---
 
@@ -112,8 +139,10 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 | `last_underrun_us_` | `atomic<uint64_t>` | audio vlákno (`noteUnderrun()`) → GUI vlákno (`underrunRecent()`) | relaxed/relaxed | Indikátor underrunu v GUI |
 | `refill_threshold_` | `atomic<int>` | GUI/main vlákno (`setRefillThresholdFrames`) → audio vlákno (`refillThresholdFrames()`) | relaxed/relaxed | Prahová hodnota pro refill request |
 | `RingHandle::w_`, `r_` | `atomic<size_t>` | worker (w_) / audio (r_) | release/acquire | SPSC ring kursory |
-| `RingHandle::eof_` | `atomic<bool>` | worker (`release`) → audio vlákno (`acquire`) | release/acquire | Signál konce souboru |
+| `RingHandle::eof_` | `atomic<bool>` | worker (`release`) → audio vlákno (`acquire`) | release/acquire | Signál konce souboru (Voice ho pro detekci konce nečte — viz výše) |
 | `RingHandle::in_use_` | `atomic<bool>` | audio vlákno CAS acquire → kdokoli release | acquire/release | Alokátor slotů |
+| `RingHandle::gen_` | `atomic<uint32_t>` | `releaseRing()` bump → worker (ověření před zápisem) | release/acquire | ABA guard: zastaralý request do recyklovaného ringu se zahodí (viz [C-buffers.md](C-buffers.md)) |
+| `RingHandle::producers_` | `atomic<int>` | worker CAS try-lock | acquire/release | Exkluze souběžných workerů nad jedním ringem |
 
 ---
 
@@ -121,8 +150,13 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 
 | Proměnná | Typ | Producent → konzument | Ordering | Co řeší |
 |---|---|---|---|---|
-| `strength_` | `atomic<float>` | GUI vlákno (`setStrength`) → audio vlákno (`onPlayedNoteOn`) | relaxed/relaxed | Síla rezonance za běhu |
+| `gain_lin_` | `atomic<float>` | GUI vlákno (`setGainDb`, ukládá `10^(dB/20)`) → audio vlákno (`onPlayedNoteOn`) | relaxed/relaxed | Gain rezonance za běhu |
+| `layer_target_db_` | `atomic<float>` | GUI vlákno (`setLayerTargetDb`) → audio vlákno (výběr velocity vrstvy `nearestSlotByRms`) | relaxed/relaxed | Cílové dB pro výběr vrstvy nových rezonancí |
+| `enabled_` | `atomic<bool>` | GUI vlákno (`setEnabled`) → audio vlákno (`onPlayedNoteOn` early-return) | relaxed/relaxed | Zapnutí/vypnutí sympatické rezonance |
+| `decay_per_block_` | `atomic<float>` | GUI vlákno (`setExciteDecayTimeMs`) → audio vlákno (`processBlock`) | relaxed/relaxed | Per-blok decay `last_excite`; dříve jediné ne-atomic pole mezi settery (bug, opraveno) |
 | `max_voices_` | `atomic<int>` | GUI vlákno (`setMaxVoices`) → audio vlákno (`enforceVoiceBudget`) | relaxed/relaxed | Živý strop počtu rezonančních hlasů |
+| `reso_cache_ready_[128]` | `array<atomic<bool>, 128>` | off-RT (`setCacheReady`/`clearCacheReady` — loadBank, recache vlákno) → audio vlákno (`onPlayedNoteOn`) | release/acquire | Per-nota: cílová vrstva má naplněný `preload_resonance` (cache mód) vs. stream mód |
+| `recache_fade_request_` | `atomic<bool>` | recache vlákno (`requestRecacheFade`) → audio vlákno (`processBlock` — exchange + fade aktivních hlasů) | relaxed/relaxed | Bezpečná realokace `preload_resonance` během rebuilu (sekvencování dodá epoch handshake) |
 
 ---
 
@@ -179,6 +213,7 @@ main() / main.cpp
         │     │           (raw StreamEngine*)
         │     ├── MidiQueue                   midi_q_
         │     ├── PedalState                  pedal_
+        │     ├── std::thread                 recache_thread_  ← bg rebuild rezonanční cache
         │     └── dsp::DspChain               dsp_
         ├── unique_ptr<AudioDevice>   audio    ← vlastní audio thread (miniaudio)
         ├── MidiInput                 midi     ← vlastní MIDI callback thread (RtMidi)
@@ -205,8 +240,9 @@ main() / main.cpp
    b. `audio->stop()` — zastaví miniaudio, audio vlákno přestane volat callback.
    c. `Logger::clearSubscribers()` — log_buf přestane přijímat.
 3. `ctx` destruktor — `Engine::~Engine()`:
-   a. `stream_main_->stop()` (join workerů).
-   b. `stream_resonance_->stop()` (join workerů).
+   a. `recache_thread_.join()` (pokud běží bg rebuild).
+   b. `stream_main_->stop()` (join workerů).
+   c. `stream_resonance_->stop()` (join workerů).
 4. ImGui/GLFW shutdown.
 
 ### raw `StreamEngine*` v hласech — proč to není use-after-free
@@ -222,6 +258,18 @@ je bezpečná, protože:
   hlasů) **před** `loadBank()` — hlasy přestanou sahat na StreamEngine před tím,
   než se cokoli dalšího děje se StreamEngine ringem.
 
+### Block-epoch handshake — `waitForAudioQuiesce(min_epochs, timeout_ms)`
+
+Audio vlákno na začátku každého `processBlock` inkrementuje atomic
+`block_epoch_` (seq_cst). Non-RT vlákno, které potřebuje mutovat stav sdílený
+s audio vláknem, zavolá `waitForAudioQuiesce(2, 500)`: poll (1 ms sleep), dokud
+epoch nepostoupí o ≥2 od výchozí hodnoty — **epoch+1** = případný in-flight blok
+doběhl, **epoch+2** = následující blok už četl aktuální atomic flagy
+(`bank_loading_` / `recache_fade_request_`). Timeout 500 ms kryje stojící audio
+(testy, odpojené zařízení) — pak je mutace triviálně bezpečná. Nahrazuje dřívější
+sleep heuristiky, které neplatily pro block_size až 8192 (~170 ms perioda).
+Používá `reloadBank` i recache vlákno.
+
 ### reloadBank — graceful pause (bank_loading_ guard)
 
 Sekvence v `Engine::reloadBank()` (volat POUZE z non-RT vlákna):
@@ -230,8 +278,11 @@ Sekvence v `Engine::reloadBank()` (volat POUZE z non-RT vlákna):
 1. allNotesOff()         → push AllNotesOff do midi_q_ (non-blocking)
 2. sleep 50 ms           → release ramp dobíhá
 3. bank_loading_.store(true, release)
-4. sleep 10 ms           → in-flight processBlock doběhne (< 6 ms @ 256/48k)
-5. pool_->reset()        → hard-stop všech Voice (ring uvolněn)
+4. waitForAudioQuiesce(2, 500)  → epoch handshake: in-flight blok doběhl
+                                  a další blok už viděl flag (vrací ticho)
+5. recache_thread_.join() → bg rebuild nesmí běžet při přepisu banky;
+                            po joinu reset running/pending pod recache_mtx_
+   pool_->reset()        → hard-stop všech Voice (ring uvolněn)
    resonance_->reset()   → hard-stop všech ResonanceVoice
 6. loadBank(dir)         → disk I/O (audio vlákno mlčí)
 7. bank_loading_.store(false, release)
@@ -239,6 +290,16 @@ Sekvence v `Engine::reloadBank()` (volat POUZE z non-RT vlákna):
 
 Audio vlákno na začátku `processBlock` čte `bank_loading_.load(acquire)` — při
 `true` vrátí ticho a přeskočí veškerý render.
+
+### Recache — handshake mezi GUI, recache vláknem a audiem
+
+`rebuildResonanceCache(target_db)` (GUI): uloží cíl do `recache_target_`
+(atomic) a pod `recache_mtx_` buď nastaví `pending_` (rebuild běží → coalesce),
+nebo zvedne `running_` a spawne `recache_thread_`. Bg smyčka v **každé iteraci**:
+`clearCacheReady()` (nové spawny → stream mód) → `requestRecacheFade()` (audio
+fadene aktivní cache-mód hlasy) → `waitForAudioQuiesce(2, 500)` + 15 ms (fade
+doběhl) → `buildResonanceCache` (disk I/O) → `setCacheReady()`. Teprve po
+handshaku je realokace `preload_resonance` bezpečná — audio do ní už nesahá.
 
 ---
 
@@ -274,33 +335,32 @@ Audio vlákno na začátku `processBlock` čte `bank_loading_.load(acquire)` —
    `StreamEngine::underrunRecent()` volají `nowMicros()` (steady_clock) z GUI
    vlákna, ale `StreamEngine::noteUnderrun()` — volaný z Voice na audio vláknu
    po underrunu — volá `nowMicrosSE()` (steady_clock) **na audio vláknu**
-   (`stream_engine.cpp:240`). `std::chrono::steady_clock::now()` není garantovaně
+   (`stream_engine.cpp`). `std::chrono::steady_clock::now()` není garantovaně
    RT-safe na všech platformách (macOS: `clock_gettime(CLOCK_UPTIME_RAW)` je OK;
    Linux: závisí na vNDSO). V praxi OK, ale formálně RT porušení.
 
-2. **`log()` (non-RT) na audio vláknu** — `engine.cpp` volá
-   `Logger::default_().log(...)` uvnitř `processBlock` při drainování MidiQueue
-   (midi_off, midi_cc, AllNotesOff event logy, řádky 174, 188, 199). Tato cesta
-   drží `log_mutex_` a potenciálně alokuje string — **RT porušení**.
-   `LOG_RT_*` makra jsou připravena, ale event drain používá `log()`.
+2. ~~**`log()` (non-RT) na audio vláknu**~~ — **vyřešeno (fix/revize-2026-06-10):**
+   všechny drain logy v `processBlock` (midi_on, midi_off, midi_cc, AllNotesOff,
+   resonance count) i logy stavu RT priority jdou přes `LOG_RT_*` ring — audio
+   vlákno `log_mutex_` nezamyká. Viz Nálezy revize.
 
 3. **`StreamRequest::path` kopie na audio vláknu** — `Voice`/`ResonanceVoice`
    v `process()` volají `stream_->requestRead(..., path, ...)`, kde `path` je
    `std::string` z `MicLayer::file.path`. `requestRead` ji kopíruje do
    `StreamRequest::buf_` (`buf_[w % kCap] = r` v push). Kopie `std::string`
-   může alokovat (pokud path > SSO ~22 znaků). Komentář v `stream_engine.h:70–76`
+   může alokovat (pokud path > SSO ~22 znaků). Komentář v `stream_engine.h`
    toto uznává jako known issue s poznámkou FUTURE (držet `const char*` z
    dlouhožijícího stringu v Bank).
 
 4. **`cfg_.release_ms` — ne-atomický float** — `Engine::setReleaseMs()` zapisuje
    `cfg_.release_ms` z GUI vlákna; `scaledReleaseMs()` jej čte z audio vlákna.
-   Komentář v `engine.cpp:333–338` toto vědomě akceptuje: na x86/arm64 je 4B
+   Komentář v `engine.cpp` toto vědomě akceptuje: na x86/arm64 je 4B
    aligned float write de-facto atomický a přechodná hodnota je neslyšitelná.
    Formálně je to UB (data race), i když prakticky bezpečné.
 
 5. **`activeMidiNotes` / `currentGainFor`** — iterují přes `VoicePool::voicesView()`
    z GUI vlákna; `Voice::active()`, `Voice::midi()`, `Voice::currentLevel()` jsou
-   ne-atomické fieldy zapisované audio vláknem. Komentář v `engine.cpp:298–300`
+   ne-atomické fieldy zapisované audio vláknem. Komentář v `engine.cpp`
    akceptuje „lehký lag". Formálně data race (UB), prakticky benigní na x86/arm64
    (word-tearing nenastane pro bool/int/float).
 
@@ -311,10 +371,10 @@ Audio vlákno na začátku `processBlock` čte `bank_loading_.load(acquire)` —
 | Oblast | Dokument | Relevance pro multithreading |
 |---|---|---|
 | A — Core / scaffold | [A-core.md](A-core.md) | Engine fasáda, `processBlock`, `reloadBank`, log makra |
-| B — Zpracování eventů | [B-events.md](B-events.md) | `MidiQueue` SPSC, `PedalState` single-thread, MIDI callback vlákno |
+| B — Zpracování eventů | [B-events.md](B-events.md) | `MidiQueue` MPSC (Vyukov), `PedalState` single-thread, MIDI callback vlákno |
 | C — Zpracování bufferu | [C-buffers.md](C-buffers.md) | `StreamEngine` worker thready, `StreamRequestQueue` SP-MC, `RingHandle` SPSC |
 | D — Polyfonie | [D-polyphony.md](D-polyphony.md) | `VoicePool` audio-thread only; `Voice` raw StreamEngine* lifetime |
-| E — Rezonance | [E-resonance.md](E-resonance.md) | `ResonanceEngine` atomiky (`strength_`, `max_voices_`); `ResonanceVoice` streaming |
+| E — Rezonance | [E-resonance.md](E-resonance.md) | `ResonanceEngine` atomiky (`gain_lin_`, `layer_target_db_`, `enabled_`, `decay_per_block_`, `max_voices_`, `reso_cache_ready_`); recache vlákno; `ResonanceVoice` streaming |
 | F — Loader | [F-loader.md](F-loader.md) | `loadBank` off-RT (disk I/O); `reloadBank` graceful pause |
 | G — DSP | [G-dsp.md](G-dsp.md) | DSP stage atomické parametry; `DspChain.process()` audio-thread only |
 | H — GUI | [H-gui.md](H-gui.md) | GUI vlákno; log-flush thread; `LogRingBuffer` mutex; `AppContext` lifecycle |
@@ -323,29 +383,21 @@ Audio vlákno na začátku `processBlock` čte `bank_loading_.load(acquire)` —
 
 ## Nálezy revize
 
-### P1 — Non-RT `log()` na audio vlákně
+### P1 — Non-RT `log()` na audio vlákně ✅ VYŘEŠENO (fix/revize-2026-06-10)
 
-**Soubor:** `engine/engine.cpp`, řádky ~174, ~188, ~199 (uvnitř `processBlock`).
+**Soubor:** `engine/engine.cpp` (uvnitř `processBlock`).
 
-```cpp
-// řádek 174 (NoteOff case v MidiQueue drain):
-log::Logger::default_().log("midi_off", log::Severity::Info, ...);
-// řádek 188 (Sustain case):
-log::Logger::default_().log("midi_cc", log::Severity::Info, ...);
-// řádek 199 (AllNotesOff case):
-log::Logger::default_().log("midi_off", log::Severity::Info, ...);
-```
-
-`Logger::log()` drží `log_mutex_` (potenciálně déle při file I/O) a volá
-`nowMicros()` (system_clock). Oba kroky jsou blokující a alokující. Tato vlákna
-bežejí uvnitř `processBlock` → RT porušení. **Oprava:** nahradit `LOG_RT_INFO`
-resp. `LOG_RT_DEBUG` makry (RT ring je připraven, makra existují).
+Všechny logy v drain smyčce (`midi_on`, `midi_off`, `midi_cc`, AllNotesOff,
+změna počtu rezonancí) i logy výsledku RT priority jdou nyní přes **`LOG_RT_*`
+makra** (lock-free SPSC ring) — audio vlákno nezamyká `log_mutex_` (priority
+inversion pod SCHED_FIFO už nehrozí). Aby zprávy nezůstaly jen v konzoli,
+`flushRTBuffer()` je nově doručuje i subscriberům (GUI log strip).
 
 ---
 
 ### P1 — `std::string` kopie v `requestRead` na audio vlákně
 
-**Soubor:** `engine/stream/stream_engine.cpp:149–156` + `stream_engine.h:70–76`.
+**Soubor:** `engine/stream/stream_engine.cpp` + `stream_engine.h`.
 
 `StreamEngine::requestRead()` je voláno z `Voice::process()` a
 `ResonanceVoice::process()` na audio vlákně. Uvnitř kopíruje `path` (std::string)
@@ -358,7 +410,7 @@ long-lived (žije celý lifetime `Bank`); předat jako `const char*` nebo index.
 
 ### P2 — `cfg_.release_ms` — data race (formální UB)
 
-**Soubor:** `engine/engine.cpp:339` (write z GUI), `engine.cpp:357` (read z audio).
+**Soubor:** `engine/engine.cpp` (`setReleaseMs` write z GUI, `scaledReleaseMs` read z audio).
 
 Zápis `cfg_.release_ms = ms` z GUI vlákna a čtení ve `scaledReleaseMs()` na audio
 vláknu je data race dle C++ standardu (UB), i když prakticky neškodné na
@@ -370,7 +422,7 @@ akceptuje.
 
 ### P2 — `activeMidiNotes` / `currentGainFor` — data race (formální UB)
 
-**Soubor:** `engine/engine.cpp:296–328`.
+**Soubor:** `engine/engine.cpp` (`activeMidiNotes`, `currentGainFor`).
 
 Čtení `Voice::active_`, `Voice::midi_`, `Voice::currentLevel()` (vrací `rel_gain_`
 × `vel_gain_`) z GUI vlákna při souběžném zápisu audio vlákna je data race.
@@ -383,7 +435,7 @@ formálně UB. **Oprava:** označit pole `active_`, `midi_`, `rel_gain_` jako
 
 ### P2 — `steady_clock::now()` v `StreamEngine::noteUnderrun()` na audio vlákně
 
-**Soubor:** `engine/stream/stream_engine.cpp:240–242`.
+**Soubor:** `engine/stream/stream_engine.cpp` (`noteUnderrun`).
 
 `noteUnderrun()` je voláno z `Voice::process()` na audio vlákně; interně volá
 `nowMicrosSE()` = `steady_clock::now()`. Na Linuxu závisí na vNDSO (obvykle
@@ -392,15 +444,12 @@ Nit spíše než P2: v praxi OK, ale není to garantováno standardem POSIX.
 
 ---
 
-### Nit — `MidiQueue` producent není striktně single-producer
+### Nit — `MidiQueue` producent není striktně single-producer ✅ VYŘEŠENO (fix/revize-2026-06-10)
 
-**Soubor:** `engine/midi/midi_queue.h:26–32`.
+**Soubor:** `engine/midi/midi_queue.h`.
 
-`MidiQueue` je dokumentována jako SPSC. V praxi mohou `noteOn()` / `noteOff()`
-volat souběžně **MIDI callback vlákno** i **GUI vlákno** (např. GUI tlačítko
-AllNotesOff + příchozí MIDI event). `w_` je sdílen oběma → není to SPSC, ale
-MPSC. Aktuální implementace neserializuje push ze strany producentů → data race
-na `buf_[w % MIDI_Q_SIZE] = e` + `w_.store(w+1)` pokud oba thready vidí stejné
-`w`. **Oprava:** přidat mutex na push side nebo přejít na skutečnou MPSC
-(např. dvojitý CAS). Pravděpodobnost kolize je nízká (MIDI event + GUI souběžně
-v jedné mikrosekundě), ale formálně race condition.
+`MidiQueue` je nyní skutečná **MPSC fronta (Vyukov bounded queue)**: producenti
+claimují sloty CAS na `w_` a publikují per-slot `seq` (release) — souběžné
+volání z MIDI callback vlákna, GUI i CLI je legální bez data race. Konzument
+zůstává jediný (audio vlákno). Drop při plné frontě navíc `Engine` loguje
+Warning.

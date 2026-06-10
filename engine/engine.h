@@ -71,7 +71,8 @@ public:
     ~Engine();
 
     bool init(const EngineConfig& cfg);
-    // Nacti legacy banku do RAM (respektuje cfg.midi_from/to). Vrati false kdyz nic.
+    // Nacti banku (fixed-velocity i dynamic-velocity format) do RAM
+    // (respektuje cfg.midi_from/to). Vrati false kdyz nic.
     bool loadBank(const std::string& dir);
     // Thread-safe reload banky z GUI/CLI threadu, pres "graceful pause":
     //   1) push AllNotesOff do MIDI fronty (audio drain ji zpracuje pristi blok),

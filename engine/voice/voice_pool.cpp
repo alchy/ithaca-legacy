@@ -10,7 +10,8 @@
 namespace ithaca {
 
 namespace {
-// Pan z MIDI noty: stred + rozprostreni dle vzdalenosti od C4 (midi 60).
+// Pan z MIDI noty: stred + rozprostreni dle vzdalenosti od stredu klaviatury
+// (~midi 64.5).
 void panForNote(int midi, float spread, float& pan_l, float& pan_r) {
     constexpr float kPi = 3.14159265f;
     float angle = (kPi / 4.f) + ((float)midi - 64.5f) / 87.f * spread * 0.5f;

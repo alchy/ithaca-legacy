@@ -375,52 +375,41 @@ open question (§9.3) — likely warn + use the main count, ignoring extras.
 
 ### 7.1 What exists today
 
-There **is** a format-detection mechanism, but it is **filename-based over flat
-files** and **ignores subdirectories** — so it does *not* yet recognise the
-folder format:
+Detection **and loading of the folder format are implemented** (matching the
+banner at the top of this document):
 
-- `BankFormat { Legacy, Extended, Unknown }` + `detectFormatFromName`
-  (`bank_index.cpp:65-69`).
-- `scanBank(dir)` (`bank_index.cpp:71-114`) iterates **regular files only**
-  (`bank_index.cpp:81`: `if (!entry.is_regular_file()) continue;`), classifies
-  each filename with `parseLegacyName` (`m###-vel#-f##.wav`) or
-  `parseExtendedName` (`m##-MIC-HASH.wav`), and picks the format by **majority
-  count** (`bank_index.cpp:99-113`).
-- `Engine::loadBank` (`engine.cpp:54`) calls `loadLegacyBank` unconditionally;
-  `loadLegacyBank` (`sample_store.cpp:23-37`) takes `scanBank`'s verdict and:
-  Legacy → load; **Extended → warn "extended format zatim nepodporovan (faze 7)"
-  + empty bank** (`sample_store.cpp:32-36`); Unknown → warn + empty.
-
-**Consequence for the new format:** a folder bank has `m###/` *subdirectories*
-and **no matching flat WAVs at the top level**. `scanBank` skips subdirectories,
-finds zero recognised files → `legacy_count == extended_count == 0` →
-`BankFormat::Unknown` → `loadLegacyBank` logs *"zadne rozpoznane samply"* and
-returns an **empty bank**. So today the folder format is **neither detected nor
-loaded** — nothing ever looks inside subfolders.
+- `BankFormat { Unknown, FixedVelocity, Extended, DynamicVelocity }`
+  (`sample_types.h`); `detectFormatFromName` remains for the flat formats.
+- `scanBank(dir)` (`bank_index.cpp`) runs a **two-stage detection**.
+  **Stage 1 — folder format, has priority:** a single `directory_iterator`
+  pass looks for `m###/` *subdirectories* (`parseNoteFolder`, `m\d{1,3}`,
+  MIDI 0–127). If any exist, the verdict is `BankFormat::DynamicVelocity`;
+  every `.wav` inside each note folder becomes a scan entry with the MIDI
+  number taken from the folder name (filenames are opaque hashes, exactly as
+  proposed in §1), and the flat formats are not even tested.
+  **Stage 2 — flat files:** classifies top-level filenames with
+  `parseFixedVelocityName` (`m###-vel#-f##.wav`) or `parseExtendedName`
+  (`m##-MIC-HASH.wav`) and picks the format by **majority count**.
+- `loadBank` (`sample_store.cpp`) dispatches on the detected format and ingests
+  `FixedVelocity` and `DynamicVelocity` banks through the **same per-sample
+  pipeline** — velocity layers are ordered by measured peak RMS, so §3 works
+  as designed. **Extended** still warns *"extended format zatim nepodporovan
+  (faze 7)"* + empty bank; **Unknown** → warn + empty.
+- The GUI TYPE badge is driven by `Engine::bankType()` (FIXED / DYNAMIC).
 
 > Note: the existing `Extended` format (`m##-MIC-HASH.wav`, mic + hash encoded in
 > the filename) is **still a flat-file format** and is a *different* thing from
 > this proposal's per-note **folders**. Don't conflate them.
 
-### 7.2 What needs to change
+### 7.2 What needed to change (done)
 
-The detection hook is exactly the `is_regular_file` filter. To add the folder
-format:
-
-1. **Directory-aware detection.** Before (or alongside) the flat-file scan, check
-   whether the bank dir contains **`m###/` subdirectories** (a cheap single
-   `directory_iterator` pass testing `is_directory()` + an `m\d{1,3}` name). If
-   so, classify as a new **`BankFormat::Folder`** (or repurpose the currently
-   unused `Extended` loader slot — open question §9).
-2. **Dispatch.** Route `Folder` to a new `loadFolderBank` (§4) instead of the
-   legacy file loop; `Engine::loadBank` would pick the loader by the detected
-   format rather than always calling `loadLegacyBank`.
-3. **GUI.** Expose the detected format via a future `Engine::bankType()` to
-   replace the hard-coded `LEGACY` TYPE badge (`panel_bank.cpp:67-68`).
-
-Detection stays cheap — one directory listing; the presence of any `m###/`
-subdirectory is an unambiguous discriminator from the flat legacy/extended
-layouts (which have none).
+The three integration steps originally proposed here are all implemented:
+directory-aware detection in `scanBank` (the `m###/` subdirectory is an
+unambiguous, single-directory-listing discriminator from the flat layouts),
+dispatch by detected format in `loadBank`, and the `Engine::bankType()`-driven
+GUI badge (no more hard-coded `LEGACY` label). What remains open is listed in
+the banner: round-robin clustering (§6), the velocity curve (§5.1) and mic
+positions (§7).
 
 ---
 

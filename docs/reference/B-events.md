@@ -1,6 +1,6 @@
 # Zpracování eventů
 
-MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlastním vlákně), jsou okamžitě převedeny na strukturu `MidiEvent` a zapsány do lock-free SPSC fronty `MidiQueue`. Audio thread ji vyprazdňuje na začátku každého volání `Engine::processBlock` (viz [A — Jádro enginu](A-core.md)), kde přeloží každou událost na volání `VoicePool`, `PedalState` a `ResonanceEngine`. Stav pedálu udržuje `PedalState`: CC64 (0–127) se ukládá jako spojitá hodnota a z ní se per-strunu přepočítává `damping_[128]` — koeficient tlumení pro half-pedal model. Plně sešlápnutý pedál nastaví damping každé nedržené struny na 1,0 (žádné tlumení), uvolněný pedál na 0,0 (plné tlumení); přechodné hodnoty odpovídají polovičnímu sešlápnutí. Dolní **lost-motion dead-zona** (`cc64 <= kDamperBiteCC`) drží damping na 0 — pokryje oba typy pedálu (kontinuální i on/off) a zajistí spolehlivé ztlumení rezonance po uvolnění i když kontinuální pedál nedojede přesně na 0. Tok eventů je proto: **MIDI vlákno → MidiQueue → audio vlákno → PedalState + VoicePool + ResonanceEngine**. Note-on/off nesou MIDI kanál a procházejí přes `NoteHoldTracker` (cross-channel hold): tlumítko/voice se uvolní teprve když pustí poslední kanál držící danou výšku — viz `note_hold.h` níže.
+MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlastním vlákně), jsou okamžitě převedeny na strukturu `MidiEvent` a zapsány do lock-free **MPSC** fronty `MidiQueue` (Vyukov bounded queue — producentů je legálně víc: RtMidi callback, GUI `allNotesOff`, CLI/main). Audio thread ji vyprazdňuje na začátku každého volání `Engine::processBlock` (viz [A — Jádro enginu](A-core.md)), kde přeloží každou událost na volání `VoicePool`, `PedalState` a `ResonanceEngine`. Stav pedálu udržuje `PedalState`: CC64 (0–127) se ukládá jako spojitá hodnota a z ní se per-strunu přepočítává `damping_[128]` — koeficient tlumení pro half-pedal model. Plně sešlápnutý pedál nastaví damping každé nedržené struny na 1,0 (žádné tlumení), uvolněný pedál na 0,0 (plné tlumení); přechodné hodnoty odpovídají polovičnímu sešlápnutí. Dolní **lost-motion dead-zona** (`cc64 <= kDamperBiteCC`) drží damping na 0 — pokryje oba typy pedálu (kontinuální i on/off) a zajistí spolehlivé ztlumení rezonance po uvolnění i když kontinuální pedál nedojede přesně na 0. Tok eventů je proto: **MIDI vlákno → MidiQueue → audio vlákno → PedalState + VoicePool + ResonanceEngine**. Note-on/off nesou MIDI kanál a procházejí přes `NoteHoldTracker` (cross-channel hold): tlumítko/voice se uvolní teprve když pustí poslední kanál držící danou výšku — viz `note_hold.h` níže.
 
 ---
 
@@ -10,7 +10,7 @@ MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlast
 |---|---|---|
 | `engine/midi/midi_input.h` | Deklarace `MidiInput` — RtMidi wrapper, channel filter | `MidiInput` |
 | `engine/midi/midi_input.cpp` | Implementace otevření portů + RtMidi callbacku | `MidiInput` |
-| `engine/midi/midi_queue.h` | Lock-free SPSC fronta MIDI událostí | `MidiQueue`, `MidiEvent` |
+| `engine/midi/midi_queue.h` | Lock-free MPSC fronta MIDI událostí (Vyukov bounded) | `MidiQueue`, `MidiEvent` |
 | `engine/midi/note_hold.h` | Per-pitch maska kanálů držících notu (cross-channel hold) | `NoteHoldTracker` |
 | `engine/pedal/pedal_state.h` | Deklarace `PedalState` — damping mapa, half-pedal API | `PedalState` |
 | `engine/pedal/pedal_state.cpp` | Implementace recompute a per-strunu damping výpočtu | `PedalState` |
@@ -23,11 +23,11 @@ MIDI události vstupují do systému přes `MidiInput` (RtMidi callback na vlast
 |---|---|---|---|---|---|---|
 | `static std::vector<std::string> listPorts()` | off-RT (GUI / CLI) | — → seznam názvů portů | `app/cli/main.cpp`, `app/gui/app_context.cpp`, `app/gui/panel_topbar.cpp` | `RtMidiIn::getPortName()` — enumerace portů | — | Vytvoří dočasný `RtMidiIn`, projde dostupné porty a vrátí jejich jména. Výjimka z RtMidi je zachycena; v takovém případě se vrátí prázdný nebo částečný seznam. Slouží jen pro zobrazení v UI a CLI (`--midi-list`). |
 | `static bool channelAccepts(int channel, uint8_t status)` | libovolné | `channel` (-1 nebo 0–15), `status` byte → bool | `callback()` | — | `channel`: -1 = OMNI, 0–15 = konkrétní MIDI kanál (0-based). `status`: raw MIDI status byte. | Čistá funkce bez vedlejšího efektu. Pokud `channel < 0`, vrátí vždy `true` (OMNI). Jinak porovná `channel` s dolní nibblou `status` (`status & 0x0F`). Testovatelná samostatně bez instance. |
-| `void setChannel(int ch)` | off-RT (GUI / CLI) | `ch` → nastaví `channel_` | `app/gui/`, `app/cli/main.cpp` | — | `ch`: -1 (OMNI) nebo 0–15; hodnoty mimo rozsah se normalizují na -1. | Jednoduchý setter. Zápis `channel_` není atomický — volat pouze před zahájením callbacku nebo ze stejného vlákna, ze kterého byl port otevřen. |
+| `void setChannel(int ch)` | off-RT (GUI / CLI) | `ch` → nastaví `channel_` | `app/gui/app_context.cpp` (před open), `app/gui/` (combo CH za běhu), `app/cli/main.cpp` | `channel_.store(relaxed)` | `ch`: -1 (OMNI) nebo 0–15; hodnoty mimo rozsah se normalizují na -1. | `channel_` je `std::atomic<int>` — GUI smí kanál měnit i za otevřeného portu, RtMidi callback ho čte jedním atomic loadem per event (plain int byl formální data race). `app_context.cpp` navíc kanál nastavuje **před** `open()`, aby callback hned od otevření filtroval podle správného kanálu. |
 | `bool open(Engine& engine, int port_index)` | off-RT | `port_index` → otevřený port nebo `false` při chybě | `app/cli/main.cpp`, `app/gui/app_context.cpp` | `close()`, `RtMidiIn::openPort()`, `RtMidiIn::ignoreTypes()`, `RtMidiIn::setCallback()` | `port_index`: index portu (< 0 nebo mimo rozsah → 0). | Nejprve zavolá `close()` (idempotentní). Pokud nejsou k dispozici žádné porty, zaloguje varování a vrátí `false`. Nastaví `ignoreTypes(false, true, true)` — přijímá SysEx, ignoruje MIDI timing a active sensing. Zaregistruje `MidiInput::callback` s `this` jako `user_data`. |
 | `bool openVirtual(Engine& engine, const std::string& name)` | off-RT | `name` → virtuální port nebo `false` | `app/cli/main.cpp` | `close()`, `RtMidiIn::openVirtualPort()`, `RtMidiIn::ignoreTypes()`, `RtMidiIn::setCallback()` | `name`: název virtuálního portu (výchozí `"ithaca-cli"`). | Pouze macOS / Linux — umožňuje DAW posílat MIDI dovnitř bez fyzického zařízení. Jinak totožné nastavení jako `open()`. |
 | `void close()` | off-RT | — → uvolní RtMidiIn | destruktor, `open()`, `openVirtual()` | `RtMidiIn::closePort()`, `delete midi_` | — | Idempotentní. Pokud je port otevřen, zavře ho; poté uvolní `midi_` a vynuluje `engine_` a `port_name_`. Destruktor třídy volá `close()` automaticky. |
-| `static void callback(double ts, std::vector<unsigned char>* msg, void* user_data)` | MIDI vlákno (RtMidi) | surová MIDI zpráva → volání `Engine` API | RtMidi runtime | `channelAccepts()`, `engine_->noteOn()`, `engine_->noteOff()`, `engine_->sustainPedal()`, `engine_->allNotesOff()` | `ts`: časové razítko (nevyužito). `msg`: vektor bytů. `user_data`: ukazatel na `MidiInput`. | **Jádro MIDI vstupu.** Bežní na RtMidi vláknu, nikoli na audio threadu. Ochranné podmínky: `msg` nesmí být null, musí mít alespoň 2 bajty, `self` a `self->engine_` nesmí být null. **Channel filter:** zavolá `channelAccepts(self->channel_, status)` — pokud neodpovídá, zpráva se tiše zahodí. Dekódování typu: horní nibble `status & 0xF0` určuje typ zprávy. Kanál `ch = status & 0x0F` se předává do Engine API pro cross-channel hold. `0x90` NoteOn: vel > 0 → `engine_->noteOn(data1, data2, ch)`; vel == 0 → `engine_->noteOff(data1, ch)` (MIDI konvence). `0x80` NoteOff → `engine_->noteOff(data1, ch)`. `0xB0` CC: CC64 (Sustain) → `engine_->sustainPedal(data2)` se spojitou hodnotou; CC120 nebo CC123 → `engine_->allNotesOff()`. Ostatní CC a ostatní typy zpráv jsou ignorovány. `Engine` API okamžitě vloží event do `MidiQueue` (`push` je thread-safe), callback tedy nikdy neblokuje. |
+| `static void callback(double ts, std::vector<unsigned char>* msg, void* user_data)` | MIDI vlákno (RtMidi) | surová MIDI zpráva → volání `Engine` API | RtMidi runtime | `channelAccepts()`, `engine_->noteOn()`, `engine_->noteOff()`, `engine_->sustainPedal()`, `engine_->allNotesOff()` | `ts`: časové razítko (nevyužito). `msg`: vektor bytů. `user_data`: ukazatel na `MidiInput`. | **Jádro MIDI vstupu.** Bežní na RtMidi vláknu, nikoli na audio threadu. Ochranné podmínky: `msg` nesmí být null, musí mít alespoň 2 bajty, `self` a `self->engine_` nesmí být null. **Channel filter:** jeden atomic load `channel_` per event, pak `channelAccepts(chan, status)` — pokud neodpovídá, zpráva se tiše zahodí (note-on/off se před filtrem ještě DIAG-loguje na úrovni Debug, vč. `[FILTERED-OUT]` značky). Dekódování typu: horní nibble `status & 0xF0` určuje typ zprávy. Kanál `ch = status & 0x0F` se předává do Engine API pro cross-channel hold. `0x90` NoteOn: vel > 0 → `engine_->noteOn(data1, data2, ch)`; vel == 0 → `engine_->noteOff(data1, ch)` (MIDI konvence). `0x80` NoteOff → `engine_->noteOff(data1, ch)`. `0xB0` CC: CC64 (Sustain) → `engine_->sustainPedal(data2)` se spojitou hodnotou; CC120 nebo CC123 → `engine_->allNotesOff()`. Ostatní CC a ostatní typy zpráv jsou ignorovány. `Engine` API okamžitě vloží event do `MidiQueue` (`push` je thread-safe), callback tedy nikdy neblokuje. |
 
 ---
 
@@ -37,15 +37,15 @@ Soubor je pouze hlavičkový — veškerá logika je inlinovaná.
 
 | Funkce (signatura) | Vlákno | Vstup → výstup | Volá ji | Volá (proč) | Parametry | Vysvětlení |
 |---|---|---|---|---|---|---|
-| `bool push(const MidiEvent& e)` | MIDI vlákno nebo GUI vlákno (producent) | `e` → `true` (vloženo) / `false` (fronta plná, drop) | `Engine::noteOn()`, `Engine::noteOff()`, `Engine::allNotesOff()`, `Engine::sustainPedal()` | — | `e`: událost k vložení. | **Lock-free producent.** Načte `w_` relaxed (pouze producent ho zapisuje — žádná souběžná modifikace). Načte `r_` acquire (synchronizace s konzumentem, který `r_` zapisuje release). Pokud `w - r >= MIDI_Q_SIZE` (1024), fronta je plná → vrátí `false`, event je zahozen bez blokování. Jinak zapíše `e` do `buf_[w % MIDI_Q_SIZE]` a uloží `w + 1` se **store release** — zaručuje, že data jsou viditelná audio vláknu před tím, než uvidí nový index. |
-| `bool pop(MidiEvent& out)` | Audio vlákno (konzument) | — → `true` + vyplněné `out` / `false` (prázdno) | `Engine::processBlock()` (drain smyčka) | — | `out`: výstupní reference na event. | **Lock-free konzument.** Načte `r_` relaxed (konzument ho jako jediný modifikuje). Načte `w_` acquire (synchronizace s producentem, který `w_` zapisuje release). Pokud `r >= w`, fronta je prázdná → `false`. Jinak zkopíruje `buf_[r % MIDI_Q_SIZE]` do `out` a uloží `r + 1` se **store release** — signalizuje producentovi, že slot je volný. Nikdy neblokuje; audio thread je vždy RT-safe. |
+| `bool push(const MidiEvent& e)` | MIDI / GUI / CLI vlákno (**multi-producer safe**) | `e` → `true` (vloženo) / `false` (fronta plná, drop) | `Engine::noteOn()`, `Engine::noteOff()`, `Engine::allNotesOff()`, `Engine::sustainPedal()` | — | `e`: událost k vložení. | **Lock-free MPSC producent (Vyukov bounded queue).** Slot se claimuje **CAS na `w_`**: producent načte `w_`, přečte per-slot `seq` (acquire) a porovná s pozicí — `seq == pos` znamená volný slot, `compare_exchange_weak(pos, pos+1)` ho atomicky zabere (souběžní producenti se nikdy neperou o tentýž slot; dřívější SPSC push = ztracený event + torn write při kolizi). `seq < pos` = fronta plná → `false`, drop bez blokování. Po claimu zapíše data a **publikuje per-slot** `seq.store(pos+1, release)` — konzument vidí kompletní event. Bez zámků a alokací. |
+| `bool pop(MidiEvent& out)` | Audio vlákno (konzument — JEDINÝ) | — → `true` + vyplněné `out` / `false` (prázdno) | `Engine::processBlock()` (drain smyčka) | — | `out`: výstupní reference na event. | **Lock-free konzument.** Načte `r_` relaxed (konzument ho jako jediný modifikuje), přečte `seq` slotu (acquire). Pokud `seq < r+1`, fronta je prázdná **nebo slot ještě není publikován** (probíhající push → event dorazí příštím pop) → `false`. Jinak zkopíruje event, uvolní slot `seq.store(r + MIDI_Q_SIZE, release)` a posune `r_`. Nikdy neblokuje; audio thread je vždy RT-safe. |
 
 ### Poznámka k memory ordering
 
-Páry acquire/release zajišťují správné happens-before vztahy bez mutexu:
-- Producent: `r_.load(acquire)` vidí poslední `r_.store(release)` konzumenta → bezpečné čtení obsazenosti.
-- Konzument: `w_.load(acquire)` vidí poslední `w_.store(release)` producenta → bezpečné čtení dat i indexu.
-- `w_` čte producent relaxed (sám ho vlastní), stejně `r_` konzument.
+Vyukov queue synchronizuje přes **per-slot sequence číslo** (`Cell::seq`), ne přes globální pár indexů:
+- Producent: `seq.load(acquire)` ověří volnost slotu; CAS na `w_` (relaxed) slot exkluzivně claimne; `seq.store(pos+1, release)` publikuje zapsaná data konzumentovi.
+- Konzument: `seq.load(acquire)` páruje s producentovým release — vidí-li publikované seq, vidí i kompletní data eventu; `seq.store(pos + MIDI_Q_SIZE, release)` vrací slot do oběhu pro další kolo.
+- `r_` vlastní výhradně konzument (relaxed); `w_` sdílejí producenti přes CAS.
 
 ### `MidiEvent`
 
@@ -61,7 +61,7 @@ struct MidiEvent {
 
 Pole `channel` nese 0-based MIDI kanál události a slouží **cross-channel hold** logice (`NoteHoldTracker`, viz níže): při OMNI příjmu (více kanálů, např. Synthesia levá ruka = ch0, pravá = ch1) musí engine vědět, který kanál notu drží, aby note-off jednoho kanálu nezhasl stejnou výšku drženou druhým.
 
-Kapacita fronty: `MIDI_Q_SIZE = 1024` eventů. Překročení → tichý drop (viz Nálezy revize).
+Kapacita fronty: `MIDI_Q_SIZE = 1024` eventů. Překročení → drop; `Engine::noteOn/noteOff/allNotesOff/sustainPedal` zahození logují jako Warning (viz Nálezy revize).
 
 ---
 
@@ -111,18 +111,18 @@ Verifikace: `tests/test_note_hold.cpp` (cross-channel hand-off, idempotence opak
 
 ## Nálezy revize
 
-### RT-safety fronty
+### RT-safety fronty — MPSC ✅ VYŘEŠENO (fix/revize-2026-06-10)
 
-`MidiQueue` je korektně lock-free SPSC. Memory ordering je úplný: producent páruje `r_.load(acquire)` + `w_.store(release)`; konzument `w_.load(acquire)` + `r_.store(release)`. Audio thread nikdy neblokuje.
+Dřívější nález: fronta byla implementována jako SPSC, ale reálně do ní tlačilo více producentů (RtMidi callback + GUI AllNotesOff + CLI) → race na `w_` (ztracený event / torn write). `MidiQueue` je nyní **Vyukov bounded MPSC**: producenti claimují sloty CAS na `w_` a publikují per-slot `seq` (release) — souběžní producenti jsou legální. Konzument zůstává jediný (audio thread). Audio thread nikdy neblokuje.
 
-### Drop-on-full
+### Drop-on-full ✅ VYŘEŠENO (fix/revize-2026-06-10)
 
-Při plné frontě (1024 eventů) `push()` vrátí `false` a event je **tiše zahozen**. `Engine::noteOn/noteOff/sustainPedal/allNotesOff` návratovou hodnotu `push()` ignorují — uživatel ani log nedostane zpětnou vazbu o zahozené události. Za normálního provozu (audio block každých ~5 ms, fronta drénovaná každý blok) je 1024 eventů dostatečná rezerva. Nicméně při bank_loading_ pozastavení drainu (přibližně 60 ms) může při agresivním MIDI vstupu dojít k přeplnění. V takovém okně lze zahodit maximálně 1024 eventů bez indikace.
+Při plné frontě (1024 eventů) `push()` vrátí `false` a event je zahozen — to je správné RT chování (žádné blokování). Dřívější nález: `Engine` návratovou hodnotu ignoroval (tichý drop). Nyní `Engine::noteOn/noteOff/allNotesOff/sustainPedal` při `push() == false` **logují Warning** („MIDI fronta plná — … ZAHOZEN") z non-RT producenta. Za normálního provozu (audio block každých ~5 ms, fronta drénovaná každý blok) je 1024 eventů dostatečná rezerva; přeplnění hrozí hlavně během `bank_loading_` pozastavení drainu při agresivním MIDI vstupu — nyní s indikací v logu.
 
 ### Half-pedal model
 
 `recompute()` se volá O(1)×-krát po každé změně `cc64_` nebo `held_` — tedy při každém note-on, note-off a CC64 eventu zvlášť. Protože `recompute()` vždy prochází všech 128 strun, každá MIDI událost ve frontě způsobí 128 zápisů do `damping_[]`. Při hustém MIDI vstupu (akord + pedál) to jsou nízko-latentní, cache-friendly operace nad malým polem — v praxi zanedbatelné, ale je to O(n_events × 128) zápisů na drain. Bez nálezů z hlediska korektnosti.
 
-### Channel filter race
+### Channel filter race ✅ VYŘEŠENO (fix/revize-2026-06-10)
 
-`channel_` není atomická proměnná. `setChannel()` je určen pro volání z GUI/CLI vlákna, zatímco `callback()` bezi na RtMidi vláknu a čte `channel_`. Pokud by k zápisů `setChannel()` a čtení v callbacku došlo souběžně, jde o data race (UB). V praxi se port otevírá až po nastavení kanálu a za runtime se kanál nemění z GUI — ale formálně je tento přístup bez synchronizace nevhodný.
+`channel_` je nyní `std::atomic<int>` (store/load relaxed) — GUI smí kanál měnit i za otevřeného portu bez data race. `app/gui/app_context.cpp` navíc kanál nastavuje **před** `open()`, takže callback od první události filtruje podle správného kanálu.

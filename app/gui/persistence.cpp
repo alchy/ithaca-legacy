@@ -1,8 +1,8 @@
 // app/gui/persistence.cpp - viz persistence.h.
 //
 // Mini JSON: flat key:value bez nesting. Pro slozitejsi schema (vnorene
-// objekty, pole) by se hodilo vendorovat nlohmann/json, ale na nasich 12
-// klicu staci primitivni parser.
+// objekty, pole) by se hodilo vendorovat nlohmann/json, ale na nasich ~40
+// klicich staci primitivni parser.
 #include "persistence.h"
 #include <cctype>
 #include <cstdlib>

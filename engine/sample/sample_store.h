@@ -4,8 +4,9 @@
 // Nacteni banky do RAM. loadBank() sam detekuje format (scanBank): fixed-velocity
 // (ploche mNNN-velV-fSS.wav) i dynamic-velocity (podslozky mNNN/<hash>.wav). Per-
 // sample ingesce je pro oba formaty stejna; velocity vrstvy se radi dle mereneho
-// peak RMS. All-in-RAM head preload + streaming (faze 4). cache_budget_mb je jen
-// diagnosticky WARNING.
+// peak RMS. All-in-RAM head preload + streaming (faze 4). cache_budget_mb je
+// RAM strop (OOM guard): pri prekroceni se nacitani PRERUSI (ERROR, neuplna
+// banka) misto pádu na bad_alloc.
 
 #include "sample/sample_types.h"
 #include "util/log.h"
@@ -17,8 +18,9 @@ namespace ithaca {
 
 // Nacte banku z adresare `dir` do RAM; format se detekuje automaticky
 // (BankFormat ulozeny v Bank.format). Loguje prubeh pres `logger`.
-// cache_budget_mb: kdyz nactena data presahnou rozpocet, jen WARNING (porad
-// nacita vse). 0 = bez kontroly rozpoctu.
+// cache_budget_mb: RAM strop (OOM guard) — kdyz prubezny soucet preload dat
+// prekroci rozpocet, nacitani se PRERUSI (ERROR log, banka zustane neuplna).
+// 0 = bez kontroly rozpoctu.
 // midi_from / midi_to: nacti jen noty v tomto inkluzivnim rozsahu (default 0..127 = vse).
 // preload_ms: kolik ms zacatku kazdeho samplu drzet v RAM (head preload).
 // Kratky sampl (vejde se do 2 * preload_ms) zustava cely v RAM (FullyLoaded);
