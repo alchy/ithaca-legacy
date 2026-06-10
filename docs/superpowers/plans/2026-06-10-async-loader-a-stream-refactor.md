@@ -4,6 +4,12 @@
 
 **Goal:** Reload banky nikdy nezamrazí GUI (worker thread + modální overlay s progress 0–100 %), načítání je paralelní; streaming kód Voice/ResonanceVoice je sjednocený do `StreamedSampleReader` s bit-exact zárukou + tři levné výkonové výhry.
 
+> **STAV: ✅ VŠECHNY TASKY A1–A5 a B1–B6 DOKONČENY** (commity `9777f7a..477dd54`).
+> 34/34 testových binárek PASS v Release, ASan/UBSan i TSan. Doplněk uživatele
+> (paměťové info + truncated stav v overlay a BANK badge) zapracován jako A1b.
+> Hash fixture potvrzuje bit-exact refactor; bulk čtení ringu má navíc
+> re-snapshot při vyčerpání (sémantika prázdného ringu identická s per-frame).
+
 **Architecture:** Část A — `BankLoadProgress` (atomiky) plněná loaderem, GUI thread v `AppContext` volá stávající `engine.reloadBank()`, render smyčka polluje progress a kreslí overlay; ingest a stavba rezonanční cache jedou worker poolem. Část B — kompozice `StreamedSampleReader` (žádné virtuály), okno/seed/refill sdílené, policy (underrun vs EOF) zůstává ~10 řádků per hlas; poté bulk čtení ringu, O(1) `hasActiveMainVoice`, damp pool. Bit-exact hlídá hash fixture zafixovaná PŘED refactorem.
 
 **Tech Stack:** C++20, doctest (`tests/`, nová binárka test_render_regression → úprava `tests/CMakeLists.txt`), build `cmake --build build -j`, testy `ctest --test-dir build --output-on-failure`. Spec: `docs/superpowers/specs/2026-06-10-async-loader-a-stream-refactor-design.md`.
