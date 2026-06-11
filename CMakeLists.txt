@@ -71,6 +71,7 @@ add_library(ithaca_core STATIC
     engine/io/file_handle.cpp
     engine/io/audio_device.cpp
     engine/sample/bank_index.cpp
+    engine/sample/ithaca_format.cpp
     engine/sample/sample_loader.cpp
     engine/sample/sample_store.cpp
     engine/stream/stream_engine.cpp

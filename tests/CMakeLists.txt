@@ -153,3 +153,7 @@ add_test(NAME test_sha256 COMMAND test_sha256)
 add_executable(test_file_handle test_file_handle.cpp)
 target_link_libraries(test_file_handle PRIVATE ithaca_core doctest)
 add_test(NAME test_file_handle COMMAND test_file_handle)
+
+add_executable(test_ithaca_format test_ithaca_format.cpp)
+target_link_libraries(test_ithaca_format PRIVATE ithaca_core doctest)
+add_test(NAME test_ithaca_format COMMAND test_ithaca_format)
