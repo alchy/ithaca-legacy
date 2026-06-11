@@ -33,7 +33,9 @@ bool parseIthacaHeader(const uint8_t* buf, size_t n, IthacaHeader& out) {
 
 bool parseIthacaIndex(const uint8_t* buf, size_t n, uint32_t entry_count,
                       std::vector<IthacaEntry>& out) {
-    if (n != (size_t)entry_count * kIthacaEntrySize) return false;
+    // u64 soucin: na 32-bit size_t by (entry_count * 64) mohl pretect a
+    // projit kontrolou s vymyslenou delkou (parser je untrusted-input vrstva).
+    if ((uint64_t)entry_count * kIthacaEntrySize != (uint64_t)n) return false;
     out.clear();
     out.reserve(entry_count);
     for (uint32_t i = 0; i < entry_count; ++i) {
