@@ -6,7 +6,6 @@
 
 #include "io/wav_reader.h"
 
-#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
