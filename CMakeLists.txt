@@ -69,6 +69,7 @@ add_library(ithaca_core STATIC
     engine/io/wav_reader.cpp
     engine/io/wav_writer.cpp
     engine/io/file_handle.cpp
+    engine/io/sample_read.cpp
     engine/io/audio_device.cpp
     engine/sample/bank_index.cpp
     engine/sample/ithaca_format.cpp
