@@ -149,3 +149,7 @@ add_test(NAME test_render_regression COMMAND test_render_regression)
 add_executable(test_sha256 test_sha256.cpp)
 target_link_libraries(test_sha256 PRIVATE ithaca_core doctest)
 add_test(NAME test_sha256 COMMAND test_sha256)
+
+add_executable(test_file_handle test_file_handle.cpp)
+target_link_libraries(test_file_handle PRIVATE ithaca_core doctest)
+add_test(NAME test_file_handle COMMAND test_file_handle)
