@@ -157,3 +157,7 @@ add_test(NAME test_file_handle COMMAND test_file_handle)
 add_executable(test_ithaca_format test_ithaca_format.cpp)
 target_link_libraries(test_ithaca_format PRIVATE ithaca_core doctest)
 add_test(NAME test_ithaca_format COMMAND test_ithaca_format)
+
+add_executable(test_ithaca_bank test_ithaca_bank.cpp)
+target_link_libraries(test_ithaca_bank PRIVATE ithaca_core doctest)
+add_test(NAME test_ithaca_bank COMMAND test_ithaca_bank)
