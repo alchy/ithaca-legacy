@@ -4,6 +4,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -13,8 +14,9 @@ namespace ithaca {
 namespace {
 
 #if defined(_WIN32)
-// Win32: ReadFile se sync handle + OVERLAPPED offsetem = pozicovane cteni
-// bez posunu file pointeru (ekvivalent pread).
+// Win32: ReadFile se sync handle + OVERLAPPED offsetem — kazde cteni nese
+// vlastni absolutni offset (sdileny file pointer se NIKDY necte; sync handle
+// ho sice posouva, ale zadna cesta v teto tride na nem nezavisi).
 class Win32FileHandle : public IFileHandle {
 public:
     Win32FileHandle(HANDLE h, uint64_t size) : h_(h), size_(size) {}
@@ -46,7 +48,8 @@ public:
         uint8_t* p = static_cast<uint8_t*>(buf);
         while (n > 0) {
             ssize_t got = ::pread(fd_, p, n, (off_t)off);
-            if (got <= 0) return false;   // 0 = EOF driv nez n bajtu
+            if (got < 0 && errno == EINTR) continue;   // signal — opakuj
+            if (got <= 0) return false;   // 0 = EOF driv nez n bajtu, <0 = chyba
             p += got; off += (uint64_t)got; n -= (size_t)got;
         }
         return true;
@@ -69,7 +72,7 @@ std::shared_ptr<IFileHandle> openFileHandle(const std::string& path) {
     if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return nullptr; }
     return std::make_shared<Win32FileHandle>(h, (uint64_t)sz.QuadPart);
 #else
-    int fd = ::open(path.c_str(), O_RDONLY);
+    int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return nullptr;
     struct stat st{};
     if (::fstat(fd, &st) != 0) { ::close(fd); return nullptr; }

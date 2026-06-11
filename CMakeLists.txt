@@ -16,6 +16,12 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# 64-bit off_t i na 32-bit Unix cilech (armv7 RPi): pakovana banka je jeden
+# multi-GB soubor, pread offsety musi byt 64-bit. Na 64-bit/macOS no-op.
+if(UNIX)
+    add_compile_definitions(_FILE_OFFSET_BITS=64)
+endif()
+
 # Sanitizery (opt-in, jednorazovy audit): -DITHACA_SANITIZE=address,undefined
 # nebo =thread. Prazdne = vypnuto. Pridava -g + frame pointery pro citelne stacky.
 set(ITHACA_SANITIZE "" CACHE STRING "Sanitizer: address | thread | undefined | kombinace (carkou)")
