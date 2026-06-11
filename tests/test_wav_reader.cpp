@@ -6,6 +6,7 @@
 
 #include "io/wav_reader.h"
 
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -101,6 +102,8 @@ TEST_CASE("wavSampleToFloat zname hodnoty") {
     { int16_t v = 0;      CHECK(wavSampleToFloat((const uint8_t*)&v, 16, 1) == 0.f); }
     // PCM24 -1.0 (0x800000 sign-extend)
     { uint8_t b[3] = {0x00, 0x00, 0x80}; CHECK(wavSampleToFloat(b, 24, 1) == doctest::Approx(-1.f)); }
+    // PCM32 -1.0 (dispatch bits==32 podle audio_format 1 vs 3)
+    { int32_t v = INT32_MIN; CHECK(wavSampleToFloat((const uint8_t*)&v, 32, 1) == doctest::Approx(-1.f)); }
     // float32 pass-through
     { float v = 0.5f; CHECK(wavSampleToFloat((const uint8_t*)&v, 32, 3) == 0.5f); }
 }

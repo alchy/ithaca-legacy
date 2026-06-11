@@ -65,7 +65,7 @@ bool parseHeader(std::FILE* f, FmtInfo& fmt,
 
 } // namespace
 
-// Prevode jeden vzorek surovych bajtu na float [-1,1] podle formatu. Sdileno
+// Prevede jeden vzorek surovych bajtu na float [-1,1] podle formatu. Sdileno
 // s dekodovanim blobu (sample_read.cpp) pro bit-exact cteni.
 float wavSampleToFloat(const uint8_t* p, uint16_t bits, uint16_t audio_format) {
     if (audio_format == 3 && bits == 32) {          // IEEE float

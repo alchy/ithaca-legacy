@@ -3,6 +3,7 @@
 
 #include "util/sha256.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace ithaca {
@@ -79,8 +80,10 @@ IthacaBankFile openIthacaBank(const std::string& path) {
             return fail("zaznam: mimo rozsah blobu");
         const uint64_t bps = (e.sample_format == kSampleFmtPcm16) ? 2
                            : (e.sample_format == kSampleFmtPcm24) ? 3 : 4;
-        const uint64_t pcm_bytes = (uint64_t)e.frames * e.channels * bps;
-        if ((uint64_t)e.pcm_data_offset + pcm_bytes > e.entry_size)
+        // Division-form guard: frames * channels * bps by pro obri frames
+        // preteklo u64 (untrusted vstup) — porovnavame delenim.
+        const uint64_t frame_bytes = (uint64_t)e.channels * bps;
+        if ((uint64_t)e.frames > (e.entry_size - (std::min)((uint64_t)e.pcm_data_offset, e.entry_size)) / frame_bytes)
             return fail("zaznam: PCM data presahuji entry_size");
     }
 

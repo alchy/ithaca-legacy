@@ -52,6 +52,7 @@ void Sha256::processBlock(const uint8_t* p) {
 }
 
 void Sha256::update(const void* data, size_t len) {
+    if (len == 0) return;   // memcpy s nullptr zdrojem je UB i pri n=0
     const uint8_t* p = (const uint8_t*)data;
     total_ += len;
     if (buf_len_ > 0) {

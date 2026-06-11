@@ -4,6 +4,7 @@
 // indexovych sekci (metadata+index+names — VZDY pri nacteni; blob hash
 // overuje jen bake --verify), rozsahy zaznamu. Vraci zaznamy + otevreny
 // handle pro readSampleRange (preload + streaming).
+// Prekryvy sekci se NEvaliduji — hash je integrita, ne autenticita (v2 podpis).
 
 #include "io/file_handle.h"
 #include "sample/ithaca_format.h"
