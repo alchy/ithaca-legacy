@@ -197,6 +197,10 @@ def analyze_bank(src_dir, preload_ms):
                 continue
             path = os.path.join(full, fn)
             info = parse_riff(path)
+            # Engine validator (ithaca_bank.cpp) odmita frames<=0 a tim CELOU
+            # banku — zachyt prazdny/poskozeny WAV uz tady s presnym jmenem.
+            if info["frames"] <= 0:
+                raise BakeError(f"{path}: 0 frames (prazdny/poskozeny WAV)")
             hf = head_frames_for(info["frames"], info["sample_rate"], preload_ms)
             mono = read_head_mono(path, info, hf)
             max_rms, peak_frame = sliding_peak_rms(mono, info["sample_rate"])
@@ -388,6 +392,8 @@ def main():
     args = ap.parse_args()
 
     src = args.source_soundbank_dir
+    if not os.path.isdir(src):
+        sys.exit(f"CHYBA: zdrojovy adresar neexistuje: {src}")
     has_note_dirs = any(
         n.lower().startswith("m") and n[1:].isdigit()
         and os.path.isdir(os.path.join(src, n)) for n in os.listdir(src))
