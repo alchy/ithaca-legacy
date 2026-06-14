@@ -7,6 +7,7 @@
 
 #include "io/wav_reader.h"
 #include "sample/ithaca_format.h"
+#include "util/ithaca_crypto.h"
 #include "util/sha256.h"
 
 #include <cmath>
@@ -134,7 +135,9 @@ inline BuiltBlob buildTestIthaca(const char* tag,
                                  bool corrupt_index_hash = false,
                                  uint32_t force_version = ithaca::kIthacaVersion,
                                  uint32_t force_flags = 0,
-                                 bool corrupt_entry_range = false) {
+                                 bool corrupt_entry_range = false,
+                                 const uint8_t* enc_secret = nullptr,
+                                 const char* license_json = nullptr) {
     namespace fs = std::filesystem;
     using namespace ithaca;
     BuiltBlob out;
@@ -200,6 +203,24 @@ inline BuiltBlob buildTestIthaca(const char* tag,
     if (corrupt_entry_range && !out.entries.empty())
         out.entries[0].entry_size = blob_size + 1000000;
 
+    // v2 licensed fixture: zasifruj blob, priprav flags/cipher_id/nonce.
+    uint32_t flags = force_flags;
+    uint8_t  cipher_id = 0;
+    std::array<uint8_t, 32> nonce{}, hmac_tag{};
+    std::string lic = license_json ? std::string(license_json) : std::string();
+    std::array<uint8_t, 32> bank_key{}, mac_key{};
+    if (enc_secret) {
+        flags |= ithaca::kIthacaFlagEncrypted;
+        cipher_id = (uint8_t)ithaca::kCipherSha256Ctr;
+        for (int i = 0; i < 32; ++i) nonce[(size_t)i] = (uint8_t)(0x30 + i);
+        bank_key = ithaca::deriveKey(enc_secret, "ithaca-enc-v2",
+                       (const uint8_t*)lic.data(), lic.size());
+        mac_key = ithaca::deriveKey(enc_secret, "ithaca-mac-v2",
+                       (const uint8_t*)lic.data(), lic.size());
+        ithaca::keystreamXor(bank_key.data(), nonce.data(), 0,
+                             blob.data(), blob.size());   // sifruj cely blob (p0=0)
+    }
+
     // 3) Serializace indexu (LE memcpy — zrcadlo parseIthacaIndex).
     std::vector<uint8_t> index_bytes(index_size, 0);
     for (size_t i = 0; i < out.entries.size(); ++i) {
@@ -226,11 +247,23 @@ inline BuiltBlob buildTestIthaca(const char* tag,
     if (corrupt_index_hash) sha_index[0] ^= 0xFF;
     auto sha_payload = Sha256::hash(blob.data(), blob.size());
 
+    if (enc_secret) {
+        // tag pres metadata + index + names(prazdne v helperu) + license
+        std::vector<uint8_t> macmsg;
+        macmsg.insert(macmsg.end(), (const uint8_t*)metadata.data(),
+                      (const uint8_t*)metadata.data() + metadata.size());
+        macmsg.insert(macmsg.end(), index_bytes.begin(), index_bytes.end());
+        macmsg.insert(macmsg.end(), lic.begin(), lic.end());   // names_size==0
+        hmac_tag = ithaca::hmacSha256(mac_key.data(), 32, macmsg.data(), macmsg.size());
+        std::ofstream lf(out.dir + "/license.ithaca", std::ios::binary);
+        lf.write(lic.data(), (std::streamsize)lic.size());
+    }
+
     // 5) Hlavicka.
     std::vector<uint8_t> header(kIthacaHeaderSize, 0);
     std::memcpy(header.data(), kIthacaMagic, 8);
     std::memcpy(header.data() + 8,  &force_version, 4);
-    std::memcpy(header.data() + 12, &force_flags, 4);
+    std::memcpy(header.data() + 12, &flags, 4);
     std::memcpy(header.data() + 16, &metadata_offset, 8);
     uint64_t msz = metadata.size();
     std::memcpy(header.data() + 24, &msz, 8);
@@ -244,6 +277,9 @@ inline BuiltBlob buildTestIthaca(const char* tag,
     std::memcpy(header.data() + 80, &ec, 4);
     std::memcpy(header.data() + 88,  sha_index.data(), 32);
     std::memcpy(header.data() + 120, sha_payload.data(), 32);
+    header[152] = cipher_id;
+    std::memcpy(header.data() + 154, nonce.data(), 32);
+    std::memcpy(header.data() + 186, hmac_tag.data(), 32);
 
     // 6) Zapis: hlavicka + metadata + index + (names) + pad + blob.
     std::ofstream f(out.ithaca_path, std::ios::binary);
