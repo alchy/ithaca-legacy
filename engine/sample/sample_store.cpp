@@ -1,9 +1,11 @@
 // engine/sample/sample_store.cpp — viz sample_store.h.
 #include "sample/sample_store.h"
 
+#include "io/sample_read.h"
 #include "io/wav_reader.h"
 #include "resonance/resonance_layer_select.h"
 #include "sample/bank_index.h"
+#include "sample/ithaca_bank.h"
 #include "sample/sample_loader.h"
 
 #include <algorithm>
@@ -102,8 +104,9 @@ PreparedSample prepareSampleFile(int midi, const std::string& full_path,
         return out;   // OOM guard paralelniho cteni (commit by stejne odmitl)
     }
 
-    // Nacti preload_head [0 .. head_frames).
-    WavData head = readWavRange(full_path, 0, mic.head_frames);
+    // Nacti preload_head [0 .. head_frames). Pres dispatcher: blob==null u WAV
+    // → deleguje na readWavRange (shodne chovani; jeden cteci kanal pro oba formaty).
+    WavData head = readSampleRange(mic.file, 0, mic.head_frames);
     if (!head.valid) {
         logger.log("bank", log::Severity::Warning,
                    "Nelze nacist preload (read failed): %s", filename.c_str());
@@ -188,6 +191,141 @@ void logBankSummary(const Bank& bank, log::Logger& logger, int cache_budget_mb) 
     }
 }
 
+// Priprava JEDNOHO zaznamu pakovane banky: ZADNA analyza (RMS/attack jsou
+// baked v indexu — autoritativni), jen preload head pres readSampleRange.
+// Mode FullyLoaded/Streamed zustava runtime rozhodnuti (baked frames vs
+// aktualni preload_ms).
+PreparedSample preparePackedSample(const IthacaEntry& e,
+                                   const std::shared_ptr<IFileHandle>& blob,
+                                   const std::string& ithaca_path,
+                                   log::Logger& logger, int preload_ms,
+                                   size_t budget_bytes,
+                                   std::atomic<size_t>& approx_bytes) {
+    PreparedSample out;
+    out.midi     = (int)e.midi;
+    out.filename = ithaca_path;   // puvodni jmeno nedrzime (jen pro logy)
+
+    MicLayer mic;
+    mic.mic_name           = "stereo";
+    mic.file.path          = ithaca_path;
+    mic.file.frames        = (int)(std::min)(e.frames, (int64_t)INT32_MAX);
+    mic.file.sample_rate   = (int)e.sample_rate;
+    mic.file.valid         = true;
+    mic.file.blob          = blob;
+    mic.file.pcm_offset    = e.entry_offset + e.pcm_data_offset;
+    mic.file.channels      = e.channels;
+    mic.file.sample_format = e.sample_format;
+
+    const int preload_frames =
+        (int)((int64_t)preload_ms * mic.file.sample_rate / 1000);
+    if (mic.file.frames <= preload_frames * 2) {
+        mic.mode        = MicLayerMode::FullyLoaded;
+        mic.head_frames = mic.file.frames;
+    } else {
+        mic.mode        = MicLayerMode::Streamed;
+        mic.head_frames = preload_frames;
+    }
+
+    const size_t est = (size_t)mic.head_frames * 2 * sizeof(float);
+    if (budget_bytes &&
+        approx_bytes.fetch_add(est, std::memory_order_relaxed) + est
+            > budget_bytes * 2) {
+        return out;   // OOM guard (stejne jako prepareSampleFile)
+    }
+
+    WavData head = readSampleRange(mic.file, 0, mic.head_frames);
+    if (!head.valid) {
+        logger.log("bank", log::Severity::Warning,
+                   "Packed: nelze nacist preload midi %d @ %llu",
+                   out.midi, (unsigned long long)mic.file.pcm_offset);
+        return out;
+    }
+    mic.preload_head = std::move(head.samples);
+
+    // Baked analyza z indexu — zadne mereni.
+    const float rms = e.rms_db;
+    const int   ae  = (int)e.attack_end;
+    if (mic.mode == MicLayerMode::Streamed)
+        mic.resonance_start_frame = ae;
+
+    out.bytes = mic.preload_head.size() * sizeof(float);
+    SampleAsset asset;
+    asset.peak_rms_db      = rms;
+    asset.attack_end_frame = ae;
+    asset.mics.push_back(std::move(mic));
+    out.slot.rms_db = rms;
+    out.slot.variants.push_back(std::move(asset));
+    out.ok = true;
+    return out;
+}
+
+// Nacteni pakovane banky: kostra primo z indexu (zadny directory scan, zadna
+// RMS analyza, zadny sort — index je predrazeny dle (midi, rms)). Faze heads
+// bezi paralelne jako u adresarove banky; merge ve scan poradi = poradi
+// indexu, takze sloty prijdou vzestupne dle baked RMS.
+void loadPackedBank(Bank& bank, const std::string& dir, log::Logger& logger,
+                    int cache_budget_mb, int midi_from, int midi_to,
+                    int preload_ms, BankLoadProgress* progress) {
+    namespace fs = std::filesystem;
+    const std::string ithaca_path = (fs::path(dir) / kIthacaFileName).string();
+    IthacaBankFile pf = openIthacaBank(ithaca_path);
+    if (!pf.ok) {
+        logger.log("bank", log::Severity::Error,
+                   "Banka '%s': soundbank.ithaca odmitnut — %s",
+                   bank.name.c_str(), pf.error.c_str());
+        return;   // prazdna banka (format zustava PackedIthaca)
+    }
+    logger.log("bank", log::Severity::Info,
+               "Banka '%s': packed-ithaca, %zu zaznamu",
+               bank.name.c_str(), pf.entries.size());
+
+    const size_t budget_bytes = cache_budget_mb > 0
+                              ? (size_t)cache_budget_mb * 1024 * 1024 : 0;
+    std::vector<int> idx;
+    idx.reserve(pf.entries.size());
+    for (int i = 0; i < (int)pf.entries.size(); ++i) {
+        const int midi = (int)pf.entries[(size_t)i].midi;
+        if (midi < midi_from || midi > midi_to) continue;
+        idx.push_back(i);
+    }
+    if (progress) {
+        progress->phase.store(1);
+        progress->total.store((int)idx.size());
+        progress->done.store(0);
+    }
+    std::vector<PreparedSample> prepared(idx.size());
+    std::atomic<size_t> approx_bytes{0};
+    parallelFor((int)idx.size(), loaderWorkers(), [&](int i) {
+        prepared[(size_t)i] = preparePackedSample(
+            pf.entries[(size_t)idx[(size_t)i]], pf.handle, ithaca_path,
+            logger, preload_ms, budget_bytes, approx_bytes);
+        if (progress) {
+            progress->done.fetch_add(1, std::memory_order_relaxed);
+            progress->bytes_loaded.fetch_add(prepared[(size_t)i].bytes,
+                                             std::memory_order_relaxed);
+        }
+    });
+    for (auto& p : prepared) {
+        if (!p.ok) continue;
+        if (budget_bytes && bank.total_bytes >= budget_bytes) {
+            logger.log("bank", log::Severity::Error,
+                       "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — "
+                       "nacitani PRERUSENO, banka NEUPLNA.",
+                       bank.name.c_str(), cache_budget_mb,
+                       bank.total_bytes / (1024 * 1024));
+            if (progress) progress->truncated.store(true, std::memory_order_relaxed);
+            break;
+        }
+        commitSample(bank, std::move(p));
+    }
+    if (progress)
+        progress->bytes_loaded.store(bank.total_bytes, std::memory_order_relaxed);
+    // ZADNY sortBankSlotsByRms: poradi indexu (midi, rms vzestupne) je
+    // autoritativni; std::sort neni stabilni a u shodnych RMS by mohl
+    // prohodit bake poradi.
+    logBankSummary(bank, logger, cache_budget_mb);
+}
+
 } // namespace
 
 Bank loadBank(const std::string& dir, log::Logger& logger,
@@ -207,6 +345,11 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
         logger.log("bank", log::Severity::Warning,
                    "Banka '%s': zadne rozpoznane samply (%d preskoceno)",
                    bank.name.c_str(), scan.skipped);
+        return bank;
+    }
+    if (scan.format == BankFormat::PackedIthaca) {
+        loadPackedBank(bank, dir, logger, cache_budget_mb, midi_from, midi_to,
+                       preload_ms, progress);
         return bank;
     }
     if (scan.format == BankFormat::Extended) {
@@ -319,7 +462,7 @@ std::array<bool, 128> buildResonanceCache(Bank& bank, float target_db,
             if (avail < 0) avail = 0;
             if (rwin > avail) rwin = avail;
             if (rwin <= 0) { m.preload_resonance.clear(); m.resonance_frames = 0; ready[(size_t)n] = true; continue; }
-            WavData rd = readWavRange(m.file.path, m.resonance_start_frame, rwin);
+            WavData rd = readSampleRange(m.file, m.resonance_start_frame, rwin);
             if (rd.valid && rd.frames > 0) {
                 m.resonance_frames  = rd.frames;
                 m.preload_resonance = std::move(rd.samples);
