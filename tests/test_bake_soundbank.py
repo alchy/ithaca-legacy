@@ -216,5 +216,59 @@ class TestBakeRoundtrip(unittest.TestCase):
                 bake.verify_ithaca(out, analysis)
 
 
+class TestLicensedBake(unittest.TestCase):
+    SECRET = b"\x07" * 32
+
+    def _src(self, d):
+        src = os.path.join(d, "src")
+        os.makedirs(os.path.join(src, "m060"))
+        make_const_wav(os.path.join(src, "m060", "a.wav"), 4096, 48000, 8000)
+        make_const_wav(os.path.join(src, "m060", "b.wav"), 4096, 48000, 20000)
+        return src
+
+    def _info(self):
+        return {"bank_name": "t", "owner_email": "a@b.cz", "owner_name": "A B",
+                "transaction_id": "TX1", "issued_at": "2026-06-14T00:00:00"}
+
+    def test_licensed_bake_header_and_license_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = self._src(d)
+            out_dir = os.path.join(d, "out"); os.makedirs(out_dir)
+            bake.bake_licensed(src, out_dir, self.SECRET, self._info(), preload_ms=150)
+            out = os.path.join(out_dir, "soundbank.ithaca")
+            lic = os.path.join(out_dir, "license.ithaca")
+            self.assertTrue(os.path.exists(lic))
+            hdr = bake.read_ithaca_header(out)
+            self.assertEqual(hdr["flags"] & 1, 1)
+            self.assertEqual(hdr["cipher_id"], 1)
+            self.assertEqual(len(hdr["nonce"]), 32)
+            self.assertEqual(len(hdr["hmac_tag"]), 32)
+
+    def test_licensed_roundtrip_decrypt(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = self._src(d)
+            out_dir = os.path.join(d, "out"); os.makedirs(out_dir)
+            bake.bake_licensed(src, out_dir, self.SECRET, self._info(), preload_ms=150)
+            bake.verify_licensed(out_dir, self.SECRET)   # nesmi vyhodit
+
+    def test_edited_license_breaks_verify(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = self._src(d)
+            out_dir = os.path.join(d, "out"); os.makedirs(out_dir)
+            bake.bake_licensed(src, out_dir, self.SECRET, self._info(), preload_ms=150)
+            with open(os.path.join(out_dir, "license.ithaca"), "r+b") as f:
+                f.seek(0); f.write(b"X")
+            with self.assertRaises(bake.BakeError):
+                bake.verify_licensed(out_dir, self.SECRET)
+
+    def test_wrong_secret_breaks_verify(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = self._src(d)
+            out_dir = os.path.join(d, "out"); os.makedirs(out_dir)
+            bake.bake_licensed(src, out_dir, self.SECRET, self._info(), preload_ms=150)
+            with self.assertRaises(bake.BakeError):
+                bake.verify_licensed(out_dir, b"\x08" * 32)
+
+
 if __name__ == "__main__":
     unittest.main()
