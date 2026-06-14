@@ -240,14 +240,16 @@ volitelně verify. Žádný subprocess na engine.
 
 ## 8. Odloženo do v2
 
-- **Šifra:** keystream s náhodným přístupem (AES-CTR nebo ChaCha20 — fakticky
-  „rychlý XOR", ~GB/s, seek zadarmo; vhodný kandidát knihovny: monocypher,
-  single-file C). Flag bit0 + rezerva v hlavičce.
+Konsolidovaný design v2 zabezpečení (šifra / podpis / licenční klíč + threat
+model, integrace do kódu, otevřené otázky, postup) je v **`docs/bank-format-packed.md`
+§7 „Security & encryption"** — jediný zdroj pravdy. Stručně:
+
+- **Šifra blobu** — stream šifra s náhodným přístupem (ChaCha20 / AES-CTR;
+  kandidát monocypher). Flag bit0 + rezerva v hlavičce.
 - **Podpis** (Ed25519, veřejný klíč v aplikaci) — flag bit1.
 - **Licenční klíčový soubor** vedle banky s identitou kupce (uuencoded
-  user-info blok ~1204 B: email, číslo transakce) — dohledatelnost úniku.
-- **Komprese blobu** (zstd/FLAC), pokud bude tlačit velikost downloadu —
-  zatím řeší vnější komprese distribučního archivu.
+  user-info blok ~1204 B) — dohledatelnost úniku.
+- **Komprese blobu** (zstd/FLAC) — zatím řeší vnější komprese archivu.
 
 ## 9. Dokumentace (součást implementace)
 
