@@ -367,7 +367,13 @@ def verify_ithaca(path, analysis):
                 raise BakeError(f"verify: zaznam midi {e['midi']} bez zdroje")
             f.seek(e["entry_offset"])
             packed = f.read(e["entry_size"])
-            if not any(packed == open(c["path"], "rb").read() for c in cands):
+            matched = False
+            for c in cands:
+                with open(c["path"], "rb") as cf:   # with: bez leaku fd na velke bance
+                    if packed == cf.read():
+                        matched = True
+                        break
+            if not matched:
                 raise BakeError(f"verify: data midi {e['midi']} nesedi se zdrojem")
 
 
