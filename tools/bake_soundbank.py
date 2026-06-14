@@ -542,8 +542,13 @@ def main():
         if licensed:
             secret = read_secret_file(args.secret_file)
             if args.license_json:
-                with open(args.license_json) as f:
-                    info = json.load(f)
+                try:
+                    with open(args.license_json) as f:
+                        info = json.load(f)
+                except FileNotFoundError:
+                    raise BakeError(f"license JSON neexistuje: {args.license_json}")
+                except json.JSONDecodeError as e:
+                    raise BakeError(f"neplatny JSON v {args.license_json}: {e}")
             else:
                 info = prompt_license_info(src)
             print(f"Licensed bake {src} (preload {args.preload_ms} ms)...")
