@@ -78,3 +78,16 @@ TEST_CASE("scanBank prezije adresar nelze — vrati Unknown bez vyjimky") {
     BankScan s = scanBank("/tmp/ithaca_nope_zzz_xyz");
     CHECK(s.format == BankFormat::Unknown);
 }
+
+TEST_CASE("scanBank detekuje soundbank.ithaca s prioritou nade vsim") {
+    namespace fs = std::filesystem;
+    auto root = fs::temp_directory_path() / "ithaca_scan_packed_test";
+    fs::remove_all(root);
+    fs::create_directories(root / "m060");                  // i dynamic struktura...
+    std::ofstream(root / "m060" / "aa.wav") << "x";
+    std::ofstream(root / "soundbank.ithaca") << "x";        // ...ale packed vyhrava
+    BankScan s = scanBank(root.string());
+    CHECK(s.format == BankFormat::PackedIthaca);
+    CHECK(s.files.empty());     // zaznamy dodava ithaca index, ne sken
+    fs::remove_all(root);
+}
