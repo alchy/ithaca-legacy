@@ -78,7 +78,7 @@ kontroluje ho jen `bake_soundbank.py --verify`.
 | 8  | u64 | `entry_offset` — absolutní offset WAV souboru v .ithaca |
 | 16 | u64 | `entry_size` — délka WAV souboru v bajtech |
 | 24 | u32 | `pcm_data_offset` — relativně k `entry_offset`; první bajt vzorků data chunku |
-| 28 | u16 | `sample_format` — 1=PCM16, 2=PCM24, 3=float32 |
+| 28 | u16 | `sample_format` — 1=PCM16, 2=PCM24, 3=float32, 4=PCM32 |
 | 30 | u16 | rezerva (0) |
 | 32 | i64 | `frames` |
 | 40 | f32 | `rms_db` — peak RMS (autoritativní pro pořadí vrstev) |
