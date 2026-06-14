@@ -1,5 +1,15 @@
 # Pakovaná soundbanka `soundbank.ithaca` — implementační plán
 
+> ## ✅ DOKONČENO (2026-06-14)
+>
+> Všech 13 implementovaných tasků hotovo a zrevidováno (spec + quality per task
+> + finální holistická revize → ready to merge). 42/42 ctest + 14/14 python
+> testů zelených, smoke OK. **Task 10 (`--dump-bank-index`) zrušen** — RMS/attack
+> počítá `bake_soundbank.py` sám v numpy (rozhodnutí 2026-06-14, viz revize
+> Tasků 11–12 níže). Drobné review nálezy (UB guardy, fd-leak, overflow guardy,
+> mergePrepared extrakce, IWYU, OOB negativní test) zapracovány. Větev
+> `feat/packed-soundbank` připravena k mergi/PR.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Jednosouborová pakovaná banka `soundbank.ithaca` (v1 bez šifry): blob doslovných WAVů + index s předpočítanou analýzou, abstrakce čtení (pread), CLI dump analýzy a python bake nástroj.
