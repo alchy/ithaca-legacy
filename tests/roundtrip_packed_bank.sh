@@ -58,4 +58,37 @@ p = count(sys.argv[1]); s = count(sys.argv[2])
 assert p == s == 3, f"pocet samplu: packed={p}, src={s}, ocekavano 3"
 print(f"ROUNDTRIP OK (packed={p}, src={s})")
 PYEOF
+
+# -- licensed varianta: bake se secretem z secret/bank_secret.key (tyz, ktery je
+#    zkompilovan v ithaca-cli pri buildu) → engine ho desifruje. --
+SK="$ROOT/secret/bank_secret.key"
+if [ ! -f "$SK" ]; then
+    echo "CHYBA: chybi $SK (mel ho vygenerovat build); preskakuji licensed cast"
+    exit 1
+fi
+LIC_DST="$WORK/lic"; mkdir -p "$LIC_DST"
+printf '%s' '{"bank_name":"rt","owner_email":"a@b.cz","owner_name":"A","transaction_id":"TX","issued_at":"2026-06-14T00:00:00"}' \
+    > "$WORK/license.json"
+python3 "$ROOT/tools/bake_soundbank.py" \
+    --source-soundbank-dir "$SRC" --destination-soundbank-dir "$LIC_DST" \
+    --license-json "$WORK/license.json" --secret-file "$SK" --verify
+
+"$CLI" --inspect "$LIC_DST" >"$WORK/lic.txt" 2>&1 \
+    || { echo "CHYBA: inspect licensed banky selhal"; cat "$WORK/lic.txt"; exit 1; }
+grep -q "Format: packed-ithaca" "$WORK/lic.txt" \
+    || { echo "CHYBA: licensed banka neni packed-ithaca"; cat "$WORK/lic.txt"; exit 1; }
+python3 - "$WORK/lic.txt" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"Celkem samplu: (\d+)", s)
+assert m and int(m.group(1)) == 3, "licensed: spatny pocet samplu\n" + s
+print("LICENSED LOAD OK")
+PYEOF
+
+# Tamper: edit license → engine ji odmitne (banka nenactena → --inspect exit 1).
+printf '%s' '{"tampered":true}' > "$LIC_DST/license.ithaca"
+if "$CLI" --inspect "$LIC_DST" >/dev/null 2>&1; then
+    echo "CHYBA: editovana license se nacetla (mela selhat)"; exit 1
+fi
+echo "LICENSED TAMPER REJECTED OK"
 echo "roundtrip_packed_bank: OK"
