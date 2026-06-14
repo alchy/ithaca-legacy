@@ -184,15 +184,21 @@ audio vlákno čtou plaintext. (Přímý zisk z v1 abstrakce.)
 
 ## 9. Overlay UX (jediný zásah do playeru)
 
-`LicenseInvalid` → existující modální load overlay:
-- ukáže varování: **"Licence banky je neplatná nebo poškozená"** + krátký důvod
-  (chybí licence / poškozená / nekompatibilní build),
-- **podrží ~10 s** (čas na přečtení; konstanta, upravitelná),
-- pak se zavře, banka zůstane **nenačtená** (stávající v1 chování při selhání),
-  uživatel může vybrat jinou banku.
+`LicenseInvalid` → existující modální load overlay přejde do chybového stavu.
+**Veškerý text overlaye je anglicky** (jako jediný uživatelsky viditelný řetězec
+celé v2 cesty). Obsah:
 
-Mění se **jen** text + timed-hold v overlay renderu + propagace `LicenseInvalid`
-stavu. Nic jiného v playeru (engine, voice, DSP, panely).
+- nadpis/řádek 1: **"Soundbank is corrupted or license file is invalid."**
+- řádek 2: **"Sampler is unable to load the bank."**
+- akce: **"Click to continue"** — overlay čeká na **kliknutí** (žádný timeout);
+  po kliknutí se zavře.
+
+Po zavření zůstane banka **nenačtená** (stávající v1 chování při selhání), uživatel
+může vybrat jinou banku. Klik je jediná povolená interakce v tomto stavu (jinak
+overlay dál blokuje, jako při běžném loadu).
+
+Mění se **jen** v overlay renderu (chybový stav s anglickým textem + click-to-dismiss)
++ propagace `LicenseInvalid` stavu. Nic jiného v playeru (engine, voice, DSP, panely).
 
 ## 10. Chybové stavy
 
@@ -235,7 +241,7 @@ stavu. Nic jiného v playeru (engine, voice, DSP, panely).
 | `openIthacaBank` rozšíření | license load + key derive + tag verify + handle wrap | ithaca_bank, ithaca_crypto |
 | bake `--license` rozšíření | license JSON + šifrování + tag | ithaca_crypto.py |
 | CMake/Makefile secret injekce | generace + kompilace `bank_secret_generated.h` | gen-bank-secret.py |
-| overlay `LicenseInvalid` | varování + 10s hold | app/gui (stávající overlay) |
+| overlay `LicenseInvalid` | anglické varování + click-to-continue | app/gui (stávající overlay) |
 
 ## 13. Mimo rozsah (případné v2.1+)
 
