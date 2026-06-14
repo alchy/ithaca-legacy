@@ -41,6 +41,7 @@ endif
 
 BUILD_DIR  ?= build
 BUILD_TYPE ?= Release
+SECRET_FILE ?= secret/bank_secret.key
 
 ifeq ($(PLATFORM),macOS)
     JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
@@ -94,8 +95,13 @@ check-tools:
 fetch-third-party:
 	@bash tools/fetch-third-party.sh
 
+.PHONY: bank-secret
+bank-secret:
+	@python3 tools/gen-bank-secret.py $(SECRET_FILE)
+
 .PHONY: configure
 configure:
+	@python3 tools/gen-bank-secret.py $(SECRET_FILE)
 	@cmake -S . -B $(BUILD_DIR) -G "$(GENERATOR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 
 $(BUILD_DIR)/CMakeCache.txt:
