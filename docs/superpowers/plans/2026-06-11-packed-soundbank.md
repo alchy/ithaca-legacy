@@ -2105,10 +2105,15 @@ git commit -m "feat(stream): streaming z packed blobu — StreamRequest nese Sam
 
 ---
 
-### Task 10: CLI `--dump-bank-index`
+### Task 10: ~~CLI `--dump-bank-index`~~ — ZRUŠENO (rozhodnutí 2026-06-14)
 
-**Files:**
-- Modify: `app/cli/main.cpp`
+> **ZRUŠENO.** Uživatel rozhodl: do C++ kódu nezasahovat, RMS/attack si spočítá
+> přímo `bake_soundbank.py` (numpy), viz revidovaný Task 11. Žádný CLI příkaz
+> `--dump-bank-index` se neimplementuje. Parita s adresářovým načtením se ověří
+> jen python self-testem (slabší záruka — uživatel akceptoval). Sekce níže je
+> ponechána jen jako historie původního návrhu a **neimplementuje se.**
+
+<details><summary>Původní (neimplementovaný) návrh CLI dumpu</summary>
 
 JSON s analýzou per soubor jde do souboru přes `--out` (ne na stdout — logy loaderu by výstup znečistily). Formát:
 
@@ -2229,15 +2234,30 @@ git add app/cli/main.cpp
 git commit -m "feat(cli): --dump-bank-index — JSON analyzy banky pro bake nastroj"
 ```
 
+</details>
+
 ---
 
-### Task 11: tools/bake_soundbank.py
+### Task 11: tools/bake_soundbank.py — REVIDOVÁNO (2026-06-14)
+
+> **REVIDOVÁNO.** RMS/attack se počítá **přímo v packeru pomocí numpy** (ne přes
+> C++ CLI). Packer sám projde dynamickou banku (`m###/*.wav`), pro každý WAV
+> spočítá `rms_db` a `attack_end` replikací algoritmu enginu (`sample_loader.cpp`:
+> klouzavé okno 50 ms, hop = půl okna, mono mix `0.5*(L+R)`, `20*log10(max_rms)`,
+> podlaha −120 dB; měřeno **jen přes preload head** `[0, head_frames)` kde
+> `head_frames` = celý sampl pokud `frames <= 2*preload_frames`, jinak
+> `preload_frames = preload_ms*sr/1000`). Float konverze musí odpovídat
+> `wavSampleToFloat` (PCM16 `/32768`, PCM24 `/8388608`, PCM32 `/2147483648`,
+> float32 beze změny). Závislost: **numpy** (uživatel schválil). Parita s
+> enginem se ověří **jen python self-testem** (žádný C++ cross-check).
+>
+> Aktuální plán implementace je v sekci níže (přepsaná oproti původní CLI verzi).
 
 **Files:**
 - Create: `tools/bake_soundbank.py`
-- Test: `tests/test_bake_soundbank.py` (čistý python, bez CLI — analýza se injektuje)
+- Test: `tests/test_bake_soundbank.py` (čistý python: testuje RMS/attack algoritmus + RIFF parse + layout + write/verify)
 
-Jen stdlib. Funkce oddělené od CLI wrapperu kvůli testovatelnosti: `parse_riff()`, `compute_layout()`, `write_ithaca()`, `read_ithaca_header()` (pro verify), `verify_ithaca()`.
+numpy + stdlib. Funkce: `parse_riff()`, `read_wav_floats()` (head region → float64 numpy), `measure_peak_rms_db()` + `find_attack_end()` (replika enginu), `analyze_bank()` (projde m###/*.wav → analysis list), `compute_layout()`, `write_ithaca()`, `read_ithaca_header()`, `verify_ithaca()`. `main()` volá `analyze_bank()` → `write_ithaca()`; ŽÁDNÝ subprocess na engine.
 
 - [ ] **Step 1: Napiš failing test**
 
@@ -2687,7 +2707,14 @@ git commit -m "feat(tools): bake_soundbank.py — packing dynamicke banky do sou
 
 ---
 
-### Task 12: End-to-end round-trip skript + registrace v ctest
+### Task 12: End-to-end round-trip skript + registrace v ctest — REVIDOVÁNO (2026-06-14)
+
+> **REVIDOVÁNO.** Bez `--dump-bank-index` (zrušen) round-trip neporovnává JSON
+> dumpy. Nově: vygeneruj fixture dynamickou banku → `bake_soundbank.py --verify`
+> (ověří hashe + bit-exact extrakci) → `ithaca-cli --inspect <packed_dir>`
+> (musí načíst, formát `packed-ithaca`, počet samplů == N) → `--inspect <src_dir>`
+> (stejný počet samplů obě cesty). Tím se ověří: bake integrita + engine načte
+> pakovanou banku + počty sedí. RMS paritu pokrývá python self-test (Task 11).
 
 **Files:**
 - Create: `tests/roundtrip_packed_bank.sh`

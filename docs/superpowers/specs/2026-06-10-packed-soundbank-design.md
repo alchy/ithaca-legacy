@@ -165,39 +165,47 @@ vše je v indexu.
 
 ---
 
-## 4. CLI: `--dump-bank-index`
+## 4. Analýza vzorků — v packeru (rozhodnutí 2026-06-14)
 
-Nový příkaz v `app/cli/main.cpp`: `--dump-bank-index <dir> [--preload-ms N]`
-(default 150 = engine default). Provede stávající scan + per-soubor analýzu
-(bez rezonanční cache) a vypíše JSON na stdout:
+**Změna oproti původnímu návrhu:** do C++ se nezasahuje, žádný CLI příkaz
+`--dump-bank-index` se neimplementuje. `rms_db` a `attack_end` počítá **přímo
+`bake_soundbank.py` v numpy**, replikací algoritmu enginu (`sample_loader.cpp`):
 
-```json
-{ "bank_format": "dynamic", "preload_ms": 150,
-  "files": [ { "path": "m021/ab12….wav", "midi": 21, "frames": 480000,
-               "sample_rate": 48000, "rms_db": -23.4, "attack_end": 1234 }, … ] }
-```
+- klouzavé okno 50 ms, hop = polovina okna (50 % překryv),
+- mono mix `0.5*(L+R)`, `rms = sqrt(mean(mono²))`, `dB = 20*log10(max_rms)`,
+  podlaha −120 dB (ticho → −120),
+- `attack_end` = frame středu okna s nejvyšším RMS,
+- měřeno **jen přes preload head** `[0, head_frames)`, kde `head_frames` = celý
+  sampl pokud `frames <= 2*preload_frames`, jinak `preload_frames = preload_ms*sr/1000`
+  (default `preload_ms = 150`),
+- float konverze musí odpovídat `wavSampleToFloat`: PCM16 `/32768`, PCM24
+  `/8388608`, PCM32 `/2147483648`, float32 beze změny.
 
-Python z něj přebírá `midi`, `frames`, `sample_rate`, `rms_db`, `attack_end`.
+**Parita:** ověřuje se **jen python self-testem** proti ručně spočteným hodnotám
+na známém signálu (uživatel akceptoval slabší záruku — žádný C++ cross-check).
+Riziko: kdyby python algoritmus divergoval od enginu, mohlo by se lišit pořadí
+velocity vrstev mezi pakovanou a adresářovou bankou.
 
 ---
 
 ## 5. Python nástroj: `tools/bake_soundbank.py`
 
-Jen stdlib (`struct`, `hashlib`, `json`, `argparse`, `wave`-free vlastní lehký
-RIFF parser). Argumenty:
+numpy + stdlib (`struct`, `hashlib`, `json`, `argparse`, vlastní lehký RIFF
+parser). Argumenty:
 
 - `--source-soundbank-dir <path>` — dynamická banka (jiný formát = chyba
   s odkazem na make_dynamic_bank.sh),
 - `--destination-soundbank-dir <path>` — vznikne v něm `soundbank.ithaca`
   (existující soubor přepíše jen s `--force`),
-- `--engine-cli <path>` — binárka pro `--dump-bank-index`,
+- `--preload-ms N` — preload okno analýzy (default 150),
 - `--verify` — po zápisu přečte zpět, ověří oba SHA-256, rozbalí každý
   záznam a bit-exact porovná se zdrojovými WAVy.
 
-Postup: validace zdroje → `--dump-bank-index` → vlastní RIFF parse každého
-WAVu (`pcm_data_offset`, `sample_format`, `channels`; `frames`/`sample_rate`
-křížově zkontroluje proti JSON z CLI — neshoda = chyba) → seřazení (midi,
-rms) → zápis sekcí (hlavička se dopíše nakonec i s hashi) → volitelně verify.
+Postup: validace zdroje → `analyze_bank()` projde `m###/*.wav`, pro každý WAV
+RIFF parse (`pcm_data_offset`, `sample_format`, `channels`, `frames`,
+`sample_rate`) + výpočet `rms_db`/`attack_end` v numpy (viz sekce 4) →
+seřazení (midi, rms) → zápis sekcí (hlavička se dopíše nakonec i s hashi) →
+volitelně verify. Žádný subprocess na engine.
 
 ---
 
@@ -209,8 +217,8 @@ rms) → zápis sekcí (hlavička se dopíše nakonec i s hashi) → volitelně 
   aplikace nepadá.
 - Useknutý blob při streamingu → stávající EOF/underrun cesta (reader vrátí
   `frames=0`, hlas fade-out).
-- Bake: chybějící/nespustitelná CLI binárka, nedynamický zdroj, WAV neshoda
-  CLI×python → chyba s jasnou hláškou, žádný výstupní soubor.
+- Bake: nedynamický zdroj, nepodporovaný WAV formát, prázdná banka → chyba
+  s jasnou hláškou, žádný výstupní soubor.
 
 ---
 
@@ -220,10 +228,11 @@ rms) → zápis sekcí (hlavička se dopíše nakonec i s hashi) → volitelně 
   poškozený magic/hash/rozsahy — test helper pro zápis malých .ithaca);
   `readSampleRange` nad mini blobem (offsety, EOF, formáty 16/24/float32);
   detekce `PackedIthaca` ve `scanBank`.
-- **Round-trip (skript):** fixture dynamická banka → bake → load z adresáře
-  i z .ithaca → shodné pořadí slotů, frames, RMS, bit-exact preload data.
-  Realizace: porovnání výstupů `--dump-bank-index`/`--inspect` nad oběma
-  variantami + extrakce z `--verify`.
+- **Python self-test:** RMS/attack algoritmus packeru proti ručně spočteným
+  hodnotám na známém signálu (jediné ověření parity s enginem).
+- **Round-trip (skript):** fixture dynamická banka → `bake --verify` (hashe +
+  bit-exact extrakce) → `ithaca-cli --inspect` nad pakovanou i adresářovou
+  variantou (formát `packed-ithaca`, shodný počet samplů obě cesty).
 - **Perf:** orientační měření load času adresář vs. packed na reálné bance
   (log do PR/dokumentace).
 
