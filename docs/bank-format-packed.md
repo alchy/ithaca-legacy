@@ -36,29 +36,67 @@ byte-exact and reversible (verified by `bake --verify`).
 
 ## 2. How to bake one
 
-The input is a **dynamic-velocity** bank (per-note subfolders `m<NNN>/*.wav`; see
+**Step 1 — Prerequisite: numpy.** The baker computes the per-sample analysis in
+numpy. Install it once:
+
+```sh
+python3 -m pip install --user numpy
+```
+
+**Step 2 — Have a dynamic-velocity bank.** The input must be a *dynamic-velocity*
+bank: per-note subfolders `m<NNN>/*.wav` (see
 [dynamic-velocity reference](bank-format-proposed.md)). A fixed-velocity (flat)
-bank must first be converted with `tools/make_dynamic_bank.sh`.
+`m###-vel#-f##.wav` bank must first be converted:
+
+```sh
+bash tools/make_dynamic_bank.sh path/to/flat-bank path/to/dynamic-bank
+```
+
+**Step 3 — Bake.** Run the packer; the output directory will receive a single
+`soundbank.ithaca`:
 
 ```sh
 python3 tools/bake_soundbank.py \
-    --source-soundbank-dir   path/to/dynamic-bank \
+    --source-soundbank-dir      path/to/dynamic-bank \
     --destination-soundbank-dir path/to/output-dir \
-    [--preload-ms 150] [--verify] [--force]
+    --verify
 ```
 
-- `--preload-ms` — preload window (ms) the analysis is measured over; must match
-  the engine's `preload_ms` so the baked RMS/attack agree with directory loading
-  (default 150 = engine default).
+Flags:
+- `--preload-ms N` — preload window (ms) the analysis is measured over; **must
+  match** the engine's `preload_ms` (config.json) so the baked RMS/attack agree
+  with directory loading (default 150 = engine default).
 - `--verify` — after writing, read the file back, check both SHA-256 hashes, and
-  bit-exact compare every entry against its source WAV.
+  bit-exact compare every entry against its source WAV. **Recommended for any
+  bank you distribute.**
 - `--force` — overwrite an existing `soundbank.ithaca`.
 
-Requires **numpy**. The tool computes `rms_db` and `attack_end` itself,
-replicating the engine's algorithm (`engine/sample/sample_loader.cpp`): a 50 ms
-sliding RMS window (hop = half window), mono mix `0.5*(L+R)`, `20*log10(max_rms)`
-floored at −120 dB, measured only over the preload head. This keeps the
-velocity-layer ordering identical to loading the same bank as a directory.
+**Step 4 — Use it.** Put the output directory anywhere under the configured
+`bank_search_dir` (config.json / GUI bank panel). A directory containing
+`soundbank.ithaca` shows up in the bank dropdown like any other bank and loads
+through the packed path automatically — no config change needed. Verify it loaded
+with `ithaca-cli --inspect path/to/output-dir` (it should report
+`Format: packed-ithaca`).
+
+### Worked example
+
+```sh
+python3 -m pip install --user numpy
+python3 tools/bake_soundbank.py \
+    --source-soundbank-dir      ~/SoundBanks/Ithaca/sp-customgrand-dynamic \
+    --destination-soundbank-dir ~/SoundBanks/Ithaca/packed-sp-customgrand-dynamic \
+    --verify
+# → Zapsano: .../packed-sp-customgrand-dynamic/soundbank.ithaca (~6.0 GB)
+# → Verify OK (hash indexu, hash blobu, bit-exact extrakce)
+./build/ithaca-cli --inspect ~/SoundBanks/Ithaca/packed-sp-customgrand-dynamic
+# → Format: packed-ithaca   Celkem samplu: 1408
+```
+
+The baker computes `rms_db` and `attack_end` itself, replicating the engine's
+algorithm (`engine/sample/sample_loader.cpp`): a 50 ms sliding RMS window (hop =
+half window), mono mix `0.5*(L+R)`, `20*log10(max_rms)` floored at −120 dB,
+measured only over the preload head. This keeps the velocity-layer ordering
+identical to loading the same bank as a directory.
 
 ## 3. File layout
 
