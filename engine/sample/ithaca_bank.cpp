@@ -73,7 +73,10 @@ IthacaBankFile openIthacaBank(const std::string& path) {
         if (e.channels != 1 && e.channels != 2) return fail("zaznam: channels mimo 1/2");
         if (e.sample_format < kSampleFmtPcm16 || e.sample_format > kSampleFmtPcm32)
             return fail("zaznam: neznamy sample_format");
-        if (e.frames <= 0 || e.sample_rate == 0) return fail("zaznam: frames/sample_rate");
+        // Horni mez sample_rate: bez ni by (int)sample_rate v loaderu mohl
+        // pretect (preload_frames = ms*sr/1000 v int) — untrusted index.
+        if (e.frames <= 0 || e.sample_rate == 0 || e.sample_rate > 768000u)
+            return fail("zaznam: frames/sample_rate mimo rozsah");
         if (e.entry_offset < h.blob_offset ||
             e.entry_offset + e.entry_size > h.blob_offset + h.blob_size ||
             e.entry_offset + e.entry_size < e.entry_offset)
