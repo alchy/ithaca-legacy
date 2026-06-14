@@ -160,6 +160,8 @@ void AppContext::requestBankReload(const std::string& dir) {
     load_progress_.total.store(0);
     load_progress_.bytes_loaded.store(0);
     load_progress_.truncated.store(false);
+    load_progress_.license_invalid.store(false);
+    bank_license_invalid_ = false;
     reload_thread_ = std::thread([this] {
         const bool ok = engine.reloadBank(reload_dir_, &load_progress_);
         reload_ok_.store(ok, std::memory_order_release);
@@ -171,6 +173,7 @@ void AppContext::requestBankReload(const std::string& dir) {
 void AppContext::pollReloadCompletion() {
     if (!reload_done_pending_.exchange(false, std::memory_order_acq_rel)) return;
     bank_truncated_ = load_progress_.truncated.load(std::memory_order_relaxed);
+    bank_license_invalid_ = load_progress_.license_invalid.load(std::memory_order_relaxed);
     if (!reload_ok_.load(std::memory_order_acquire)) {
         log::Logger::default_().log("gui", log::Severity::Warning,
             "Nelze nacist banku: %s", reload_dir_.c_str());
