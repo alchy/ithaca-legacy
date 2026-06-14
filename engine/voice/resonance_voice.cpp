@@ -76,7 +76,7 @@ void ResonanceVoice::start(int midi, const MicLayer* mic, float initial_gain,
         if (total_after <= 0) {
             (void)reader_.beginEofOnly(stream_, res_end);
         } else {
-            (void)reader_.begin(stream_, mic_->file.path, res_end,
+            (void)reader_.begin(stream_, mic_->file, res_end,
                                 (int64_t)mic_->file.frames);
         }
     }
@@ -318,7 +318,7 @@ bool ResonanceVoice::process(float* out_l, float* out_r, int n_samples) noexcept
 
     // Refill heuristika (Streamed) zije v readeru — stejny vzor jako Voice.
     if (streamed && reader_.hasRing() && stream_ && active_) {
-        reader_.refill(stream_, mic_->file.path);
+        reader_.refill(stream_, mic_->file);
     }
 
     // Pri deaktivaci uvolni ring.

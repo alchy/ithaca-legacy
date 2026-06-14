@@ -71,6 +71,7 @@ void renderBankPanel(AppContext& ctx) {
         case BankFormat::FixedVelocity:   type_label = "FIXED";   break;
         case BankFormat::DynamicVelocity: type_label = "DYNAMIC"; break;
         case BankFormat::Extended:        type_label = "EXTENDED"; break;
+        case BankFormat::PackedIthaca:    type_label = "PACKED";  break;
         case BankFormat::Unknown:         type_label = "—";       break;
     }
     wdg::Eyebrow("TYPE"); ImGui::SameLine();

@@ -1,6 +1,8 @@
 // engine/sample/bank_index.cpp — viz bank_index.h.
 #include "sample/bank_index.h"
 
+#include "sample/ithaca_format.h"
+
 #include <cctype>
 #include <exception>
 #include <filesystem>
@@ -90,6 +92,14 @@ BankScan scanBank(const std::string& dir) {
     BankScan scan;
     namespace fs = std::filesystem;
     std::error_code ec;
+
+    // 0) Pakovana banka: soundbank.ithaca ma prednost nade vsim ostatnim
+    //    obsahem adresare. Zaznamy dodava az ithaca index (loadBank),
+    //    scan jen oznaci format.
+    if (fs::is_regular_file(fs::path(dir) / kIthacaFileName, ec)) {
+        scan.format = BankFormat::PackedIthaca;
+        return scan;
+    }
 
     // 1) Dynamic-velocity detekce (ma prednost): obsahuje adresar podslozky
     //    "m<MIDI>"? Pak je to novy folder format — kazda slozka = jedna nota,

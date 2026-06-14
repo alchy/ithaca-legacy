@@ -111,6 +111,12 @@ note in section 7.
 | `bank_search_dir` | string | `""`    | Directory scanned by the bank dropdown for candidate banks. When `bank_path` is empty this is the only source of bank candidates. | `--bank-dir` CLI flag (overrides on startup) |
 | `bank_path`       | string | `""`    | Path to the bank to load at startup. Loaded best-effort: failure logs a warning and the engine runs empty. | GUI (bank panel) |
 
+A bank directory may hold loose WAV files (fixed- or dynamic-velocity) **or** a
+single packed `soundbank.ithaca` file — see
+[packed bank format](bank-format-packed.md). Detection and selection are
+automatic; a directory containing `soundbank.ithaca` loads through the packed
+path. Bank selection in the GUI and CLI is unchanged either way.
+
 ### MIDI
 
 | JSON key         | Type   | Default | Range/values | Meaning | Set by |

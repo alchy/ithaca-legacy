@@ -13,8 +13,9 @@
 // Bit-exact extrakce duplikovaneho kodu — zadna zmena chovani (hlida
 // tests/test_render_regression.cpp). Bezi vyhradne na audio vlakne.
 
+#include "sample/sample_types.h"
+
 #include <cstdint>
-#include <string>
 
 namespace ithaca {
 
@@ -29,7 +30,7 @@ public:
     // zbytek)). false = ring pool plny nebo se==nullptr (hlas dohraje RAM
     // region a utichne). Pri plne frontue requestu se offset NEposouva
     // (prirozeny retry v refill()).
-    bool begin(StreamEngine* se, const std::string& path,
+    bool begin(StreamEngine* se, const SampleFile& file,
                int64_t start_frame, int64_t total_frames) noexcept;
 
     // Varianta bez requestu (ResonanceVoice: za RAM regionem uz nic neni →
@@ -65,7 +66,7 @@ public:
     // Per-blok refill heuristika (prah z StreamEngine, half-cap reset
     // pendingu, no-advance-on-drop). Volat na konci process() u aktivniho
     // hlasu s ringem, PO endBlock().
-    void refill(StreamEngine* se, const std::string& path) noexcept;
+    void refill(StreamEngine* se, const SampleFile& file) noexcept;
 
     // Vypopuj az max_frames do interleaved dst (prepareDamp). Vraci pocet.
     int  popInto(float* dst_interleaved, int max_frames) noexcept;

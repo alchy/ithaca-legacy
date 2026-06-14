@@ -8,18 +8,22 @@
 // okno); dlouhe samply maji mode=Streamed a zbytek se cte z disku za behu.
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace ithaca {
 
-enum class BankFormat { Unknown, FixedVelocity, Extended, DynamicVelocity };
+enum class BankFormat { Unknown, FixedVelocity, Extended, DynamicVelocity,
+                        PackedIthaca };
 
 inline const char* bankFormatName(BankFormat f) {
     switch (f) {
         case BankFormat::FixedVelocity:   return "fixed-velocity";
         case BankFormat::Extended:        return "extended";
         case BankFormat::DynamicVelocity: return "dynamic-velocity";
+        case BankFormat::PackedIthaca:    return "packed-ithaca";
         case BankFormat::Unknown:         return "unknown";
     }
     return "unknown";
@@ -31,12 +35,24 @@ inline const char* bankFormatName(BankFormat f) {
 //                z `file` cestou ring bufferu.
 enum class MicLayerMode { FullyLoaded, Streamed };
 
-// Reference na zdrojovy WAV — drzi cestu a klicove metadata.
+struct IFileHandle;   // io/file_handle.h — forward (drzime jen shared_ptr)
+
+// Reference na zdrojovy sampl — bezny WAV soubor (blob == nullptr; cte se
+// pres readWavRange z path), NEBO region v pakovane .ithaca bance (blob !=
+// nullptr; cte se pres readSampleRange preadem z blobu). path u packed nese
+// cestu k .ithaca (logy). shared_ptr na handle drzi blob otevreny i pro
+// in-flight streaming requesty pri vymene banky (worker muze docist ze
+// stareho handle; gen guard data zahodi).
 struct SampleFile {
     std::string path;
     int  frames      = 0;     // celkovy pocet frames v souboru
     int  sample_rate = 0;
     bool valid       = false;
+    // -- packed (.ithaca) lokator --
+    std::shared_ptr<IFileHandle> blob;   // null = bezny WAV soubor
+    uint64_t pcm_offset    = 0;   // absolutni offset prvniho vzorku v .ithaca
+    uint16_t channels      = 0;   // 1/2 (bajtova aritmetika rozsahu)
+    uint16_t sample_format = 0;   // kSampleFmt* (ithaca_format.h)
 };
 
 // Jedna mic perspektiva jednoho uhozu. Faze 4: preload jen zacatek (head) +

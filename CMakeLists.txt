@@ -16,6 +16,12 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# 64-bit off_t i na 32-bit Unix cilech (armv7 RPi): pakovana banka je jeden
+# multi-GB soubor, pread offsety musi byt 64-bit. Na 64-bit/macOS no-op.
+if(UNIX)
+    add_compile_definitions(_FILE_OFFSET_BITS=64)
+endif()
+
 # Sanitizery (opt-in, jednorazovy audit): -DITHACA_SANITIZE=address,undefined
 # nebo =thread. Prazdne = vypnuto. Pridava -g + frame pointery pro citelne stacky.
 set(ITHACA_SANITIZE "" CACHE STRING "Sanitizer: address | thread | undefined | kombinace (carkou)")
@@ -59,10 +65,15 @@ add_subdirectory(third-party)
 add_library(ithaca_core STATIC
     engine/util/log.cpp
     engine/util/rt_priority.cpp
+    engine/util/sha256.cpp
     engine/io/wav_reader.cpp
     engine/io/wav_writer.cpp
+    engine/io/file_handle.cpp
+    engine/io/sample_read.cpp
     engine/io/audio_device.cpp
     engine/sample/bank_index.cpp
+    engine/sample/ithaca_format.cpp
+    engine/sample/ithaca_bank.cpp
     engine/sample/sample_loader.cpp
     engine/sample/sample_store.cpp
     engine/stream/stream_engine.cpp

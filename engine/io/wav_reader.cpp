@@ -63,8 +63,11 @@ bool parseHeader(std::FILE* f, FmtInfo& fmt,
     return false;
 }
 
-// Prevede jeden vzorek surovych bajtu na float [-1,1] podle formatu.
-float sampleToFloat(const uint8_t* p, uint16_t bits, uint16_t audio_format) {
+} // namespace
+
+// Prevede jeden vzorek surovych bajtu na float [-1,1] podle formatu. Sdileno
+// s dekodovanim blobu (sample_read.cpp) pro bit-exact cteni.
+float wavSampleToFloat(const uint8_t* p, uint16_t bits, uint16_t audio_format) {
     if (audio_format == 3 && bits == 32) {          // IEEE float
         float v; std::memcpy(&v, p, 4); return v;
     }
@@ -83,8 +86,6 @@ float sampleToFloat(const uint8_t* p, uint16_t bits, uint16_t audio_format) {
     }
     return 0.f;
 }
-
-} // namespace
 
 WavData readWav(const std::string& path) {
     WavData out;
@@ -111,9 +112,9 @@ WavData readWav(const std::string& path) {
     out.samples.resize((size_t)frames * 2);
     for (int i = 0; i < frames; ++i) {
         const uint8_t* base = raw.data() + (size_t)i * fmt.channels * bytes_per_sample;
-        float L = sampleToFloat(base, fmt.bits, fmt.audio_format);
+        float L = wavSampleToFloat(base, fmt.bits, fmt.audio_format);
         float R = (fmt.channels >= 2)
-                ? sampleToFloat(base + bytes_per_sample, fmt.bits, fmt.audio_format)
+                ? wavSampleToFloat(base + bytes_per_sample, fmt.bits, fmt.audio_format)
                 : L;                                  // mono → zdvoj
         out.samples[(size_t)i * 2]     = L;
         out.samples[(size_t)i * 2 + 1] = R;
@@ -182,9 +183,9 @@ WavData readWavRange(const std::string& path, int64_t frame_off, int64_t frame_c
     out.samples.resize((size_t)actual_frames * 2);
     for (int64_t i = 0; i < actual_frames; ++i) {
         const uint8_t* base = raw.data() + (size_t)i * fmt.channels * bytes_per_sample;
-        float L = sampleToFloat(base, fmt.bits, fmt.audio_format);
+        float L = wavSampleToFloat(base, fmt.bits, fmt.audio_format);
         float R = (fmt.channels >= 2)
-                ? sampleToFloat(base + bytes_per_sample, fmt.bits, fmt.audio_format)
+                ? wavSampleToFloat(base + bytes_per_sample, fmt.bits, fmt.audio_format)
                 : L;
         out.samples[(size_t)i * 2]     = L;
         out.samples[(size_t)i * 2 + 1] = R;

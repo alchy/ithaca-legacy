@@ -44,4 +44,9 @@ WavInfo peekWavInfo(const std::string& path);
 // signal "konec"). Pri chybe otevreni/parsovani vrati valid=false.
 WavData readWavRange(const std::string& path, int64_t frame_off, int64_t frame_count);
 
+// Prevod jednoho suroveho vzorku na float [-1,1] dle formatu (bits 16/24/32,
+// audio_format 1=PCM / 3=IEEE float). Sdileno s pakovanou bankou — dekodovani
+// blobu (sample_read.cpp) je tim bit-exact shodne s WAV ctenim.
+float wavSampleToFloat(const uint8_t* p, uint16_t bits, uint16_t audio_format);
+
 } // namespace ithaca

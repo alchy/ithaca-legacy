@@ -145,3 +145,40 @@ add_test(NAME test_ir_modal COMMAND test_ir_modal)
 add_executable(test_render_regression test_render_regression.cpp)
 target_link_libraries(test_render_regression PRIVATE ithaca_core doctest)
 add_test(NAME test_render_regression COMMAND test_render_regression)
+
+add_executable(test_sha256 test_sha256.cpp)
+target_link_libraries(test_sha256 PRIVATE ithaca_core doctest)
+add_test(NAME test_sha256 COMMAND test_sha256)
+
+add_executable(test_file_handle test_file_handle.cpp)
+target_link_libraries(test_file_handle PRIVATE ithaca_core doctest)
+add_test(NAME test_file_handle COMMAND test_file_handle)
+
+add_executable(test_ithaca_format test_ithaca_format.cpp)
+target_link_libraries(test_ithaca_format PRIVATE ithaca_core doctest)
+add_test(NAME test_ithaca_format COMMAND test_ithaca_format)
+
+add_executable(test_ithaca_bank test_ithaca_bank.cpp)
+target_link_libraries(test_ithaca_bank PRIVATE ithaca_core doctest)
+add_test(NAME test_ithaca_bank COMMAND test_ithaca_bank)
+
+add_executable(test_sample_read test_sample_read.cpp)
+target_link_libraries(test_sample_read PRIVATE ithaca_core doctest)
+add_test(NAME test_sample_read COMMAND test_sample_read)
+
+add_executable(test_packed_bank_load test_packed_bank_load.cpp)
+target_link_libraries(test_packed_bank_load PRIVATE ithaca_core doctest)
+add_test(NAME test_packed_bank_load COMMAND test_packed_bank_load)
+
+add_executable(test_packed_stream test_packed_stream.cpp)
+target_link_libraries(test_packed_stream PRIVATE ithaca_core doctest)
+add_test(NAME test_packed_stream COMMAND test_packed_stream)
+
+# End-to-end round-trip pakovane banky: bake_soundbank.py (numpy) + engine
+# --inspect. SKIP (77) kdyz python3 nema numpy. Vyzaduje cil ithaca-cli.
+if(TARGET ithaca-cli)
+    add_test(NAME roundtrip_packed_bank
+             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/roundtrip_packed_bank.sh
+                     $<TARGET_FILE:ithaca-cli> ${CMAKE_SOURCE_DIR})
+    set_tests_properties(roundtrip_packed_bank PROPERTIES SKIP_RETURN_CODE 77)
+endif()

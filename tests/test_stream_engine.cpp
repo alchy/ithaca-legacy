@@ -25,6 +25,17 @@ struct TempFile {
     ~TempFile() { if (!path.empty()) std::remove(path.c_str()); }
 };
 
+// WAV SampleFile lokator (blob == null → readSampleRange deleguje na
+// readWavRange). Stejne chovani jako drive, kdy requestRead bral bare path.
+SampleFile wavFile(const std::string& path, int frames, int sr = 48000) {
+    SampleFile f;
+    f.path        = path;
+    f.frames      = frames;
+    f.sample_rate = sr;
+    f.valid       = true;
+    return f;   // blob zustava nullptr → WAV cesta
+}
+
 // Ramp WAV: L[i] = i/N, R[i] = -i/N (stereo 48k).
 std::string makeRampWav(const char* tag, int frames, int sr = 48000) {
     std::vector<float> s((size_t)frames * 2);
@@ -64,7 +75,7 @@ TEST_CASE("StreamEngine worker naplni ring z WAV souboru") {
 
     RingHandle* r = se.acquireRing();
     REQUIRE(r != nullptr);
-    se.requestRead(r, p.path, /*frame_off=*/100, /*n_frames=*/512);
+    se.requestRead(r, wavFile(p.path, 8000), /*frame_off=*/100, /*n_frames=*/512);
 
     // Pockej max ~200 ms na worker (1 ms sleep + I/O).
     for (int i = 0; i < 100 && r->available() < 512; ++i)
@@ -97,7 +108,7 @@ TEST_CASE("StreamEngine eof_when_done nastavi ring->eof_ po konci souboru") {
     RingHandle* r = se.acquireRing();
     REQUIRE(r != nullptr);
     // Pozadame o 2000 frames od offsetu 500 → file ma 1000, vrati 500 + EOF.
-    se.requestRead(r, p.path, /*off=*/500, /*n=*/2000, /*eof_when_done=*/true);
+    se.requestRead(r, wavFile(p.path, 1000), /*off=*/500, /*n=*/2000, /*eof_when_done=*/true);
 
     // Pockej, az worker dotahne praci.
     for (int i = 0; i < 100 && !r->eof_.load(); ++i)
@@ -126,7 +137,7 @@ TEST_CASE("stale request po releaseRing nezapise data ani EOF do recyklovaneho r
     StreamEngine se(/*n_rings=*/1, /*ring_capacity_frames=*/128, /*n_workers=*/1);
     RingHandle* r1 = se.acquireRing();              // worker zatim NEbezi
     REQUIRE(r1 != nullptr);
-    CHECK(se.requestRead(r1, p.path, 0, 500, /*eof_when_done=*/true));
+    CHECK(se.requestRead(r1, wavFile(p.path, 1000), 0, 500, /*eof_when_done=*/true));
     se.releaseRing(r1);                             // gen bump → request je stale
     RingHandle* r2 = se.acquireRing();              // tentyz slot, nova generace
     REQUIRE(r2 == r1);
@@ -134,7 +145,7 @@ TEST_CASE("stale request po releaseRing nezapise data ani EOF do recyklovaneho r
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     CHECK(r2->available() == 0);                    // zadna stara data
     CHECK_FALSE(r2->eof_.load());                   // zadny falesny EOF
-    CHECK(se.requestRead(r2, p.path, 0, 100, false));   // novy request projde
+    CHECK(se.requestRead(r2, wavFile(p.path, 1000), 0, 100, false));   // novy request projde
     for (int i = 0; i < 100 && r2->available() < 100; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     CHECK(r2->available() >= 100);
@@ -148,7 +159,7 @@ TEST_CASE("requestRead vraci false pri plne fronte (drop je viditelny callerum)"
     REQUIRE(r != nullptr);
     int ok = 0;
     for (int i = 0; i < 300; ++i)
-        if (se.requestRead(r, "x.wav", 0, 1, false)) ++ok;
+        if (se.requestRead(r, wavFile("x.wav", 1), 0, 1, false)) ++ok;
     CHECK(ok == 256);                               // StreamRequestQueue::kCap
 }
 
