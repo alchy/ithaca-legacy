@@ -11,9 +11,14 @@ Oblast Loader pokrývá vše od fyzického adresáře s WAV soubory až po struk
 | `engine/sample/sample_types.h` | Datový model banky v paměti | `Bank`, `NoteSlots`, `VelocitySlot`, `SampleAsset`, `MicLayer`, `SampleFile`, `BankFormat`, `MicLayerMode` |
 | `engine/sample/bank_index.h/.cpp` | Sken adresáře a parsování názvů souborů | `BankScan`, `BankFileEntry`, `ParsedName` |
 | `engine/sample/sample_loader.h/.cpp` | Analýza audio dat (peak RMS, attack end) | — (čisté funkce) |
-| `engine/sample/sample_store.h/.cpp` | Orchestrace načítání banky; paralelní prepare + sériový commit jednotlivých WAV; progress pro GUI | `Bank`, `BankLoadProgress`, `PreparedSample` |
+| `engine/sample/sample_store.h/.cpp` | Orchestrace načítání banky (adresářová i pakovaná větev); paralelní prepare + sériový commit; progress pro GUI | `Bank`, `BankLoadProgress`, `PreparedSample` |
 | `engine/io/wav_reader.h/.cpp` | Čtení WAV souborů (hlavička, celý soubor, výřez) | `WavData`, `WavInfo` |
 | `engine/io/wav_writer.h/.cpp` | Zápis interleaved stereo float do 16-bit PCM WAV | — |
+| `engine/io/file_handle.h/.cpp` | Bezstavové pozicované čtení (`pread`) — sdílený fd pro paralelní i streaming čtení pakované banky | `IFileHandle` |
+| `engine/io/sample_read.h/.cpp` | Dispatcher čtení vzorku: WAV cesta (→ `readWavRange`) nebo blob `.ithaca` (pread + dekód) | — (`readSampleRange`, `sampleFormatBytes`) |
+| `engine/sample/ithaca_format.h/.cpp` | Binární formát `soundbank.ithaca` — konstanty, PODy, čisté parsery | `IthacaHeader`, `IthacaEntry` |
+| `engine/sample/ithaca_bank.h/.cpp` | Otevření + validace pakované banky (magic, verze, hash, rozsahy) | `IthacaBankFile` |
+| `engine/util/sha256.h/.cpp` | SHA-256 (FIPS 180-4) pro integritu pakované banky | `Sha256` |
 
 ---
 
@@ -31,12 +36,17 @@ Definuje kompletní datový model banky. Neobsahuje žádnou logiku ani I/O.
 | | `FixedVelocity` | — | ploché soubory `mNNN-velV-fSS.wav` |
 | | `Extended` | — | ploché soubory `mNN-MIC-HASH.wav` (fáze 7) |
 | | `DynamicVelocity` | — | podsložky `m<MIDI>/` s hašovanými WAV |
+| | `PackedIthaca` | — | jednosouborová pakovaná banka `soundbank.ithaca` (viz [packed format](../bank-format-packed.md)) |
 | `MicLayerMode` (enum class) | `FullyLoaded` | — | celý sampl je v `preload_head`; žádný streaming |
 | | `Streamed` | — | jen začátek + rezonanční okno v RAM, zbytek se streamuje z disku |
-| `SampleFile` | `path` | `std::string` | absolutní cesta ke zdrojovému WAV |
+| `SampleFile` | `path` | `std::string` | absolutní cesta ke zdrojovému WAV; u pakované banky cesta k `soundbank.ithaca` (pro logy) |
 | | `frames` | `int` | celkový počet stereo framů v souboru |
 | | `sample_rate` | `int` | vzorkovací frekvence |
 | | `valid` | `bool` | true = hlavička byla úspěšně přečtena |
+| | `blob` | `std::shared_ptr<IFileHandle>` | `nullptr` = běžný WAV; jinak otevřený handle pakované banky (čte se přes `readSampleRange` preadem z blobu) |
+| | `pcm_offset` | `uint64_t` | absolutní offset prvního vzorku v `.ithaca` (jen packed) |
+| | `channels` | `uint16_t` | počet kanálů (1/2) — bajtová aritmetika rozsahu (jen packed) |
+| | `sample_format` | `uint16_t` | `kSampleFmt*` (PCM16/24/float32/PCM32; jen packed) |
 | `MicLayer` | `mic_name` | `std::string` | název mikrofonu; legacy = `"stereo"` |
 | | `file` | `SampleFile` | odkaz na zdrojový WAV |
 | | `mode` | `MicLayerMode` | `FullyLoaded` nebo `Streamed` |
@@ -87,7 +97,7 @@ Detekce formátu banky a parsování názvů souborů. Parsovací funkce jsou č
 | `parseFixedVelocityName(const std::string& filename) → ParsedName` | off-RT | název souboru → `ParsedName` | `scanBank()`, `detectFormatFromName()`, testy | regex `fixedVelRe()`, `std::stoi` | `filename` — samotný název souboru (bez cesty) | Porovná název s regexem `m(\d{3})-vel(\d)-f(\d{2,3})\.wav` (case-insensitive). Regex omezuje délku číslic (3/1/2–3), čímž brání `std::out_of_range` z patologicky dlouhých čísel. Všechny `std::stoi` volání jsou navíc obalena v try/catch — poškozený název vrátí prázdný `ParsedName{ok=false}`. Nastaví `midi`, `vel` (0–7), `sr_tag` (44/48/96) a `filename`. |
 | `parseExtendedName(const std::string& filename) → ParsedName` | off-RT | název souboru → `ParsedName` | `scanBank()`, `detectFormatFromName()`, testy | regex `extendedRe()`, `std::stoi` | `filename` | Porovná s regexem `m(\d{1,3})-([a-z]+)-([A-Za-z0-9]+)\.wav`. Nastaví `midi`, `mic` (např. `"front"`, `"soundboard"`) a `hash`. Legacyový formát je podmnožinou tohoto vzoru (token `"vel"` by prošel jako mic), ale `detectFormatFromName()` dává legacyi prioritu, takže sem se fixedVelocity soubory nedostanou. |
 | `detectFormatFromName(const std::string& filename) → BankFormat` | off-RT | název souboru → `BankFormat` | testy | `parseFixedVelocityName()`, `parseExtendedName()` | `filename` | Zkusí postupně fixed, pak extended; vrátí první shodu. Slouží primárně pro testovatelnost. `scanBank()` interně používá přímo `parseFixedVelocityName()` / `parseExtendedName()`. |
-| `scanBank(const std::string& dir) → BankScan` | off-RT (load) | cesta k adresáři → `BankScan` | `loadBank()` v `sample_store.cpp` | `parseNoteFolder()`, `isWavFile()`, `parseFixedVelocityName()`, `parseExtendedName()`, `std::filesystem::directory_iterator` | `dir` — cesta k adresáři banky | Dvoustupňová detekce formátu: **(1) Dynamic-velocity**: prochází položky adresáře a hledá podadresáře jejichž název odpovídá `m(\d{1,3})` (funkce `parseNoteFolder()`). Pokud alespoň jeden takový podadresář existuje, označí formát jako `DynamicVelocity`, projde každý podadresář, přijme `.wav` soubory (ostatní incrementují `skipped`) a vytvoří `BankFileEntry` s `midi` ze jména složky a `filename` z WAV souboru. Vrátí okamžitě — ploché formáty se ani netestují. **(2) Ploché formáty (FixedVelocity / Extended)**: projde soubory v kořenu, zkusí nejprve `parseFixedVelocityName()`, pak `parseExtendedName()`. Počítá shody zvlášť (`fixed_count`, `extended_count`). Formát určí **nadpoloviční většina** rozpoznaných souborů (`fixed_count >= extended_count` → FixedVelocity). Pokud není žádný rozpoznán, formát je `Unknown`. Chyby hlášené přes `std::error_code ec` ukončí vnitřní smyčku break-em; POZOR — `ec` přebírá jen *konstruktor* `directory_iterator`, inkrement v range-for může stále vyhodit `std::filesystem::filesystem_error` (viz nález 6). |
+| `scanBank(const std::string& dir) → BankScan` | off-RT (load) | cesta k adresáři → `BankScan` | `loadBank()` v `sample_store.cpp` | `parseNoteFolder()`, `isWavFile()`, `parseFixedVelocityName()`, `parseExtendedName()`, `std::filesystem::directory_iterator` | `dir` — cesta k adresáři banky | Třístupňová detekce formátu: **(0) Packed-ithaca**: existuje-li `dir/soundbank.ithaca` (`kIthacaFileName`), vrátí okamžitě `PackedIthaca` (priorita nade vším; záznamy nevrací, dodá je ithaca index). Jinak **(1) Dynamic-velocity**: prochází položky adresáře a hledá podadresáře jejichž název odpovídá `m(\d{1,3})` (funkce `parseNoteFolder()`). Pokud alespoň jeden takový podadresář existuje, označí formát jako `DynamicVelocity`, projde každý podadresář, přijme `.wav` soubory (ostatní incrementují `skipped`) a vytvoří `BankFileEntry` s `midi` ze jména složky a `filename` z WAV souboru. Vrátí okamžitě — ploché formáty se ani netestují. **(2) Ploché formáty (FixedVelocity / Extended)**: projde soubory v kořenu, zkusí nejprve `parseFixedVelocityName()`, pak `parseExtendedName()`. Počítá shody zvlášť (`fixed_count`, `extended_count`). Formát určí **nadpoloviční většina** rozpoznaných souborů (`fixed_count >= extended_count` → FixedVelocity). Pokud není žádný rozpoznán, formát je `Unknown`. Chyby hlášené přes `std::error_code ec` ukončí vnitřní smyčku break-em; POZOR — `ec` přebírá jen *konstruktor* `directory_iterator`, inkrement v range-for může stále vyhodit `std::filesystem::filesystem_error` (viz nález 6). |
 
 ---
 
@@ -162,10 +172,10 @@ Minimální WAV parser. Vždy vrací interleaved stereo float `[-1, 1]` — mono
 | funkce (signatura) | vlákno | vstup → výstup | volá ji | volá (proč) | parametry | vysvětlení |
 |---|---|---|---|---|---|---|
 | `parseHeader(std::FILE*, FmtInfo&, uint32_t&, bool&) → bool` (anonymní ns) | off-RT | otevřený soubor → naplní `FmtInfo`, `data_size`, `found_data` | `readWav()`, `readWavRange()`, `peekWavInfo()` | `std::fread`, `std::fseek`, `std::strncmp` | `f` — soubor; `fmt` (out); `data_size` (out); `found_data` (out) | Ověří RIFF/WAVE hlavičku (4+4 bajty). Poté prochází chunky ve smyčce: `fmt ` chunk přečte prvních 16 bajtů (audio_format, channels, sample_rate přes `memcpy` kvůli word-alignmentu, bits), zbytek chunku přeskočí. `data` chunk uloží velikost, nastaví `found_data=true` a vrátí — soubor je **pozicován na začátku audio dat**. Neznámé chunky přeskočí (word-aligned: `chunk_size + chunk_size & 1`). Poznámka v kódu: WAV je little-endian, cílové platformy (x86/ARM/RPi) jsou taktéž LE, proto se čte přímo bez byte-swap. |
-| `sampleToFloat(const uint8_t*, uint16_t bits, uint16_t audio_format) → float` (anonymní ns) | off-RT | surové bajty → float `[-1, 1]` | `readWav()`, `readWavRange()` | `std::memcpy` | `p` — ukazatel na první bajt vzorku; `bits`; `audio_format` (1=PCM, 3=float) | Konverze podle formátu: IEEE float 32-bit → `memcpy`; 16-bit PCM → `/32768.f`; 24-bit PCM → sign-extend 23. bitu ručně, `/8388608.f`; 32-bit PCM → `/2147483648.f`. Neznámý formát vrátí `0.f`. |
-| `readWav(const std::string& path) → WavData` | off-RT | cesta → celá audio data | testy (`test_wav_reader.cpp`, `test_wav_writer.cpp`, `test_batch_renderer.cpp`) | `parseHeader()`, `sampleToFloat()`, `std::fread` | `path` — absolutní cesta | Otevře soubor, zavolá `parseHeader()`, alokuje `raw` buffer o velikosti `data_size`, přečte vše najednou (`fread`). Tolerantní k oříznutému souboru — pokud `fread` vrátí méně než `data_size`, upraví `data_size` na skutečně přečtené bajty. Konvertuje každý frame do stereo float (mono → zdvoj). Nakonec nastaví `valid=true`. Při jakékoliv chybě vrátí `WavData{valid=false}`. |
+| `wavSampleToFloat(const uint8_t*, uint16_t bits, uint16_t audio_format) → float` (veřejná) | off-RT | surové bajty → float `[-1, 1]` | `readWav()`, `readWavRange()`, `readSampleRange()` (blob dekód) | `std::memcpy` | `p` — ukazatel na první bajt vzorku; `bits`; `audio_format` (1=PCM, 3=float) | Konverze podle formátu: IEEE float 32-bit → `memcpy`; 16-bit PCM → `/32768.f`; 24-bit PCM → sign-extend 23. bitu ručně, `/8388608.f`; 32-bit PCM → `/2147483648.f`. Neznámý formát vrátí `0.f`. Sdíleno s `sample_read.cpp` → blob dekód je bit-exact shodný s WAV čtením. |
+| `readWav(const std::string& path) → WavData` | off-RT | cesta → celá audio data | testy (`test_wav_reader.cpp`, `test_wav_writer.cpp`, `test_batch_renderer.cpp`) | `parseHeader()`, `wavSampleToFloat()`, `std::fread` | `path` — absolutní cesta | Otevře soubor, zavolá `parseHeader()`, alokuje `raw` buffer o velikosti `data_size`, přečte vše najednou (`fread`). Tolerantní k oříznutému souboru — pokud `fread` vrátí méně než `data_size`, upraví `data_size` na skutečně přečtené bajty. Konvertuje každý frame do stereo float (mono → zdvoj). Nakonec nastaví `valid=true`. Při jakékoliv chybě vrátí `WavData{valid=false}`. |
 | `peekWavInfo(const std::string& path) → WavInfo` | off-RT | cesta → hlavičkové metadata | `prepareSampleFile()` v `sample_store.cpp`, testy | `parseHeader()`, `std::ftell`, `std::fseek` | `path` | Otevře soubor, zavolá `parseHeader()`, poté ověří skutečnou velikost `data` chunku: `ftell` po parsování = `data_start`, `fseek(SEEK_END)` = `file_end`; pokud `file_end - data_start < data_size`, ořízne `data_size` na skutečný zbytek. Tím koriguje případ, kdy WAV hlavička lže (oříznutý / streamovaný soubor). Vypočítá `frames = data_size / (bytes_per_sample * channels)`. Nastaví `valid=true`. Soubor okamžitě uzavře (nečte audio data). |
-| `readWavRange(const std::string& path, int64_t frame_off, int64_t frame_count) → WavData` | off-RT (load) / disk-streaming vlákno (`stream_engine.cpp`) | cesta + offset + počet framů → výřez audio dat | `prepareSampleFile()` (head preload), `buildResonanceCache()` (rezonanční okno), `stream_engine.cpp` (streaming worker) | `parseHeader()`, `sampleToFloat()`, `fseeko` / `_fseeki64`, `std::fread` | `path`; `frame_off` — offset od začátku audio dat v stereo framech (int64, pro soubory >2 GB); `frame_count` — požadovaný počet framů | Defensivní vstupy: `frame_off < 0` → invalid; `frame_count == 0` → `valid=true, frames=0`. Po parsování hlavičky změří skutečný zbytek souboru (stejně jako `peekWavInfo`), takže `data_size` odpovídá realitě. `frame_off >= total_frames` → vrátí `valid=true, frames=0` (EOF signal pro streaming worker). Jinak ořízne `read_frames = min(frame_count, available)`, provede 64-bit seek (`fseeko`/`_fseeki64` dle platformy), přečte a konvertuje. Pokud `actual_frames > INT32_MAX`, ořízne na `INT32_MAX` (FUTURE: rozšíření `WavData.frames` na int64). Nastaví `valid=true`. |
+| `readWavRange(const std::string& path, int64_t frame_off, int64_t frame_count) → WavData` | off-RT (load) / disk-streaming vlákno (`stream_engine.cpp`) | cesta + offset + počet framů → výřez audio dat | `prepareSampleFile()` (head preload), `buildResonanceCache()` (rezonanční okno), `stream_engine.cpp` (streaming worker) | `parseHeader()`, `wavSampleToFloat()`, `fseeko` / `_fseeki64`, `std::fread` | `path`; `frame_off` — offset od začátku audio dat v stereo framech (int64, pro soubory >2 GB); `frame_count` — požadovaný počet framů | Defensivní vstupy: `frame_off < 0` → invalid; `frame_count == 0` → `valid=true, frames=0`. Po parsování hlavičky změří skutečný zbytek souboru (stejně jako `peekWavInfo`), takže `data_size` odpovídá realitě. `frame_off >= total_frames` → vrátí `valid=true, frames=0` (EOF signal pro streaming worker). Jinak ořízne `read_frames = min(frame_count, available)`, provede 64-bit seek (`fseeko`/`_fseeki64` dle platformy), přečte a konvertuje. Pokud `actual_frames > INT32_MAX`, ořízne na `INT32_MAX` (FUTURE: rozšíření `WavData.frames` na int64). Nastaví `valid=true`. |
 
 ---
 
@@ -188,6 +198,59 @@ Zápis interleaved stereo float bufferu do 16-bit PCM WAV. Používá ho batch r
 
 ---
 
+## Pakovaná banka (packed-ithaca)
+
+Vedle adresářových formátů umí Loader načíst i jednosouborovou pakovanou banku
+`soundbank.ithaca` (jeden blob se všemi WAV daty + index s předpočítanou
+analýzou). Detail formátu pro autory bank: [bank-format-packed.md](../bank-format-packed.md).
+
+**Detekce.** `scanBank()` má stupeň 0: existuje-li v adresáři `soundbank.ithaca`
+(konstanta `kIthacaFileName`), vrátí `BankFormat::PackedIthaca` a ostatní obsah
+adresáře ignoruje (priorita nad dynamic/fixed). Záznamy ze skenu nevrací —
+dodá je až ithaca index.
+
+**Čtecí vrstva.** Pakovaná banka se nečte přes `fopen`/`readWavRange`, ale přes
+abstrakci:
+- `IFileHandle` (`io/file_handle.h`) — bezstavové `readAt(off, buf, n)` (POSIX
+  `pread`, Win32 `ReadFile`+OVERLAPPED). Žádný sdílený seek kurzor → paralelní
+  loader workery i streaming worker čtou týž fd bez zámku. `Bank` drží jeden
+  `shared_ptr<IFileHandle>` (lifetime přežije i in-flight streaming requesty při
+  výměně banky — gen guard data zahodí).
+- `readSampleRange(const SampleFile&, frame_off, frame_count)` (`io/sample_read.h`)
+  — dispatcher: pro běžný WAV (`blob == nullptr`) deleguje na `readWavRange`
+  (chování beze změny); pro packed spočítá bajtový rozsah z `pcm_offset` a
+  dekóduje přes `wavSampleToFloat` (bit-exact shodné s WAV čtením; stejná EOF
+  sémantika). Tři dotyková místa loaderu (`prepareSampleFile`,
+  `buildResonanceCache`, streaming worker) jdou přes tento dispatcher.
+
+**Load path.** `loadBank()` po detekci `PackedIthaca` volá `loadPackedBank()`:
+1. `openIthacaBank()` (`sample/ithaca_bank.h`) otevře soubor a zvaliduje: magic,
+   verzi, `flags == 0` (v1 neumí šifru/podpis), `sha256_index` (přes
+   metadata+index+names — **při každém načtení**; blob hash ověří jen
+   `bake --verify`), rozsahy sekcí a per-záznam meze (midi ≤ 127, známý
+   `sample_format`, `frames > 0`, `sample_rate` v rozsahu, PCM data uvnitř
+   `entry_size`, záznam uvnitř blobu). Vrátí záznamy + otevřený handle.
+2. Plní kostru `Bank` **přímo z indexu** — žádný directory scan, žádná RMS
+   analýza, žádný sort. Baked `rms_db`/`attack_end` jsou autoritativní; index je
+   předřazený dle `(midi, rms vzestupně)`, takže `commitSample` ve scan pořadí
+   dá sloty rovnou seřazené (proto se `sortBankSlotsByRms` **nevolá** —
+   `std::sort` není stabilní a u shodných RMS by rozbil bake pořadí).
+3. Faze „heads" čte preload okna paralelně přes `readSampleRange`; rozhodnutí
+   FullyLoaded vs. Streamed zůstává runtime (baked `frames` vs. aktuální
+   `preload_ms`). Rezonanční cache, progress atomiky i OOM guard beze změny.
+
+**Chybové stavy.** Jakákoliv chyba validace (`openIthacaBank` vrátí `ok=false`)
+→ ERROR do logu + prázdná banka (formát zůstává `PackedIthaca`), aplikace
+nepadá — stejné chování jako u `Unknown` adresáře. Useknutý blob při streamingu
+→ stávající EOF/underrun cesta.
+
+**Baking.** `tools/bake_soundbank.py` (numpy) zabalí dynamickou banku do
+`soundbank.ithaca`; RMS/attack počítá replikací algoritmu `sample_loader.cpp`
+(parita ověřena python self-testem `tests/test_bake_soundbank.py`). End-to-end
+round-trip: `tests/roundtrip_packed_bank.sh`.
+
+---
+
 ## Křížové odkazy
 
 | oblast | vazba |
@@ -196,7 +259,7 @@ Zápis interleaved stereo float bufferu do 16-bit PCM WAV. Používá ho batch r
 | **GUI — async load** | `AppContext::requestBankReload` (worker thread) volá `engine.reloadBank(dir, &load_progress_)`; GUI per frame polluje atomiky `BankLoadProgress` a kreslí modální overlay (`bankLoadFraction`, RAM info, truncated varování). Detail v [H-gui](H-gui.md). |
 | **Polyfonie — VoicePool / Voice** | `Voice` (audio vlákno) čte `MicLayer::preload_head` read-only a po překročení head_frames čte z ring bufferu (StreamEngine). Viz `engine/voice/voice.cpp`. |
 | **Rezonance — ResonanceEngine / ResonanceVoice** | `ResonanceVoice` (audio vlákno) čte `MicLayer::preload_resonance` (u Streamed) nebo `preload_head` s offsetem `resonance_start_frame` (u FullyLoaded). Po vyčerpání preloadu pokračuje z ring bufferu (`stream_resonance_`). Viz `engine/voice/resonance_voice.cpp`. |
-| **Streaming — StreamEngine** | Disk-streaming worker v `engine/stream/stream_engine.cpp` volá `readWavRange()` přímo k plnění ring bufferů za preload_head / preload_resonance regionem. Sdílí stejnou funkci s Loaderem. |
+| **Streaming — StreamEngine** | Disk-streaming worker v `engine/stream/stream_engine.cpp` volá `readSampleRange()` (dispatcher: WAV cesta nebo `.ithaca` blob) k plnění ring bufferů za preload_head / preload_resonance regionem. `StreamRequest` nese `SampleFile` lokátor (ne holou cestu) → streaming funguje i pro pakovanou banku. Sdílí stejný dispatcher s Loaderem. |
 | **Batch renderer** | `engine/render/batch_renderer.cpp` volá `writeWavStereo16()` k zápisu výsledku offline renderování. |
 
 ---

@@ -1,6 +1,6 @@
 # Pakovaná soundbanka `soundbank.ithaca` — design
 
-Datum: 2026-06-10 · Větev: `feat/packed-soundbank` · Stav: schválený návrh (před implementací)
+Datum: 2026-06-10 · Větev: `feat/packed-soundbank` · Stav: implementováno (v1, sekce 4 revidována 2026-06-14 — analýza v packeru, ne CLI)
 
 Motivace: komerční distribuce banky jako jediného souboru. Uživatel si dál může
 nahrát vlastní adresářovou banku (fixní i dynamickou — beze změny); „verifikovaná"
