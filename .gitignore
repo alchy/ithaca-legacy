@@ -29,3 +29,7 @@ imgui.ini
 # logs
 *.log
 .superpowers/
+
+# master secret
+secret/
+bank_secret_generated.h
