@@ -174,6 +174,10 @@ add_executable(test_packed_stream test_packed_stream.cpp)
 target_link_libraries(test_packed_stream PRIVATE ithaca_core doctest)
 add_test(NAME test_packed_stream COMMAND test_packed_stream)
 
+add_executable(test_ithaca_crypto test_ithaca_crypto.cpp)
+target_link_libraries(test_ithaca_crypto PRIVATE ithaca_core doctest)
+add_test(NAME test_ithaca_crypto COMMAND test_ithaca_crypto)
+
 # End-to-end round-trip pakovane banky: bake_soundbank.py (numpy) + engine
 # --inspect. SKIP (77) kdyz python3 nema numpy. Vyzaduje cil ithaca-cli.
 if(TARGET ithaca-cli)

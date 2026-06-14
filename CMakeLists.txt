@@ -66,6 +66,7 @@ add_library(ithaca_core STATIC
     engine/util/log.cpp
     engine/util/rt_priority.cpp
     engine/util/sha256.cpp
+    engine/util/ithaca_crypto.cpp
     engine/io/wav_reader.cpp
     engine/io/wav_writer.cpp
     engine/io/file_handle.cpp
