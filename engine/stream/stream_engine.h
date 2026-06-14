@@ -16,6 +16,8 @@
 // Vzor lock-free SPSC patternu je engine/midi/midi_queue.h — stejne pouziti
 // release/acquire memory orderingu a drop-on-full pri plnem bufferu.
 
+#include "sample/sample_types.h"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -87,16 +89,12 @@ struct RingHandle {
 // Pozadavek na nacteni z disku do konkretniho ringu.
 struct StreamRequest {
     RingHandle* ring          = nullptr;
-    // Cesta je drzena jako std::string — kopiruje se pri push. Audio thread
-    // alokaci nevidi (volajici string je drzeny Voice/SampleFile + Voice
-    // pri sestavovani requestu *kopiruje*, ale request je trivialne male
-    // POD struktura). POZN.: vime, ze std::string copy muze alokovat —
-    // SBO pomuze pro kratke cesty (~22 char), pro delsi alokace je. Casto
-    // se Voice request odesila jen kazdych ~100 ms, ne kazdy blok, takze
-    // jedna alokace za chvilku je akceptovatelna prvni iterace; FUTURE:
-    // path drzet jako const char* z dlouhozijici stringu v Bank (nikdy
-    // se nemeni → bezpecne).
-    std::string path;
+    // Zdroj dat: SampleFile lokator (WAV cesta NEBO packed blob). Kopiruje se
+    // pri push: string copy (SBO pro kratke cesty) + shared_ptr refcount
+    // (atomic inc, bez zamku/alokace) — stejna RT uvaha jako drive u path.
+    // shared_ptr drzi blob handle nazivu i kdyz se banka mezitim vymeni
+    // (worker docte ze stareho handle; gen guard data zahodi).
+    SampleFile  file;
     int64_t     frame_off     = 0;
     int64_t     n_frames      = 0;
     bool        eof_when_done = false;   // worker po dokonceni nastavi ring->eof_
@@ -172,7 +170,7 @@ public:
     // pri zaplneni fronty; tim padem RT-safe. Vraci false pri plne fronte —
     // caller pak NEPOSOUVA file_request_off_ (request prirozene zopakuje
     // pristi blok; drive tichy drop maskoval underrun jako END-OF-SAMPLE).
-    bool requestRead(RingHandle* ring, const std::string& path,
+    bool requestRead(RingHandle* ring, const SampleFile& file,
                      int64_t frame_off, int64_t n_frames,
                      bool eof_when_done = false) noexcept;
 

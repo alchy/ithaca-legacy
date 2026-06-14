@@ -169,3 +169,7 @@ add_test(NAME test_sample_read COMMAND test_sample_read)
 add_executable(test_packed_bank_load test_packed_bank_load.cpp)
 target_link_libraries(test_packed_bank_load PRIVATE ithaca_core doctest)
 add_test(NAME test_packed_bank_load COMMAND test_packed_bank_load)
+
+add_executable(test_packed_stream test_packed_stream.cpp)
+target_link_libraries(test_packed_stream PRIVATE ithaca_core doctest)
+add_test(NAME test_packed_stream COMMAND test_packed_stream)

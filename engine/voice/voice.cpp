@@ -123,7 +123,7 @@ void Voice::start(const SampleAsset* asset, double pitch_ratio, float vel_gain,
     // selze (pool plny), Voice prozatim hraje jen do konce head a pak utichne
     // (zadny crash). FUTURE: voice steal podle ring obsazenosti.
     if (active_ && mic_->mode == MicLayerMode::Streamed && stream_) {
-        (void)reader_.begin(stream_, mic_->file.path,
+        (void)reader_.begin(stream_, mic_->file,
                             (int64_t)mic_->head_frames,
                             (int64_t)mic_->file.frames);
     }
@@ -302,7 +302,7 @@ bool Voice::process(float* out_l, float* out_r, int n_samples) noexcept {
     // Refill heuristika zije v readeru (prah z StreamEngine, half-cap reset
     // pendingu, no-advance-on-drop).
     if (reader_.hasRing() && stream_ && active_) {
-        reader_.refill(stream_, mic_->file.path);
+        reader_.refill(stream_, mic_->file);
     }
 
     // Pri deaktivaci uvolni ring (jednou).

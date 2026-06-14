@@ -1,6 +1,7 @@
 // engine/stream/stream_engine.cpp — viz stream_engine.h.
 #include "stream/stream_engine.h"
 
+#include "io/sample_read.h"
 #include "io/wav_reader.h"
 #include "util/log.h"
 
@@ -146,13 +147,13 @@ void StreamEngine::releaseRing(RingHandle* r) {
     r->in_use_.store(false, std::memory_order_release);
 }
 
-bool StreamEngine::requestRead(RingHandle* ring, const std::string& path,
+bool StreamEngine::requestRead(RingHandle* ring, const SampleFile& file,
                                int64_t frame_off, int64_t n_frames,
                                bool eof_when_done) noexcept {
     if (!ring) return false;
     StreamRequest req;
     req.ring          = ring;
-    req.path          = path;       // kopie (SBO casto staci)
+    req.file          = file;       // kopie (SBO casto staci + shared_ptr inc)
     req.frame_off     = frame_off;
     req.n_frames      = n_frames;
     req.eof_when_done = eof_when_done;
@@ -195,13 +196,13 @@ void StreamEngine::workerLoop() {
             int64_t chunk = (remain < (int64_t)free_frames)
                           ? remain : (int64_t)free_frames;
 
-            WavData data = readWavRange(req.path, off, chunk);
+            WavData data = readSampleRange(req.file, off, chunk);
             if (!data.valid) {
                 // Cteni selhalo (chyba souboru): zaloguj a koncim s tymto requestem.
                 // POZN.: logger je non-RT-safe, jsme na workeru, OK.
                 log::Logger::default_().log(
                     "stream", log::Severity::Warning,
-                    "readWavRange failed: %s @ %lld", req.path.c_str(),
+                    "readSampleRange failed: %s @ %lld", req.file.path.c_str(),
                     (long long)off);
                 break;
             }
@@ -240,6 +241,16 @@ void StreamEngine::workerLoop() {
             remain -= wrote;
             if (data.frames < chunk) {
                 // Mene nez pozadovano → soubor skoncil, EOF.
+                eof = true;
+                break;
+            }
+            // Exact-fit konec: chunk dosahl presne konce souboru (off ==
+            // file.frames). readSampleRange/readWavRange by pri dalsim cteni
+            // vratil 0 frames — request ale uz nema co cist (remain==0), takze
+            // nasledny 0-frame read by neprobehl. Diky tomu, ze request nese
+            // SampleFile (zna file.frames), umime EOF detekovat i bez extra
+            // cteni. Platne pro WAV i packed (file.frames > 0).
+            if (req.file.frames > 0 && off >= (int64_t)req.file.frames) {
                 eof = true;
                 break;
             }

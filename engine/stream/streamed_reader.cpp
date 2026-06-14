@@ -7,7 +7,7 @@
 
 namespace ithaca {
 
-bool StreamedSampleReader::begin(StreamEngine* se, const std::string& path,
+bool StreamedSampleReader::begin(StreamEngine* se, const SampleFile& file,
                                  int64_t start_frame,
                                  int64_t total_frames) noexcept {
     total_frames_     = total_frames;
@@ -18,7 +18,7 @@ bool StreamedSampleReader::begin(StreamEngine* se, const std::string& path,
     const int64_t total_stream = total_frames - start_frame;
     const bool    eof_done     = (cap >= total_stream);
     const int64_t actual       = (cap < total_stream) ? cap : total_stream;
-    if (se->requestRead(ring_, path, start_frame, actual, eof_done)) {
+    if (se->requestRead(ring_, file, start_frame, actual, eof_done)) {
         file_request_off_ = start_frame + actual;
         stream_pending_   = true;
     }
@@ -64,7 +64,7 @@ StreamedSampleReader::advance(int64_t target) noexcept {
 }
 
 void StreamedSampleReader::refill(StreamEngine* se,
-                                  const std::string& path) noexcept {
+                                  const SampleFile& file) noexcept {
     if (!ring_ || !se) return;
     const int avail    = ring_->available();
     const int thr      = se->refillThresholdFrames();
@@ -80,7 +80,7 @@ void StreamedSampleReader::refill(StreamEngine* se,
             if (want > remain) want = remain;
             const bool eof_done =
                 (file_request_off_ + want >= total_frames_);
-            if (se->requestRead(ring_, path, file_request_off_, want,
+            if (se->requestRead(ring_, file, file_request_off_, want,
                                 eof_done)) {
                 file_request_off_ += want;
                 stream_pending_    = true;
