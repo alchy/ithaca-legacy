@@ -28,7 +28,9 @@ TEST_CASE("DecryptingFileHandle desifruje blob, mimo blob pass-through") {
     uint8_t key[32];   std::memset(key, 0x11, 32);
     uint8_t nonce[32]; std::memset(nonce, 0x22, 32);
 
-    std::vector<uint8_t> plain(400);
+    // Soubor: [0,100) hlavicka, [100,400) blob, [400,450) trailer — vse plaintext
+    // krome blobu. Trailer umoznuje otestovat i straddle-end a past-end cteni.
+    std::vector<uint8_t> plain(450);
     for (size_t i = 0; i < plain.size(); ++i) plain[i] = (uint8_t)(i & 0xFF);
     std::vector<uint8_t> disk = plain;
     keystreamXor(key, nonce, /*p0=*/0, disk.data() + blob_off, (size_t)blob_size);
@@ -57,4 +59,15 @@ TEST_CASE("DecryptingFileHandle desifruje blob, mimo blob pass-through") {
     uint8_t cb[30];
     REQUIRE(dec->readAt(90, cb, 30));
     for (int i = 0; i < 30; ++i) CHECK(cb[i] == plain[90 + i]);
+
+    // Straddle konce blobu [380,380+40)=[380,420): in-blob [380,400) desifrovano,
+    // [400,420) trailer pass-through.
+    uint8_t db[40];
+    REQUIRE(dec->readAt(380, db, 40));
+    for (int i = 0; i < 40; ++i) CHECK(db[i] == plain[380 + i]);
+
+    // Cteni zcela za blobem [410,410+30) → pass-through (zadne desifrovani).
+    uint8_t eb[30];
+    REQUIRE(dec->readAt(410, eb, 30));
+    for (int i = 0; i < 30; ++i) CHECK(eb[i] == plain[410 + i]);
 }
