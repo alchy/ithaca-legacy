@@ -191,6 +191,32 @@ void logBankSummary(const Bank& bank, log::Logger& logger, int cache_budget_mb) 
     }
 }
 
+// Slouceny merge pripravenych samplu do banky (sdili adresarova i pakovana
+// vetev): jednovlaknove ve scan poradi → deterministicka banka + presny RAM
+// budget. Pri prekroceni budgetu PRERUSI (ERROR, banka NEUPLNA, truncated).
+// Po merge zapise presny bytes_loaded. Razeni slotu (sortBankSlotsByRms) si
+// resi adresarova vetev sama — packed ma poradi z indexu autoritativni.
+void mergePrepared(Bank& bank, std::vector<PreparedSample>& prepared,
+                   size_t budget_bytes, int cache_budget_mb,
+                   log::Logger& logger, BankLoadProgress* progress) {
+    for (auto& p : prepared) {
+        if (!p.ok) continue;
+        if (budget_bytes && bank.total_bytes >= budget_bytes) {
+            logger.log("bank", log::Severity::Error,
+                       "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — nacitani "
+                       "PRERUSENO, banka NEUPLNA. Sniz banku / preload_ms / "
+                       "resonance_window_ms, nebo zvys cache_budget_mb.",
+                       bank.name.c_str(), cache_budget_mb,
+                       bank.total_bytes / (1024 * 1024));
+            if (progress) progress->truncated.store(true, std::memory_order_relaxed);
+            break;
+        }
+        commitSample(bank, std::move(p));
+    }
+    if (progress)
+        progress->bytes_loaded.store(bank.total_bytes, std::memory_order_relaxed);
+}
+
 // Priprava JEDNOHO zaznamu pakovane banky: ZADNA analyza (RMS/attack jsou
 // baked v indexu — autoritativni), jen preload head pres readSampleRange.
 // Mode FullyLoaded/Streamed zustava runtime rozhodnuti (baked frames vs
@@ -305,21 +331,7 @@ void loadPackedBank(Bank& bank, const std::string& dir, log::Logger& logger,
                                              std::memory_order_relaxed);
         }
     });
-    for (auto& p : prepared) {
-        if (!p.ok) continue;
-        if (budget_bytes && bank.total_bytes >= budget_bytes) {
-            logger.log("bank", log::Severity::Error,
-                       "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — "
-                       "nacitani PRERUSENO, banka NEUPLNA.",
-                       bank.name.c_str(), cache_budget_mb,
-                       bank.total_bytes / (1024 * 1024));
-            if (progress) progress->truncated.store(true, std::memory_order_relaxed);
-            break;
-        }
-        commitSample(bank, std::move(p));
-    }
-    if (progress)
-        progress->bytes_loaded.store(bank.total_bytes, std::memory_order_relaxed);
+    mergePrepared(bank, prepared, budget_bytes, cache_budget_mb, logger, progress);
     // ZADNY sortBankSlotsByRms: poradi indexu (midi, rms vzestupne) je
     // autoritativni; std::sort neni stabilni a u shodnych RMS by mohl
     // prohodit bake poradi.
@@ -402,22 +414,7 @@ Bank loadBank(const std::string& dir, log::Logger& logger,
         }
     });
     // Merge jednovlaknove ve scan poradi → deterministicka banka + presny budget.
-    for (auto& p : prepared) {
-        if (!p.ok) continue;
-        if (budget_bytes && bank.total_bytes >= budget_bytes) {
-            logger.log("bank", log::Severity::Error,
-                       "Banka '%s': RAM budget %d MB prekrocen (~%zu MB) — nacitani "
-                       "PRERUSENO, banka NEUPLNA. Sniz banku / preload_ms / "
-                       "resonance_window_ms, nebo zvys cache_budget_mb.",
-                       bank.name.c_str(), cache_budget_mb,
-                       bank.total_bytes / (1024 * 1024));
-            if (progress) progress->truncated.store(true, std::memory_order_relaxed);
-            break;
-        }
-        commitSample(bank, std::move(p));
-    }
-    if (progress)
-        progress->bytes_loaded.store(bank.total_bytes, std::memory_order_relaxed);
+    mergePrepared(bank, prepared, budget_bytes, cache_budget_mb, logger, progress);
 
     sortBankSlotsByRms(bank);
     logBankSummary(bank, logger, cache_budget_mb);

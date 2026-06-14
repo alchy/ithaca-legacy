@@ -114,6 +114,42 @@ class TestAnalysis(unittest.TestCase):
             db = bake.measure_peak_rms_db(mono, info["sample_rate"])
             self.assertAlmostEqual(db, 20.0 * math.log10(0.5), places=2)
 
+    def test_rms_pcm24(self):
+        # PCM24 stereo konstantni 0x400000 (=0.5*2^23) → 0.5 → 20log10(0.5).
+        # Pokryva sign-extend vetev a bps=3 offset aritmetiku v read_head_mono.
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "c24.wav")
+            frames, sr = 5000, 48000
+            b3 = struct.pack("<i", 4194304)[:3]    # LE 24-bit, 0.5*8388608
+            data = (b3 + b3) * frames              # stereo
+            byte_rate = sr * 2 * 3
+            with open(p, "wb") as f:
+                f.write(b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVE")
+                f.write(b"fmt " + struct.pack("<IHHIIHH", 16, 1, 2, sr, byte_rate, 6, 24))
+                f.write(b"data" + struct.pack("<I", len(data)) + data)
+            info = bake.parse_riff(p)
+            self.assertEqual(info["sample_format"], bake.FMT_PCM24)
+            mono = bake.read_head_mono(p, info, frames)
+            db = bake.measure_peak_rms_db(mono, info["sample_rate"])
+            self.assertAlmostEqual(db, 20.0 * math.log10(0.5), places=2)
+
+    def test_rms_float32(self):
+        # IEEE float32 stereo konstantni 0.5 → 20log10(0.5) (pass-through).
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "cf.wav")
+            frames, sr = 5000, 48000
+            data = struct.pack("<ff", 0.5, 0.5) * frames
+            byte_rate = sr * 2 * 4
+            with open(p, "wb") as f:
+                f.write(b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVE")
+                f.write(b"fmt " + struct.pack("<IHHIIHH", 16, 3, 2, sr, byte_rate, 8, 32))
+                f.write(b"data" + struct.pack("<I", len(data)) + data)
+            info = bake.parse_riff(p)
+            self.assertEqual(info["sample_format"], bake.FMT_FLOAT32)
+            mono = bake.read_head_mono(p, info, frames)
+            db = bake.measure_peak_rms_db(mono, info["sample_rate"])
+            self.assertAlmostEqual(db, 20.0 * math.log10(0.5), places=4)
+
 
 class TestAnalyzeBank(unittest.TestCase):
     def test_orders_by_midi_then_rms(self):

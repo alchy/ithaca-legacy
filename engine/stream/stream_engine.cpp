@@ -5,7 +5,6 @@
 #include "io/wav_reader.h"
 #include "util/log.h"
 
-#include <algorithm>
 #include <chrono>
 #include <cstring>
 

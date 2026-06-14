@@ -6,7 +6,6 @@
 
 #include "ithaca_test_blob.h"
 #include "io/file_handle.h"
-#include "io/sample_read.h"
 #include "stream/stream_engine.h"
 
 #include <chrono>
@@ -59,6 +58,7 @@ TEST_CASE("stream worker plni ring z packed blobu") {
 TEST_CASE("stream worker EOF na konci packed samplu") {
     BuiltBlob b = buildTestIthaca("stream_eof", {{60, 4096, 48000, -25.f, 10}});
     auto h = openFileHandle(b.ithaca_path);
+    REQUIRE(h != nullptr);
     SampleFile f;
     f.path = b.ithaca_path; f.frames = 4096; f.sample_rate = 48000; f.valid = true;
     f.blob = h;

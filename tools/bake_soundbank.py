@@ -203,15 +203,14 @@ def analyze_bank(src_dir, preload_ms):
                 raise BakeError(f"{path}: 0 frames (prazdny/poskozeny WAV)")
             hf = head_frames_for(info["frames"], info["sample_rate"], preload_ms)
             mono = read_head_mono(path, info, hf)
-            max_rms, peak_frame = sliding_peak_rms(mono, info["sample_rate"])
-            if max_rms <= 0.0:
-                rms_db = SILENCE_FLOOR_DB
-            else:
-                rms_db = max(20.0 * math.log10(max_rms), SILENCE_FLOOR_DB)
+            # Helpery = jediny zdroj pravdy pro -120 podlahu (jako engine, ktery
+            # vola slidingPeakRms zvlast v measurePeakRmsDb i findAttackEnd).
+            rms_db = measure_peak_rms_db(mono, info["sample_rate"])
+            attack_end = find_attack_end(mono, info["sample_rate"])
             analysis.append({"path": path, "midi": midi,
                              "frames": info["frames"],
                              "sample_rate": info["sample_rate"],
-                             "rms_db": rms_db, "attack_end": peak_frame})
+                             "rms_db": rms_db, "attack_end": attack_end})
     if not analysis:
         raise BakeError(f"{src_dir}: zadne m###/*.wav soubory")
     return analysis
