@@ -1,12 +1,11 @@
 #pragma once
 // tests/ithaca_test_blob.h
 // Helper: postavi maly validni soundbank.ithaca v temp adresari. Vnitrni
-// WAVy = ramp signal pres writeWavStereo16 (PCM16 stereo). Vraci cesty +
+// WAVy = ramp signal pres lokalni writeWavFmt (PCM16/24/32/float). Vraci cesty +
 // ocekavane hodnoty pro asserty. Pouzivaji testy ithaca_bank / sample_read /
 // packed_bank_load / packed_stream.
 
 #include "io/wav_reader.h"
-#include "io/wav_writer.h"
 #include "sample/ithaca_format.h"
 #include "util/sha256.h"
 
@@ -134,7 +133,8 @@ inline BuiltBlob buildTestIthaca(const char* tag,
                                  const std::vector<BlobSpec>& specs,
                                  bool corrupt_index_hash = false,
                                  uint32_t force_version = ithaca::kIthacaVersion,
-                                 uint32_t force_flags = 0) {
+                                 uint32_t force_flags = 0,
+                                 bool corrupt_entry_range = false) {
     namespace fs = std::filesystem;
     using namespace ithaca;
     BuiltBlob out;
@@ -193,6 +193,12 @@ inline BuiltBlob buildTestIthaca(const char* tag,
             blob.push_back(0);
     }
     const uint64_t blob_size = blob.size();
+
+    // Zamerne poskozeni rozsahu (negativni test): nafoukni entry_size prvniho
+    // zaznamu tak, aby entry_offset+entry_size presahl konec blobu. Provadi se
+    // PRED vypoctem hashe → sha_index sedi, ale per-zaznam range check selze.
+    if (corrupt_entry_range && !out.entries.empty())
+        out.entries[0].entry_size = blob_size + 1000000;
 
     // 3) Serializace indexu (LE memcpy — zrcadlo parseIthacaIndex).
     std::vector<uint8_t> index_bytes(index_size, 0);

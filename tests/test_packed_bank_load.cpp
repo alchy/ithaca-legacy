@@ -6,6 +6,7 @@
 #include "doctest.h"
 
 #include "ithaca_test_blob.h"
+#include "io/wav_writer.h"   // writeWavStereo16 (adresarova fixture)
 #include "sample/sample_store.h"
 
 using namespace ithaca;

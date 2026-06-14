@@ -7,6 +7,7 @@
 
 #include "io/file_handle.h"
 #include "io/sample_read.h"
+#include "io/wav_writer.h"   // writeWavStereo16 (plain-WAV delegace test)
 #include "ithaca_test_blob.h"
 
 using namespace ithaca;

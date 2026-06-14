@@ -54,3 +54,15 @@ TEST_CASE("openIthacaBank odmitne neexistujici soubor") {
     IthacaBankFile f = openIthacaBank("/tmp/ithaca_no_such_dir/soundbank.ithaca");
     CHECK_FALSE(f.ok);
 }
+
+TEST_CASE("openIthacaBank odmitne zaznam mimo rozsah blobu (crafted, hash sedi)") {
+    // Nafouknuty entry_size: hash indexu je platny (poskozeni je pred hashem),
+    // ale per-zaznam range check musi chytit OOB → prazdna banka, zadny crash.
+    BuiltBlob b = buildTestIthaca("oob_entry", {{60, 2000, 48000, -30.f, 100}},
+                                  false, kIthacaVersion, 0,
+                                  /*corrupt_entry_range=*/true);
+    IthacaBankFile f = openIthacaBank(b.ithaca_path);
+    CHECK_FALSE(f.ok);
+    CHECK(f.error.find("blob") != std::string::npos);
+    removeBlob(b);
+}
