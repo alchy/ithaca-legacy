@@ -25,6 +25,12 @@ inline constexpr const char* kIthacaFileName = "soundbank.ithaca";
 inline constexpr uint32_t kIthacaFlagEncrypted = 1u << 0;
 inline constexpr uint32_t kIthacaFlagSigned    = 1u << 1;
 
+// v2 sifrovani — offsety a konstanty:
+inline constexpr size_t   kIthacaHdrCipherId = 152;
+inline constexpr size_t   kIthacaHdrNonce    = 154;
+inline constexpr size_t   kIthacaHdrHmacTag  = 186;
+inline constexpr uint16_t kCipherSha256Ctr   = 1;
+
 // sample_format kody (pokryvaji formaty wav_readeru):
 inline constexpr uint16_t kSampleFmtPcm16   = 1;
 inline constexpr uint16_t kSampleFmtPcm24   = 2;
@@ -41,6 +47,9 @@ struct IthacaHeader {
     uint32_t entry_count = 0;
     std::array<uint8_t, 32> sha256_index{};     // pres metadata+index+names
     std::array<uint8_t, 32> sha256_payload{};   // pres blob (jen --verify)
+    uint8_t  cipher_id = 0;                      // 0 = plaintext, 1 = sha256-ctr-v2
+    std::array<uint8_t, 32> nonce{};
+    std::array<uint8_t, 32> hmac_tag{};
 };
 
 struct IthacaEntry {

@@ -28,6 +28,9 @@ bool parseIthacaHeader(const uint8_t* buf, size_t n, IthacaHeader& out) {
     out.entry_count     = rdLE<uint32_t>(buf + 80);
     std::memcpy(out.sha256_index.data(),   buf + 88,  32);
     std::memcpy(out.sha256_payload.data(), buf + 120, 32);
+    out.cipher_id = buf[kIthacaHdrCipherId];
+    std::memcpy(out.nonce.data(),    buf + kIthacaHdrNonce,   32);
+    std::memcpy(out.hmac_tag.data(), buf + kIthacaHdrHmacTag, 32);
     return true;
 }
 

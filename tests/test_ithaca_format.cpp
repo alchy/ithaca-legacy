@@ -124,3 +124,19 @@ TEST_CASE("parseIthacaIndex dva zaznamy — 64B stride") {
     CHECK(es[0].midi == 60); CHECK(es[0].frames == 501);
     CHECK(es[1].midi == 72); CHECK(es[1].frames == 999);
 }
+
+TEST_CASE("parseIthacaHeader cte v2 pole (cipher_id, nonce, hmac_tag)") {
+    auto b = makeHeaderBytes();
+    b[12] = 1;                       // flags bit0 = encrypted
+    b[152] = 1;                      // cipher_id
+    for (int i = 0; i < 32; ++i) b[(size_t)(154 + i)] = (uint8_t)(0xC0 + i);
+    for (int i = 0; i < 32; ++i) b[(size_t)(186 + i)] = (uint8_t)(0xD0 + i);
+    IthacaHeader h;
+    REQUIRE(parseIthacaHeader(b.data(), b.size(), h));
+    CHECK((h.flags & 1u) == 1u);
+    CHECK(h.cipher_id == 1);
+    for (int i = 0; i < 32; ++i) {
+        CHECK(h.nonce[(size_t)i]    == (uint8_t)(0xC0 + i));
+        CHECK(h.hmac_tag[(size_t)i] == (uint8_t)(0xD0 + i));
+    }
+}
