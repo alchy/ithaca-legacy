@@ -19,8 +19,8 @@ std::array<uint8_t, 32> hmacSha256(const uint8_t* key, size_t key_len,
     if (key_len > kBlock) {
         auto kh = Sha256::hash(key, key_len);
         std::memcpy(k, kh.data(), 32);
-    } else {
-        std::memcpy(k, key, key_len);
+    } else if (key_len) {
+        std::memcpy(k, key, key_len);   // guard: memcpy s nullptr je UB i pri 0
     }
     uint8_t ipad[kBlock], opad[kBlock];
     for (size_t i = 0; i < kBlock; ++i) {
