@@ -14,7 +14,4 @@ namespace ithaca {
 WavData readSampleRange(const SampleFile& file, int64_t frame_off,
                         int64_t frame_count);
 
-// Bajty na vzorek pro kSampleFmt* kod; 0 = neznamy format.
-int sampleFormatBytes(uint16_t sample_format);
-
 } // namespace ithaca

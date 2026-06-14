@@ -57,6 +57,18 @@ struct IthacaEntry {
     uint32_t name_offset = kIthacaNoName;
 };
 
+// Bajty na vzorek pro kSampleFmt* kod; 0 = neznamy format. Sdileno
+// dekoderem (sample_read) i validatorem banky (ithaca_bank).
+inline int sampleFormatBytes(uint16_t f) {
+    switch (f) {
+        case kSampleFmtPcm16:   return 2;
+        case kSampleFmtPcm24:   return 3;
+        case kSampleFmtFloat32: return 4;
+        case kSampleFmtPcm32:   return 4;
+    }
+    return 0;
+}
+
 // Parsuje 408B hlavicku. false = kratky buffer nebo spatny magic. Verzi,
 // flagy a rozsahy NEKONTROLUJE — to dela openIthacaBank (rozlisene hlasky).
 bool parseIthacaHeader(const uint8_t* buf, size_t n, IthacaHeader& out);

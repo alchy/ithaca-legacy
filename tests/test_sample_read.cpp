@@ -94,3 +94,37 @@ TEST_CASE("readSampleRange odmitne neznamy sample_format") {
     CHECK_FALSE(readSampleRange(f, 0, 10).valid);
     removeBlob(b);
 }
+
+TEST_CASE("readSampleRange blob: mono PCM16 (mono->stereo double)") {
+    BuiltBlob b = buildTestIthaca("sr_mono", {
+        {60, 2048, 48000, -30.f, 10, /*channels=*/1, kSampleFmtPcm16}});
+    auto h = openFileHandle(b.ithaca_path);
+    REQUIRE(h != nullptr);
+    SampleFile f = locatorFor(b, h, 0);
+    WavData w = readSampleRange(f, 0, 2048);
+    REQUIRE(w.valid);
+    CHECK(w.frames == 2048);
+    REQUIRE(w.samples.size() == b.expected_samples[0].size());
+    for (size_t i = 0; i < w.samples.size(); ++i)
+        REQUIRE(w.samples[i] == b.expected_samples[0][i]);   // bit-exact, L==R
+    removeBlob(b);
+}
+
+TEST_CASE("readSampleRange blob: stereo PCM24 (bps=3 offset aritmetika)") {
+    BuiltBlob b = buildTestIthaca("sr_pcm24", {
+        {60, 2048, 48000, -30.f, 10, /*channels=*/2, kSampleFmtPcm24}});
+    auto h = openFileHandle(b.ithaca_path);
+    REQUIRE(h != nullptr);
+    SampleFile f = locatorFor(b, h, 0);
+    WavData whole = readSampleRange(f, 0, 2048);
+    REQUIRE(whole.valid);
+    REQUIRE(whole.samples.size() == b.expected_samples[0].size());
+    for (size_t i = 0; i < whole.samples.size(); ++i)
+        REQUIRE(whole.samples[i] == b.expected_samples[0][i]);   // bit-exact
+    WavData mid = readSampleRange(f, 1000, 200);   // vyrez — overit offset
+    REQUIRE(mid.valid);
+    CHECK(mid.frames == 200);
+    CHECK(mid.samples[0] == b.expected_samples[0][1000 * 2]);
+    CHECK(mid.samples[1] == b.expected_samples[0][1000 * 2 + 1]);
+    removeBlob(b);
+}

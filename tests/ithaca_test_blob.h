@@ -10,6 +10,7 @@
 #include "sample/ithaca_format.h"
 #include "util/sha256.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -25,6 +26,8 @@ struct BlobSpec {
     int      sample_rate;
     float    rms_db;        // bake hodnota (testy ji jen prenaseji)
     uint32_t attack_end;
+    int      channels      = 2;                          // 1=mono, 2=stereo
+    uint16_t sample_format = ithaca::kSampleFmtPcm16;    // kSampleFmt*
 };
 
 struct BuiltBlob {
@@ -44,6 +47,65 @@ inline std::vector<float> rampSamples(int frames) {
         s[(size_t)i*2+1] = -(float)i / (float)frames;
     }
     return s;
+}
+
+// Ramp pro N kanalu: kanal 0 = i/N, kanal 1 = -i/N (interleaved). Pro mono
+// jen kanal 0. Delka vektoru = frames * channels.
+inline std::vector<float> rampSamplesCh(int frames, int channels) {
+    std::vector<float> s((size_t)frames * (size_t)channels);
+    for (int i = 0; i < frames; ++i) {
+        s[(size_t)i * channels + 0] = (float)i / (float)frames;
+        if (channels >= 2) s[(size_t)i * channels + 1] = -(float)i / (float)frames;
+    }
+    return s;
+}
+
+// Zapise interleaved float samples jako WAV daneho formatu/kanalu. Pokryva
+// vsechny formaty co cte wav_reader (PCM16/24/32, IEEE float32).
+inline bool writeWavFmt(const std::string& path, const std::vector<float>& samples,
+                        int channels, int sample_rate, uint16_t sample_format) {
+    int bits; uint16_t audio_fmt;
+    switch (sample_format) {
+        case ithaca::kSampleFmtPcm16:   bits = 16; audio_fmt = 1; break;
+        case ithaca::kSampleFmtPcm24:   bits = 24; audio_fmt = 1; break;
+        case ithaca::kSampleFmtFloat32: bits = 32; audio_fmt = 3; break;
+        case ithaca::kSampleFmtPcm32:   bits = 32; audio_fmt = 1; break;
+        default: return false;
+    }
+    const int bps = bits / 8;
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    uint32_t data_sz   = (uint32_t)(samples.size() * (size_t)bps);
+    uint32_t byte_rate = (uint32_t)sample_rate * (uint32_t)channels * (uint32_t)bps;
+    auto wr32 = [&](uint32_t v){ std::fwrite(&v, 4, 1, f); };
+    auto wr16 = [&](uint16_t v){ std::fwrite(&v, 2, 1, f); };
+    std::fwrite("RIFF", 1, 4, f); wr32(36u + data_sz);
+    std::fwrite("WAVE", 1, 4, f);
+    std::fwrite("fmt ", 1, 4, f); wr32(16u);
+    wr16(audio_fmt); wr16((uint16_t)channels);
+    wr32((uint32_t)sample_rate); wr32(byte_rate);
+    wr16((uint16_t)(channels * bps)); wr16((uint16_t)bits);
+    std::fwrite("data", 1, 4, f); wr32(data_sz);
+    for (float s : samples) {
+        if (s >  1.f) s =  1.f;
+        if (s < -1.f) s = -1.f;
+        if (sample_format == ithaca::kSampleFmtPcm16) {
+            int16_t v = (int16_t)std::lround(s * 32767.f);
+            std::fwrite(&v, 2, 1, f);
+        } else if (sample_format == ithaca::kSampleFmtPcm24) {
+            int32_t v = (int32_t)std::lround(s * 8388607.f);
+            uint8_t b[3] = {(uint8_t)(v & 0xFF), (uint8_t)((v >> 8) & 0xFF),
+                            (uint8_t)((v >> 16) & 0xFF)};
+            std::fwrite(b, 1, 3, f);
+        } else if (sample_format == ithaca::kSampleFmtPcm32) {
+            int32_t v = (int32_t)std::llround((double)s * 2147483647.0);
+            std::fwrite(&v, 4, 1, f);
+        } else {   // float32
+            std::fwrite(&s, 4, 1, f);
+        }
+    }
+    std::fclose(f);
+    return true;
 }
 
 // Najde offset zacatku PCM dat v hotovem WAV souboru (po RIFF hlavicce):
@@ -85,8 +147,9 @@ inline BuiltBlob buildTestIthaca(const char* tag,
     std::vector<std::vector<uint8_t>> wavs;
     for (size_t i = 0; i < specs.size(); ++i) {
         std::string wp = out.dir + "/tmp_" + std::to_string(i) + ".wav";
-        auto samples = rampSamples(specs[i].frames);
-        writeWavStereo16(wp, samples, specs[i].sample_rate);
+        auto samples = rampSamplesCh(specs[i].frames, specs[i].channels);
+        writeWavFmt(wp, samples, specs[i].channels, specs[i].sample_rate,
+                    specs[i].sample_format);
         wavs.push_back(readFileBytes(wp));
         // Ocekavana data = round-trip pres NAS wav_reader (zadna rucni
         // kvantizace — garantovana shoda s tim, co cte loader).
@@ -113,12 +176,12 @@ inline BuiltBlob buildTestIthaca(const char* tag,
         uint64_t off = blob_offset + blob.size();
         IthacaEntry e;
         e.midi            = (uint16_t)specs[i].midi;
-        e.channels        = 2;
+        e.channels        = (uint16_t)specs[i].channels;
         e.sample_rate     = (uint32_t)specs[i].sample_rate;
         e.entry_offset    = off;
         e.entry_size      = wavs[i].size();
         e.pcm_data_offset = findDataOffset(wavs[i]);
-        e.sample_format   = kSampleFmtPcm16;
+        e.sample_format   = specs[i].sample_format;
         e.frames          = specs[i].frames;
         e.rms_db          = specs[i].rms_db;
         e.attack_end      = specs[i].attack_end;

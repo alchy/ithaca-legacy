@@ -78,8 +78,7 @@ IthacaBankFile openIthacaBank(const std::string& path) {
             e.entry_offset + e.entry_size > h.blob_offset + h.blob_size ||
             e.entry_offset + e.entry_size < e.entry_offset)
             return fail("zaznam: mimo rozsah blobu");
-        const uint64_t bps = (e.sample_format == kSampleFmtPcm16) ? 2
-                           : (e.sample_format == kSampleFmtPcm24) ? 3 : 4;
+        const uint64_t bps = (uint64_t)sampleFormatBytes(e.sample_format);
         // Division-form guard: frames * channels * bps by pro obri frames
         // preteklo u64 (untrusted vstup) — porovnavame delenim.
         const uint64_t frame_bytes = (uint64_t)e.channels * bps;
