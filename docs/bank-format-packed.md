@@ -21,7 +21,8 @@
 >
 > **v2 (not yet built):** encryption, signing, a licence key file with buyer
 > identity, blob compression. The header reserves `flags` bits and a 256-byte
-> block for them; v1 requires `flags == 0`.
+> block for them; v1 requires `flags == 0`. Full design note: **§7 Security &
+> encryption**.
 
 ---
 
@@ -203,6 +204,84 @@ or an existing output without `--force`.
 
 ## 6. Limitations (v1)
 
-- `flags` must be 0 — encryption and signing are v2.
+- `flags` must be 0 — encryption and signing are v2 (see §7).
 - The bake input must be a dynamic-velocity directory (convert flat banks first).
 - Only the dynamic-velocity model is supported in the packed format.
+
+## 7. Security & encryption (v2 — planned, NOT implemented)
+
+This section is the canonical design note for the planned protection of licensed
+banks. Nothing here is built yet; v1 ships plaintext (`flags == 0`). The format
+was designed so v2 slots in **without breaking v1** (reserved `flags` bits + a
+256-byte header block + the existing integrity hashes).
+
+### 7.1 Threat model
+
+**Deterrence + leak-tracing, not hard DRM.** The symmetric key ships *beside* the
+bank, so a determined user can always extract the audio — that is accepted; no
+client-side scheme prevents it. The value is twofold: (a) raise the bar so casual
+copying of the loose WAVs isn't trivial, and (b) embed the buyer's identity in
+the key so a leaked bank is traceable to who leaked it. Anything stronger (server
+activation, machine binding) was explicitly rejected as bad UX for little gain.
+
+### 7.2 What the format already reserves (v1)
+
+- `flags` u32 (header offset 12): bit0 `kIthacaFlagEncrypted`, bit1
+  `kIthacaFlagSigned` (constants in `engine/sample/ithaca_format.h`).
+- 256-byte reserved block (header offset 152) — room for cipher id, key
+  fingerprint, signature, nonce/salt, format sub-version.
+- `openIthacaBank` currently **rejects `flags != 0`** (the v1 gate). v2 lifts this
+  only once decrypt + verify exist, so an encrypted/signed file can never be
+  misread as plaintext by a v1 binary.
+- Integrity hashes `sha256_index` (sections) and `sha256_payload` (blob) already
+  present — integrity is solved; v2 adds *confidentiality* + *authenticity*.
+
+### 7.3 Building blocks
+
+1. **Blob encryption — random-access stream cipher** (ChaCha20 or AES-CTR). The
+   loader does `pread` at arbitrary offsets and streams; the cipher must decrypt
+   any offset independently (counter derived from the absolute byte offset),
+   ~GB/s, seek-for-free. **Only the blob is encrypted**; header + index + names
+   stay plaintext (the loader needs offsets/sizes to seek) and are covered by
+   `sha256_index`. Non-seekable modes (CBC) are unsuitable.
+2. **Key file beside the bank** — in the same directory as `soundbank.ithaca`.
+   Holds the symmetric key + a uuencoded ~1204-byte info block (JSON: buyer
+   email, transaction id, …) for leak traceability. Each licensed bank is baked
+   "made to measure" per buyer.
+3. **Signature — Ed25519** over header + index, public key embedded in the app →
+   authenticity (the bank is genuinely ours and untampered). `flags` bit1.
+
+### 7.4 Where it slots into the code
+
+The existing read abstraction makes this localized:
+- **Read side:** decryption inserts into the blob branch of `readSampleRange`
+  (decrypt only the bytes returned by `IFileHandle::readAt`, keyed by absolute
+  offset — hence the random-access cipher). `openIthacaBank` loads the key file
+  from the bank directory, verifies the Ed25519 signature with the embedded
+  public key, then clears the `flags != 0` gate. No change to the loader/stream
+  logic above the dispatcher.
+- **Bake side:** `bake_soundbank.py` gains `--encrypt-key` / `--sign-key`;
+  encrypts the blob, writes the key file beside the output, signs the header.
+- **Library candidate:** [monocypher](https://monocypher.org) (single-file C:
+  ChaCha20 + Ed25519, no OpenSSL dependency). Alternative: libsodium.
+
+### 7.5 Open questions (decide before implementing)
+
+- Exact key-file format (binary vs text; fields beyond the uuencoded block).
+- Key derivation: raw symmetric key in the file, or derived from buyer id + a
+  master secret held by the bake tooling.
+- Per-bank unique key vs one shared key across a buyer's banks.
+- Where the app's signing public key lives, and key-rotation strategy.
+- Whether names/index also get encrypted (probably not — needed for seek).
+- Nonce/IV placement (header reserve) and per-bake uniqueness.
+
+### 7.6 Implementation path
+
+1. Vendor the crypto lib (monocypher) under `third-party/`.
+2. Bake: encrypt blob + write key file + sign header (`--encrypt-key`/`--sign-key`).
+3. Read: key-file load, signature verify, per-offset decrypt in the blob path.
+4. Lift the v1 `flags != 0` gate in `openIthacaBank`.
+5. Tests: encrypted round-trip, tamper detection, wrong/missing-key handling.
+
+> Before building v2, run a brainstorming pass on §7.5 — those choices shape the
+> key-file format and the bake/read API.
