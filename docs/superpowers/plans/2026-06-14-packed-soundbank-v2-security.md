@@ -1,5 +1,15 @@
 # Pakovaná soundbanka v2 — zabezpečení — implementační plán
 
+> ## ✅ DOKONČENO (2026-06-15)
+>
+> Všech 12 tasků hotovo a zrevidováno (spec + quality per task + finální
+> holistická revize → ready to merge). 44/44 ctest + 18/18 python testů + smoke
+> zelené. Cross-language parita ověřena byte-exact (RFC 4231 vektory v obou
+> jazycích) i end-to-end přes reálnou `ithaca-cli` (`roundtrip_packed_bank`:
+> python bake se secretem → engine dešifruje → tamper odmítnut). Master secret
+> potvrzeně **není v gitu**. Threat model: odrazení + dohledatelnost (ne DRM).
+> Větev `feat/packed-soundbank-v2-security` připravena k mergi/PR.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Šifrování pakované banky `soundbank.ithaca` + licenční soubor s identitou kupce kryptograficky vázaný do banky (HMAC-SHA256 + SHA-256 CTR keystream, nula nových závislostí), s `LicenseInvalid` overlay v GUI.
