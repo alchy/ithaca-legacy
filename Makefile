@@ -79,7 +79,9 @@ help:
 	@printf "  make test               spust doctest pres ctest\n"
 	@printf "  make smoke              ithaca-cli --selftest\n"
 	@printf "  make clean              smaze $(BUILD_DIR)/\n"
-	@printf "  make info               vypis detekovane hodnoty\n\n"
+	@printf "  make info               vypis detekovane hodnoty\n"
+	@printf "  make new-license SRC=<dyn-banka> DST=<cil>\n"
+	@printf "                          licencovana (sifrovana) banka + license.ithaca\n\n"
 
 .PHONY: info
 info:
@@ -140,3 +142,25 @@ f.writeframes(b''.join(struct.pack('<hh',8000,8000) for _ in range(48000))); f.c
 clean:
 	@$(RM_RF) $(BUILD_DIR)
 	@printf "Build dir smazan.\n"
+
+# -- Licencovana (sifrovana) packed banka --
+# Zabali dynamickou banku do SIFROVANE soundbank.ithaca + vedle ni vytvori
+# license.ithaca (plaintext JSON s identitou vlastnika). Klic se odvodi z
+# master secretu ($(SECRET_FILE)) + license. Detaily: docs/bank-format-packed.md.
+#   make new-license SRC=<dynamicka-banka> DST=<cilovy-adresar>
+#     -> interaktivni dotaz na udaje vlastnika (email/jmeno/transakce)
+#   make new-license SRC=... DST=... LICENSE_JSON=<json>
+#     -> neinteraktivni (udaje z JSON souboru)
+.PHONY: new-license
+new-license:
+	@if [ -z "$(SRC)" ] || [ -z "$(DST)" ]; then \
+	    printf "usage: make new-license SRC=<dynamicka-banka> DST=<cilovy-adresar> [LICENSE_JSON=<json>]\n"; \
+	    exit 1; \
+	fi
+	@python3 tools/gen-bank-secret.py $(SECRET_FILE)
+	@python3 tools/bake_soundbank.py \
+	    --source-soundbank-dir "$(SRC)" \
+	    --destination-soundbank-dir "$(DST)" \
+	    --secret-file "$(SECRET_FILE)" \
+	    $(if $(LICENSE_JSON),--license-json "$(LICENSE_JSON)",--license) \
+	    --verify
