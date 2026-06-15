@@ -99,6 +99,30 @@ half window), mono mix `0.5*(L+R)`, `20*log10(max_rms)` floored at −120 dB,
 measured only over the preload head. This keeps the velocity-layer ordering
 identical to loading the same bank as a directory.
 
+### Licensed (encrypted) bake — v2
+
+To produce a protected, buyer-bound bank, add `--license` (interactive prompt for
+owner fields) or `--license-json <path>` (non-interactive). The blob is encrypted
+and a plaintext `license.ithaca` is written next to `soundbank.ithaca`:
+
+```sh
+python3 tools/bake_soundbank.py \
+    --source-soundbank-dir      path/to/dynamic-bank \
+    --destination-soundbank-dir path/to/output-dir \
+    --license --verify
+# → output-dir/soundbank.ithaca (encrypted) + output-dir/license.ithaca (plaintext)
+```
+
+- The encryption key is derived from the **build-time master secret**
+  (`secret/bank_secret.key`, see §6) + the exact bytes of `license.ithaca`. The
+  same secret must be compiled into the player that opens the bank (it is, when
+  built from the same checkout). `--secret-file <path>` overrides the secret path.
+- Editing `license.ithaca` (or the bank) changes the derived key / breaks the
+  integrity tag → the engine refuses to load it and the GUI shows
+  *"Soundbank is corrupted or license file is invalid. Sampler is unable to load
+  the bank."* (click to continue). The buyer's identity therefore cannot be
+  stripped while keeping the bank usable. Full design + threat model: §7.
+
 ## 3. File layout
 
 Little-endian. Four sections after the header: metadata → index → names → blob.
@@ -208,12 +232,15 @@ or an existing output without `--force`.
 - The bake input must be a dynamic-velocity directory (convert flat banks first).
 - Only the dynamic-velocity model is supported in the packed format.
 
-## 7. Security & encryption (v2 — planned, NOT implemented)
+## 7. Security & encryption (v2 — IMPLEMENTED)
 
-This section is the canonical design note for the planned protection of licensed
-banks. Nothing here is built yet; v1 ships plaintext (`flags == 0`). The format
-was designed so v2 slots in **without breaking v1** (reserved `flags` bits + a
-256-byte header block + the existing integrity hashes).
+This section is the canonical design note for the protection of licensed banks.
+**v2 is implemented** (branch `feat/packed-soundbank-v2-security`): blob
+encryption (SHA-256 CTR keystream), a plaintext `license.ithaca` cryptographically
+bound into the bank, and an `HMAC-SHA256` integrity tag. v1 plaintext banks
+(`flags == 0`) load unchanged. Implementation detail spec:
+`docs/superpowers/specs/2026-06-14-packed-soundbank-v2-security-design.md`. To
+bake a licensed bank see §2 (the `--license` flow).
 
 ### 7.1 Threat model
 

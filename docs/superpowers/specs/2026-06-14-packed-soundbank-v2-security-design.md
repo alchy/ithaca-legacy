@@ -1,6 +1,6 @@
 # Pakovaná soundbanka v2 — zabezpečení (šifra + licence) — design
 
-Datum: 2026-06-14 · Větev: `feat/packed-soundbank-v2-security` · Stav: schválený návrh (před implementací)
+Datum: 2026-06-14 · Větev: `feat/packed-soundbank-v2-security` · Stav: implementováno
 
 Navazuje na hotové v1 (`docs/bank-format-packed.md`, merge `4d1d20a`). v1 formát
 nechal háčky: `flags` bity (bit0 encrypted, bit1 signed) + 256 B rezervu v hlavičce
