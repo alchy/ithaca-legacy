@@ -1,28 +1,30 @@
 # Ithaca Sample-Bank Format — PACKED (`soundbank.ithaca`)
 
-> ## ✅ IMPLEMENTED (v1 — packing only)
+> ## ✅ IMPLEMENTED (v1 packing + v2 encryption)
 >
 > A whole **dynamic-velocity** bank packed into a **single file**
 > `soundbank.ithaca` for distribution. The user can still drop a plain
 > directory bank (fixed- or dynamic-velocity) as before; a directory that
-> contains `soundbank.ithaca` is loaded through this packed path instead.
+> contains `soundbank.ithaca` is loaded through this packed path instead. A bank
+> is either **plaintext** (anyone can repack it) or **encrypted + licensed** (v2,
+> buyer-bound) — same format, one header bit apart (see §3).
 >
 > - ✅ **Autodetection** — `scanBank` returns `BankFormat::PackedIthaca` when the
 >   bank directory contains `soundbank.ithaca` (priority over everything else;
->   `bank_index.cpp`).
+>   `bank_index.cpp`). The header `flags` then says plaintext vs. encrypted.
 > - ✅ **Loading** — `loadBank` → `loadPackedBank` fills the bank skeleton
 >   straight from the index (no directory scan, no RMS analysis, no sort — see
 >   below); preload heads are read in parallel, streaming reads come from the
->   same blob (`sample_store.cpp`, `io/sample_read.cpp`).
+>   same blob (`sample_store.cpp`, `io/sample_read.cpp`). Encrypted banks decrypt
+>   transparently under `readAt` (§4).
 > - ✅ **Baking** — `tools/bake_soundbank.py` packs a dynamic-velocity directory
->   into `soundbank.ithaca` (analysis in numpy).
-> - ✅ **Integrity** — SHA-256 over the index sections (verified on every load)
->   and over the blob (verified by `bake --verify`).
+>   into `soundbank.ithaca` (analysis in numpy); `--license` makes it encrypted +
+>   buyer-bound (§2).
+> - ✅ **Integrity** — SHA-256 over the index sections (every load) and over the
+>   blob (`bake --verify`); v2 adds blob encryption + an HMAC tamper tag.
 >
-> **v2 (not yet built):** encryption, signing, a licence key file with buyer
-> identity, blob compression. The header reserves `flags` bits and a 256-byte
-> block for them; v1 requires `flags == 0`. Full design note: **§7 Security &
-> encryption**.
+> **v2 security (encryption + licence)** is implemented — see §7. Still future:
+> asymmetric **signing** (`flags` bit1, reserved) and blob compression.
 
 ---
 
@@ -114,7 +116,7 @@ python3 tools/bake_soundbank.py \
 ```
 
 - The encryption key is derived from the **build-time master secret**
-  (`secret/bank_secret.key`, see §6) + the exact bytes of `license.ithaca`. The
+  (`secret/bank_secret.key`, see §7.5) + the exact bytes of `license.ithaca`. The
   same secret must be compiled into the player that opens the bank (it is, when
   built from the same checkout). `--secret-file <path>` overrides the secret path.
 - Editing `license.ithaca` (or the bank) changes the derived key / breaks the
@@ -150,11 +152,22 @@ Little-endian. Four sections after the header: metadata → index → names → 
 | 84     | u32   | reserved (0) |
 | 88     | 32 B  | `sha256_index` — over metadata + index + names |
 | 120    | 32 B  | `sha256_payload` — over blob |
-| 152    | 256 B | reserved for v2 (0) |
+| 152    | 1 B   | `cipher_id` — 0 = plaintext, 1 = sha256-ctr (v2) |
+| 153    | 1 B   | reserved (0) |
+| 154    | 32 B  | `nonce` — random per bake (v2); 0 when plaintext |
+| 186    | 32 B  | `hmac_tag` — HMAC-SHA256 over metadata+index+names+license (v2); 0 when plaintext |
+| 218    | 190 B | reserved (0) |
 
 `sha256_index` is verified on **every load** (the sections are small).
 `sha256_payload` is **not** checked on load (it would stall start-up on a
 multi-GB file) — only `bake --verify` checks it.
+
+**Plaintext vs. encrypted is one bit.** A v1/plaintext bank has `flags == 0`,
+`cipher_id == 0`, zeroed `nonce`/`hmac_tag`, and **no** `license.ithaca`. An
+encrypted (v2) bank has `flags` bit0 set, `cipher_id == 1`, a random `nonce`, a
+real `hmac_tag`, and a companion `license.ithaca` (see below). The byte layout is
+otherwise identical — the same loader reads both; only the blob bytes differ
+(ciphertext vs. plaintext WAVs) and the v2 reserve fields are populated.
 
 ### Metadata (UTF-8 JSON)
 
@@ -190,8 +203,32 @@ name. For debugging / `--verify` extraction only; the loader does not read it.
 
 ### Blob
 
-The verbatim WAV files concatenated, each aligned to 4096 B (gaps zero-filled).
-No transformation of the audio data.
+Plaintext bank: the verbatim WAV files concatenated, each aligned to 4096 B (gaps
+zero-filled), no transformation. Encrypted bank: the **same** byte layout, but the
+entire blob region `[blob_offset, blob_offset+blob_size)` (data + alignment
+padding) is XORed with a SHA-256 CTR keystream — `keystream_block(i) =
+HMAC-SHA256(bank_key, nonce ‖ u64le(i))`, block `i = blob_relative_pos / 32`. The
+header/metadata/index/names stay plaintext so the loader can seek.
+
+### `license.ithaca` (encrypted banks only)
+
+A separate **plaintext UTF-8 JSON** file next to `soundbank.ithaca` in the same
+directory. Holds the buyer identity, e.g.:
+
+```json
+{"bank_name":"sp-customgrand","issued_at":"2026-06-15T00:00:00",
+ "owner_email":"buyer@example.com","owner_name":"Buyer","transaction_id":"TX-42"}
+```
+
+Its **exact bytes** feed key derivation and the integrity tag:
+`bank_key = HMAC-SHA256(master_secret, "ithaca-enc-v2" ‖ license_bytes)`,
+`mac_key = HMAC-SHA256(master_secret, "ithaca-mac-v2" ‖ license_bytes)`,
+`hmac_tag = HMAC-SHA256(mac_key, metadata ‖ index ‖ names ‖ license_bytes)`. So
+editing the license (or removing it) changes the key / breaks the tag and the
+bank no longer opens — the buyer's identity is cryptographically bound and cannot
+be stripped. The owner can read it (transparency) but not alter it. Distribute the
+**whole directory** (`soundbank.ithaca` + `license.ithaca`); the `master_secret`
+(§7.5) stays with the publisher and is never shipped.
 
 ## 4. How the engine loads it
 
@@ -200,19 +237,31 @@ No transformation of the audio data.
 
 1. `openIthacaBank` opens the file via a positioned-read handle (`pread`, no
    shared cursor → parallel workers and the streaming worker share one fd
-   lock-free) and validates: magic, version, `flags == 0`, `sha256_index`,
-   section ranges, and per-entry ranges (midi ≤ 127, known `sample_format`,
-   `frames > 0`, `sample_rate` in range, PCM data within `entry_size`, entry
-   within blob).
-2. Fills the bank skeleton straight from the index — **no** directory scan,
+   lock-free) and validates: magic, version, `flags` (bit0 = encrypted is
+   allowed; any other bit, e.g. the unimplemented signed bit1, is rejected),
+   `sha256_index`, section ranges, and per-entry ranges (midi ≤ 127, known
+   `sample_format`, `frames > 0`, `sample_rate` in range, PCM data within
+   `entry_size`, entry within blob).
+2. **If `flags` bit0 (encrypted):** reads `license.ithaca` from the same
+   directory (missing → `LicenseInvalid`), derives `bank_key`/`mac_key` from the
+   compiled `master_secret` + license bytes, verifies `hmac_tag` (mismatch →
+   `LicenseInvalid`), and wraps the file handle in a `DecryptingFileHandle` that
+   transparently decrypts the blob range under `readAt`. A `LicenseInvalid`
+   result → the bank loads empty and the GUI shows *"Soundbank is corrupted or
+   license file is invalid. Sampler is unable to load the bank."* (click to
+   continue). For a **plaintext** bank (bit0 == 0) this whole step is skipped —
+   no `license.ithaca` needed, no decryption.
+3. Fills the bank skeleton straight from the index — **no** directory scan,
    **no** RMS analysis, **no** sort. Baked `rms_db`/`attack_end` are
    authoritative. The `midi_from`/`midi_to` filter applies as usual.
-3. Reads preload heads in parallel through the read dispatcher
+4. Reads preload heads in parallel through the read dispatcher
    (`readSampleRange`), which decodes the requested frame range straight from
-   the blob. FullyLoaded vs. Streamed stays a runtime decision (baked `frames`
-   vs. the current `preload_ms`).
-4. Streaming during playback reads the rest of each Streamed sample from the
-   same blob handle (`StreamRequest` carries the `SampleFile` locator).
+   the blob (decrypting transparently for encrypted banks). FullyLoaded vs.
+   Streamed stays a runtime decision (baked `frames` vs. the current `preload_ms`).
+5. Streaming during playback reads the rest of each Streamed sample from the
+   same blob handle (`StreamRequest` carries the `SampleFile` locator). Only the
+   bytes actually read are decrypted (random-access keystream), off the audio
+   thread — no RT impact.
 
 ## 5. Error handling
 
@@ -226,11 +275,12 @@ existing EOF/underrun path (the voice fades out).
 non-dynamic source directory, an unsupported WAV format, a 0-frame/corrupt WAV,
 or an existing output without `--force`.
 
-## 6. Limitations (v1)
+## 6. Limitations
 
-- `flags` must be 0 — encryption and signing are v2 (see §7).
 - The bake input must be a dynamic-velocity directory (convert flat banks first).
 - Only the dynamic-velocity model is supported in the packed format.
+- Encryption is implemented (v2, §7); asymmetric **signing** (`flags` bit1) is
+  reserved but not implemented — a bank with bit1 set is rejected.
 
 ## 7. Security & encryption (v2 — IMPLEMENTED)
 
@@ -257,58 +307,81 @@ activation, machine binding) was explicitly rejected as bad UX for little gain.
   `kIthacaFlagSigned` (constants in `engine/sample/ithaca_format.h`).
 - 256-byte reserved block (header offset 152) — room for cipher id, key
   fingerprint, signature, nonce/salt, format sub-version.
-- `openIthacaBank` currently **rejects `flags != 0`** (the v1 gate). v2 lifts this
-  only once decrypt + verify exist, so an encrypted/signed file can never be
-  misread as plaintext by a v1 binary.
-- Integrity hashes `sha256_index` (sections) and `sha256_payload` (blob) already
-  present — integrity is solved; v2 adds *confidentiality* + *authenticity*.
+- `openIthacaBank` accepts `flags == 0` (plaintext) and bit0 (encrypted, v2);
+  any other bit (e.g. the unimplemented signed bit1) is rejected. A pre-v2
+  binary rejected `flags != 0` entirely, so it could never misread an encrypted
+  file as plaintext.
+- Integrity hashes `sha256_index` (sections, every load) and `sha256_payload`
+  (blob, `--verify` only) detect corruption; v2 adds *confidentiality* (blob
+  cipher) + keyed tamper detection (`hmac_tag`).
 
-### 7.3 Building blocks
+### 7.3 Building blocks (as built)
 
-1. **Blob encryption — random-access stream cipher** (ChaCha20 or AES-CTR). The
-   loader does `pread` at arbitrary offsets and streams; the cipher must decrypt
-   any offset independently (counter derived from the absolute byte offset),
-   ~GB/s, seek-for-free. **Only the blob is encrypted**; header + index + names
-   stay plaintext (the loader needs offsets/sizes to seek) and are covered by
-   `sha256_index`. Non-seekable modes (CBC) are unsuitable.
-2. **Key file beside the bank** — in the same directory as `soundbank.ithaca`.
-   Holds the symmetric key + a uuencoded ~1204-byte info block (JSON: buyer
-   email, transaction id, …) for leak traceability. Each licensed bank is baked
-   "made to measure" per buyer.
-3. **Signature — Ed25519** over header + index, public key embedded in the app →
-   authenticity (the bank is genuinely ours and untampered). `flags` bit1.
+1. **Blob encryption — SHA-256 CTR keystream.** `keystream_block(i) =
+   HMAC-SHA256(bank_key, nonce ‖ u64le(i))`, byte at blob-relative position `p`
+   XORed with `keystream_block(p/32)[p%32]`. Random-access (any offset decrypts
+   independently → streaming seeks decrypt only the bytes read), built entirely
+   on the in-house `Sha256` — **no external crypto dependency**. Only the blob is
+   encrypted; header/index/names stay plaintext (loader seeks by them).
+2. **`license.ithaca` bound by key derivation.** Plaintext JSON beside the bank
+   (see §3). Its exact bytes derive `bank_key`/`mac_key` and feed the MAC, so it
+   cannot be edited without breaking decryption — that *is* the leak-tracing
+   enforcement.
+3. **Integrity — HMAC-SHA256** (`hmac_tag` in the header), keyed by `mac_key`,
+   over metadata+index+names+license. Symmetric (no Ed25519): the model is
+   symmetric (secret in the binary), so a keyed MAC — not asymmetric signing —
+   is the right tamper check. (Signed `flags` bit1 is reserved, not implemented.)
 
-### 7.4 Where it slots into the code
+> Note: an earlier design draft considered ChaCha20 + Ed25519 + a separate
+> key-file. The shipped design is the simpler all-`Sha256` scheme above (chosen
+> 2026-06-14): zero new dependencies, fast enough because only read bytes decrypt.
 
-The existing read abstraction makes this localized:
-- **Read side:** decryption inserts into the blob branch of `readSampleRange`
-  (decrypt only the bytes returned by `IFileHandle::readAt`, keyed by absolute
-  offset — hence the random-access cipher). `openIthacaBank` loads the key file
-  from the bank directory, verifies the Ed25519 signature with the embedded
-  public key, then clears the `flags != 0` gate. No change to the loader/stream
-  logic above the dispatcher.
-- **Bake side:** `bake_soundbank.py` gains `--encrypt-key` / `--sign-key`;
-  encrypts the blob, writes the key file beside the output, signs the header.
-- **Library candidate:** [monocypher](https://monocypher.org) (single-file C:
-  ChaCha20 + Ed25519, no OpenSSL dependency). Alternative: libsodium.
+### 7.4 Where it lives in the code
 
-### 7.5 Open questions (decide before implementing)
+- **`engine/util/ithaca_crypto.{h,cpp}`** — HMAC-SHA256, `deriveKey`, CTR
+  `keystreamXor` (+ python mirror `tools/ithaca_crypto.py`, parity-tested).
+- **`engine/io/file_handle.cpp`** — `DecryptingFileHandle` wraps the real handle;
+  decrypts the blob range under `readAt`, passes header/index through unchanged.
+  Everything above `readAt` (loader, streaming, voices) is untouched.
+- **`engine/sample/ithaca_bank.cpp`** — `openIthacaBank`: for `flags` bit0, reads
+  `license.ithaca`, derives keys from the compiled `kBankSecret`, verifies
+  `hmac_tag`, wraps the handle. `LicenseInvalid` on any failure.
+- **`tools/bake_soundbank.py`** — `--license` / `--license-json` encrypt the blob
+  + write `license.ithaca` + fill the v2 header fields.
 
-- Exact key-file format (binary vs text; fields beyond the uuencoded block).
-- Key derivation: raw symmetric key in the file, or derived from buyer id + a
-  master secret held by the bake tooling.
-- Per-bank unique key vs one shared key across a buyer's banks.
-- Where the app's signing public key lives, and key-rotation strategy.
-- Whether names/index also get encrypted (probably not — needed for seek).
-- Nonce/IV placement (header reserve) and per-bake uniqueness.
+### 7.5 Master secret — generation, storage, build
 
-### 7.6 Implementation path
+- **What:** a 32-byte symmetric `master_secret`. `bank_key`/`mac_key` derive from
+  it + `license.ithaca`. The publisher's bake tool and the shipped player must use
+  the **same** secret (it's compiled into the player).
+- **Where stored:** one file **`secret/bank_secret.key`** at the repo root.
+  **Gitignored** (`.gitignore` lists `secret/` and `bank_secret_generated.h`) —
+  the secret is **never committed**. The bake tool reads this file
+  (`--secret-file`, default `secret/bank_secret.key`); CMake compiles it into
+  `build/generated/bank_secret_generated.h` (`constexpr uint8_t kBankSecret[32]`,
+  also gitignored) which the engine links.
+- **Generated by the build, all targets:** `tools/gen-bank-secret.py` creates the
+  file with 32 random bytes **only if it does not exist** (idempotent — never
+  overwrites). It runs from **both** the Makefile (a `configure` prerequisite, so
+  `make <any-target>` ensures it) **and** CMake configure (`execute_process`, so a
+  direct `cmake` build works too). On a fresh clone the file is absent → the first
+  build generates it and prints a loud warning to back it up. Cross-platform
+  (python3 only). So on any machine, any build target works with zero manual key
+  steps.
+- **Production caveat:** the secret is random per machine. A dev clone is
+  self-consistent (its bake + its build agree). The **production** secret is a
+  long-lived asset: back up `secret/bank_secret.key`; losing or regenerating it
+  makes previously-shipped licensed banks unopenable by new player builds. A dev
+  build cannot open production licensed banks (different secret) — by design.
 
-1. Vendor the crypto lib (monocypher) under `third-party/`.
-2. Bake: encrypt blob + write key file + sign header (`--encrypt-key`/`--sign-key`).
-3. Read: key-file load, signature verify, per-offset decrypt in the blob path.
-4. Lift the v1 `flags != 0` gate in `openIthacaBank`.
-5. Tests: encrypted round-trip, tamper detection, wrong/missing-key handling.
+### 7.6 Accepted limits (threat model consequences)
 
-> Before building v2, run a brainstorming pass on §7.5 — those choices shape the
-> key-file format and the bake/read API.
+Deterrence + traceability, not unbreakable DRM: the master secret is in the
+player binary (reverse-engineerable), decrypted audio is in RAM, and copying the
+whole bank directory (`soundbank.ithaca` + `license.ithaca`) to another machine
+works. What's prevented: trivial copying of loose WAVs, and stripping the buyer
+identity while keeping the bank usable. Bake of a multi-GB bank is CPU-heavy
+(~4 min/6 GB — one HMAC per 32 B of keystream); decrypt-at-load touches only
+preloaded/streamed bytes (large-bank full load adds ~1 s, one-time, off the audio
+thread). A faster cipher (ChaCha20) would cut both but adds a dependency — not
+done.
