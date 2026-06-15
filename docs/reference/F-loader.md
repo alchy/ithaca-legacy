@@ -14,11 +14,12 @@ Oblast Loader pokrývá vše od fyzického adresáře s WAV soubory až po struk
 | `engine/sample/sample_store.h/.cpp` | Orchestrace načítání banky (adresářová i pakovaná větev); paralelní prepare + sériový commit; progress pro GUI | `Bank`, `BankLoadProgress`, `PreparedSample` |
 | `engine/io/wav_reader.h/.cpp` | Čtení WAV souborů (hlavička, celý soubor, výřez) | `WavData`, `WavInfo` |
 | `engine/io/wav_writer.h/.cpp` | Zápis interleaved stereo float do 16-bit PCM WAV | — |
-| `engine/io/file_handle.h/.cpp` | Bezstavové pozicované čtení (`pread`) — sdílený fd pro paralelní i streaming čtení pakované banky | `IFileHandle` |
+| `engine/io/file_handle.h/.cpp` | Bezstavové pozicované čtení (`pread`) — sdílený fd; `DecryptingFileHandle` (v2) dešifruje blob rozsah pod `readAt` | `IFileHandle` |
 | `engine/io/sample_read.h/.cpp` | Dispatcher čtení vzorku: WAV cesta (→ `readWavRange`) nebo blob `.ithaca` (pread + dekód) | — (`readSampleRange`) |
 | `engine/sample/ithaca_format.h/.cpp` | Binární formát `soundbank.ithaca` — konstanty, PODy, čisté parsery, `sampleFormatBytes` | `IthacaHeader`, `IthacaEntry` |
 | `engine/sample/ithaca_bank.h/.cpp` | Otevření + validace pakované banky (magic, verze, hash, rozsahy) | `IthacaBankFile` |
 | `engine/util/sha256.h/.cpp` | SHA-256 (FIPS 180-4) pro integritu pakované banky | `Sha256` |
+| `engine/util/ithaca_crypto.h/.cpp` | v2 krypto nad `Sha256`: HMAC-SHA256, KDF, CTR keystream (šifra licencované banky) | — (`hmacSha256`, `deriveKey`, `keystreamXor`) |
 
 ---
 
@@ -225,11 +226,16 @@ abstrakci:
 
 **Load path.** `loadBank()` po detekci `PackedIthaca` volá `loadPackedBank()`:
 1. `openIthacaBank()` (`sample/ithaca_bank.h`) otevře soubor a zvaliduje: magic,
-   verzi, `flags == 0` (v1 neumí šifru/podpis), `sha256_index` (přes
-   metadata+index+names — **při každém načtení**; blob hash ověří jen
-   `bake --verify`), rozsahy sekcí a per-záznam meze (midi ≤ 127, známý
-   `sample_format`, `frames > 0`, `sample_rate` v rozsahu, PCM data uvnitř
-   `entry_size`, záznam uvnitř blobu). Vrátí záznamy + otevřený handle.
+   verzi, `flags` (bit0 = encrypted povolen; jiný bit, např. neimplementovaný
+   signed bit1, odmítnut), `sha256_index` (přes metadata+index+names — **při
+   každém načtení**; blob hash ověří jen `bake --verify`), rozsahy sekcí a
+   per-záznam meze (midi ≤ 127, známý `sample_format`, `frames > 0`,
+   `sample_rate` v rozsahu, PCM data uvnitř `entry_size`, záznam uvnitř blobu).
+   **U šifrované banky (flags bit0):** načte `license.ithaca` ze stejného
+   adresáře, odvodí klíče z kompilovaného `kBankSecret` + license, ověří
+   `hmac_tag` a obalí handle do `DecryptingFileHandle`; selhání → `LicenseInvalid`
+   (prázdná banka + overlay). Vrátí záznamy + (de)šifrující handle. v2 detaily:
+   `docs/superpowers/specs/2026-06-14-packed-soundbank-v2-security-design.md`.
 2. Plní kostru `Bank` **přímo z indexu** — žádný directory scan, žádná RMS
    analýza, žádný sort. Baked `rms_db`/`attack_end` jsou autoritativní; index je
    předřazený dle `(midi, rms vzestupně)`, takže `commitSample` ve scan pořadí

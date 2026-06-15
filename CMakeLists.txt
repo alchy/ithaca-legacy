@@ -60,12 +60,34 @@ endif()
 # -- vendored deps --
 add_subdirectory(third-party)
 
+# -- Master secret pro pakovanou banku v2 (gitignored, build-time) --
+# Idempotentni: gen-bank-secret.py vytvori jen kdyz chybi. Z nej se vygeneruje
+# bank_secret_generated.h (32 B jako C pole) do build adresare.
+set(ITHACA_BANK_SECRET_FILE "${CMAKE_SOURCE_DIR}/secret/bank_secret.key")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen-bank-secret.py
+            ${ITHACA_BANK_SECRET_FILE}
+    RESULT_VARIABLE _sk_rc)
+if(NOT _sk_rc EQUAL 0)
+    message(FATAL_ERROR "gen-bank-secret.py selhal (rc=${_sk_rc})")
+endif()
+file(READ "${ITHACA_BANK_SECRET_FILE}" _sk_hex HEX)
+string(REGEX MATCHALL "([0-9a-f][0-9a-f])" _sk_bytes "${_sk_hex}")
+string(JOIN ",0x" _sk_join ${_sk_bytes})
+set(_sk_arr "0x${_sk_join}")
+file(WRITE "${CMAKE_BINARY_DIR}/generated/bank_secret_generated.h"
+"#pragma once\n// AUTO-GENEROVANO z secret/bank_secret.key — NEcommitovat.\n"
+"#include <cstdint>\nnamespace ithaca {\n"
+"inline constexpr uint8_t kBankSecret[32] = {${_sk_arr}};\n} // namespace ithaca\n")
+
 # -- libithaca_core (headless knihovna) --
 # Ve fazi 1 obsahuje jen logger. V dalsich fazich pribydou sample/voice/dsp moduly.
 add_library(ithaca_core STATIC
     engine/util/log.cpp
     engine/util/rt_priority.cpp
     engine/util/sha256.cpp
+    engine/util/ithaca_crypto.cpp
     engine/io/wav_reader.cpp
     engine/io/wav_writer.cpp
     engine/io/file_handle.cpp
@@ -99,6 +121,7 @@ add_library(ithaca_core STATIC
     engine/miniaudio_impl.cpp
 )
 target_include_directories(ithaca_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
+target_include_directories(ithaca_core PUBLIC ${CMAKE_BINARY_DIR}/generated)
 target_compile_features(ithaca_core PUBLIC cxx_std_20)
 
 # Convolver: nejdrazsi per-sample FIR. -ffast-math (jen tento TU) odemkne

@@ -1,6 +1,10 @@
 // engine/io/file_handle.cpp — viz file_handle.h.
 #include "io/file_handle.h"
 
+#include <array>
+#include <cstring>
+#include "util/ithaca_crypto.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -63,6 +67,37 @@ private:
 
 } // namespace
 
+namespace {
+class DecryptingFileHandle : public IFileHandle {
+public:
+    DecryptingFileHandle(std::shared_ptr<IFileHandle> inner,
+                         const uint8_t key[32], const uint8_t nonce[32],
+                         uint64_t blob_off, uint64_t blob_size)
+        : inner_(std::move(inner)), blob_off_(blob_off), blob_size_(blob_size) {
+        std::memcpy(key_.data(), key, 32);
+        std::memcpy(nonce_.data(), nonce, 32);
+    }
+    bool readAt(uint64_t off, void* buf, size_t n) const override {
+        if (!inner_->readAt(off, buf, n)) return false;
+        // Prekryv [off, off+n) s blobem [blob_off_, blob_off_+blob_size_)?
+        const uint64_t bend = blob_off_ + blob_size_;
+        const uint64_t s = (off > blob_off_) ? off : blob_off_;
+        const uint64_t e = (off + n < bend) ? (off + n) : bend;
+        if (s < e) {   // desifruj jen prunik
+            uint8_t* p = static_cast<uint8_t*>(buf) + (s - off);
+            keystreamXor(key_.data(), nonce_.data(), s - blob_off_, p,
+                         (size_t)(e - s));
+        }
+        return true;
+    }
+    uint64_t size() const override { return inner_->size(); }
+private:
+    std::shared_ptr<IFileHandle> inner_;
+    std::array<uint8_t, 32> key_, nonce_;
+    uint64_t blob_off_, blob_size_;
+};
+} // namespace
+
 std::shared_ptr<IFileHandle> openFileHandle(const std::string& path) {
 #if defined(_WIN32)
     HANDLE h = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
@@ -78,6 +113,15 @@ std::shared_ptr<IFileHandle> openFileHandle(const std::string& path) {
     if (::fstat(fd, &st) != 0) { ::close(fd); return nullptr; }
     return std::make_shared<PosixFileHandle>(fd, (uint64_t)st.st_size);
 #endif
+}
+
+std::shared_ptr<IFileHandle> makeDecryptingFileHandle(
+    std::shared_ptr<IFileHandle> inner,
+    const uint8_t key[32], const uint8_t nonce[32],
+    uint64_t blob_off, uint64_t blob_size) {
+    if (!inner) return nullptr;
+    return std::make_shared<DecryptingFileHandle>(std::move(inner), key, nonce,
+                                                  blob_off, blob_size);
 }
 
 } // namespace ithaca

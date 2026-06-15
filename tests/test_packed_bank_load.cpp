@@ -8,9 +8,14 @@
 #include "ithaca_test_blob.h"
 #include "io/wav_writer.h"   // writeWavStereo16 (adresarova fixture)
 #include "sample/sample_store.h"
+#include "bank_secret_generated.h"
+#include <fstream>
 
 using namespace ithaca;
 using namespace ithaca_test;
+
+// Kompilovany secret (tyz, ktery pouzije loadBank pres openIthacaBank).
+static const uint8_t* testBankSecret() { return ithaca::kBankSecret; }
 
 TEST_CASE("loadBank packed: sloty, baked hodnoty, preload z blobu") {
     // 2 vrstvy noty 60 (tissi pred hlasitejsi — jak je radi bake) + nota 72.
@@ -114,5 +119,32 @@ TEST_CASE("loadBank packed == loadBank adresar (bit-exact preload data)") {
             REQUIRE(pm->preload_head[i] == dm->preload_head[i]);   // bit-exact
     }
     fs::remove_all(ddir);
+    removeBlob(b);
+}
+
+TEST_CASE("loadBank packed licensed: spravny secret nacte (pres kBankSecret)") {
+    const char* lic = "{\"o\":\"x\"}";
+    BuiltBlob b = buildTestIthaca("load_lic", {{60, 4096, 48000, -30.f, 100}},
+                                  false, kIthacaVersion, 0, false,
+                                  testBankSecret(), lic);
+    auto& L = log::Logger::default_();
+    BankLoadProgress prog;
+    Bank bank = loadBank(b.dir, L, 0, 0, 127, 150, 500, &prog);
+    CHECK(bank.loaded_samples == 1);
+    CHECK_FALSE(prog.license_invalid.load());
+    removeBlob(b);
+}
+
+TEST_CASE("loadBank packed licensed: editovana license → license_invalid flag") {
+    const char* lic = "{\"o\":\"x\"}";
+    BuiltBlob b = buildTestIthaca("load_lic_bad", {{60, 4096, 48000, -30.f, 100}},
+                                  false, kIthacaVersion, 0, false,
+                                  testBankSecret(), lic);
+    { std::ofstream lf(b.dir + "/license.ithaca", std::ios::binary); lf << "{\"o\":\"y\"}"; }
+    auto& L = log::Logger::default_();
+    BankLoadProgress prog;
+    Bank bank = loadBank(b.dir, L, 0, 0, 127, 150, 500, &prog);
+    CHECK(bank.loaded_samples == 0);
+    CHECK(prog.license_invalid.load());
     removeBlob(b);
 }

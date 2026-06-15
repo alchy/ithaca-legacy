@@ -22,4 +22,13 @@ struct IFileHandle {
 // Otevre soubor pro pread (sdileny mezi vlakny). nullptr pri chybe.
 std::shared_ptr<IFileHandle> openFileHandle(const std::string& path);
 
+// Obal nad IFileHandle: bajty v rozsahu blobu [blob_off, blob_off+blob_size)
+// desifruje CTR keystreamem (key+nonce), bajty mimo projdou beze zmeny
+// (plaintext hlavicka/index/names). Pouziva pakovana banka v2; nad readAt se
+// nic nemeni (loader/streaming ctou plaintext).
+std::shared_ptr<IFileHandle> makeDecryptingFileHandle(
+    std::shared_ptr<IFileHandle> inner,
+    const uint8_t key[32], const uint8_t nonce[32],
+    uint64_t blob_off, uint64_t blob_size);
+
 } // namespace ithaca

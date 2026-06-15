@@ -17,6 +17,7 @@ namespace ithaca {
 struct IthacaBankFile {
     bool        ok = false;
     std::string error;       // duvod pri ok=false (caller loguje)
+    bool        license_invalid = false;   // v2: chybna/chybejici/manipulovana licence
     IthacaHeader header;
     std::vector<IthacaEntry> entries;
     std::shared_ptr<IFileHandle> handle;
@@ -25,5 +26,8 @@ struct IthacaBankFile {
 // Otevre <path> (plna cesta k soundbank.ithaca). Pri jakekoliv chybe ok=false
 // + error; volajici zaloguje ERROR a vrati prazdnou banku.
 IthacaBankFile openIthacaBank(const std::string& path);
+
+// Overload s explicitnim secretem (testy; engine predava kompilovany kBankSecret).
+IthacaBankFile openIthacaBank(const std::string& path, const uint8_t secret[32]);
 
 } // namespace ithaca

@@ -54,6 +54,8 @@ struct AppContext {
     }
     void pollReloadCompletion();
     const ithaca::BankLoadProgress& loadProgress() const { return load_progress_; }
+    bool bankLicenseInvalid() const { return bank_license_invalid_; }
+    void clearBankLicenseInvalid() { bank_license_invalid_ = false; }
 
     std::thread              reload_thread_;
     std::atomic<bool>        reload_in_progress_{false};
@@ -64,6 +66,10 @@ struct AppContext {
     // Posledni load prekrocil RAM budget → banka NEUPLNA (badge v BANK panelu;
     // detail je v LOG stripu z loggeru). Cte/pise jen GUI vlakno.
     bool                     bank_truncated_ = false;
+    // Posledni load licencovane banky selhal (license/MAC) → overlay ukaze
+    // anglicke varovani + "Click to continue" dokud uzivatel neklikne.
+    // GUI-thread only (jako bank_truncated_).
+    bool                     bank_license_invalid_ = false;
 };
 
 } // namespace ithaca::gui

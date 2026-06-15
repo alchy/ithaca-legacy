@@ -288,17 +288,8 @@ int main(int argc, char* argv[]) {
         // progress baru ukazuje i pametove info (nactene MB / RAM budget)
         // a varovani, kdyz se banka do budgetu nevejde (NEUPLNA).
         ctx.pollReloadCompletion();
-        if (ctx.reloadInProgress()) {
-            const auto& p = ctx.loadProgress();
-            const int    phase  = p.phase.load(std::memory_order_relaxed);
-            const int    done   = p.done.load(std::memory_order_relaxed);
-            const int    total  = p.total.load(std::memory_order_relaxed);
-            const size_t mb     = p.bytes_loaded.load(std::memory_order_relaxed)
-                                / (1024 * 1024);
-            const size_t bud_mb = p.budget_bytes.load(std::memory_order_relaxed)
-                                / (1024 * 1024);
-            const bool   trunc  = p.truncated.load(std::memory_order_relaxed);
-            const float  frac   = ithaca::bankLoadFraction(phase, done, total);
+        const bool license_bad = ctx.bankLicenseInvalid();
+        if (ctx.reloadInProgress() || license_bad) {
             ImGui::SetNextWindowPos({0, 0});
             ImGui::SetNextWindowSize({W, H});
             ImGui::SetNextWindowFocus();
@@ -309,21 +300,6 @@ int main(int argc, char* argv[]) {
                 ImGuiWindowFlags_NoScrollbar);
             const std::string bank_name = std::filesystem::path(
                 ctx.state.bank_path).filename().string();
-            char line[96];
-            if (phase == 2)
-                std::snprintf(line, sizeof(line),
-                              "Stavim rezonancni cache (%d/%d)", done, total);
-            else if (phase == 1)
-                std::snprintf(line, sizeof(line),
-                              "Nacitam samply (%d/%d)", done, total);
-            else
-                std::snprintf(line, sizeof(line), "Prohledavam banku...");
-            char memline[96];
-            if (bud_mb > 0)
-                std::snprintf(memline, sizeof(memline),
-                              "RAM: %zu / %zu MB (budget)", mb, bud_mb);
-            else
-                std::snprintf(memline, sizeof(memline), "RAM: %zu MB", mb);
             const float cw = 420.f;
             ImGui::SetCursorPos({(W - cw) * 0.5f, H * 0.40f});
             ImGui::BeginGroup();
@@ -332,19 +308,56 @@ int main(int argc, char* argv[]) {
             ImGui::TextUnformatted(bank_name.c_str());
             ImGui::PopStyleColor();
             ImGui::Dummy({0, 8});
-            ImGui::ProgressBar(frac, ImVec2(cw, 14));
-            ImGui::Dummy({0, 4});
-            ImGui::TextUnformatted(line);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ithaca::gui::theme::Colors::v(ithaca::gui::theme::Colors::muted));
-            ImGui::TextUnformatted(memline);
-            ImGui::PopStyleColor();
-            if (trunc) {
-                ImGui::Dummy({0, 6});
+            if (license_bad) {
+                // Licencovana banka selhala (license/MAC) — anglicky text bez
+                // progressu/RAM; overlay drzi dokud uzivatel nepotvrdi klikem.
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xd0, 0x5a, 0x4a, 255));
-                ImGui::TextUnformatted(
-                    "Banka prekrocila RAM budget — nactena NEUPLNA (detail v LOG)");
+                ImGui::TextUnformatted("Soundbank is corrupted or license file is invalid.");
+                ImGui::TextUnformatted("Sampler is unable to load the bank.");
                 ImGui::PopStyleColor();
+                ImGui::Dummy({0, 12});
+                if (ImGui::Button("Click to continue", ImVec2(cw, 0)))
+                    ctx.clearBankLicenseInvalid();
+            } else {
+                const auto& p = ctx.loadProgress();
+                const int    phase  = p.phase.load(std::memory_order_relaxed);
+                const int    done   = p.done.load(std::memory_order_relaxed);
+                const int    total  = p.total.load(std::memory_order_relaxed);
+                const size_t mb     = p.bytes_loaded.load(std::memory_order_relaxed)
+                                    / (1024 * 1024);
+                const size_t bud_mb = p.budget_bytes.load(std::memory_order_relaxed)
+                                    / (1024 * 1024);
+                const bool   trunc  = p.truncated.load(std::memory_order_relaxed);
+                const float  frac   = ithaca::bankLoadFraction(phase, done, total);
+                char line[96];
+                if (phase == 2)
+                    std::snprintf(line, sizeof(line),
+                                  "Stavim rezonancni cache (%d/%d)", done, total);
+                else if (phase == 1)
+                    std::snprintf(line, sizeof(line),
+                                  "Nacitam samply (%d/%d)", done, total);
+                else
+                    std::snprintf(line, sizeof(line), "Prohledavam banku...");
+                char memline[96];
+                if (bud_mb > 0)
+                    std::snprintf(memline, sizeof(memline),
+                                  "RAM: %zu / %zu MB (budget)", mb, bud_mb);
+                else
+                    std::snprintf(memline, sizeof(memline), "RAM: %zu MB", mb);
+                ImGui::ProgressBar(frac, ImVec2(cw, 14));
+                ImGui::Dummy({0, 4});
+                ImGui::TextUnformatted(line);
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ithaca::gui::theme::Colors::v(ithaca::gui::theme::Colors::muted));
+                ImGui::TextUnformatted(memline);
+                ImGui::PopStyleColor();
+                if (trunc) {
+                    ImGui::Dummy({0, 6});
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xd0, 0x5a, 0x4a, 255));
+                    ImGui::TextUnformatted(
+                        "Banka prekrocila RAM budget — nactena NEUPLNA (detail v LOG)");
+                    ImGui::PopStyleColor();
+                }
             }
             ImGui::EndGroup();
             ImGui::End();

@@ -27,6 +27,10 @@ import time
 
 import numpy as np
 
+# Krypto zrcadlo (tools/ithaca_crypto.py) — robustni import bez ohledu na CWD.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ithaca_crypto as ic
+
 MAGIC = b"ITHACABK"
 VERSION = 1
 HEADER_SIZE = 408
@@ -38,6 +42,15 @@ TOOL_VERSION = "1.0"
 
 SILENCE_FLOOR_DB = -120.0
 WINDOW_MS = 50.0
+
+# v2 zabezpeceni (sifra + licence).
+FLAG_ENCRYPTED = 1
+CIPHER_SHA256_CTR = 1
+HDR_CIPHER_ID = 152
+HDR_NONCE = 154
+HDR_HMAC_TAG = 186
+ENC_DOMAIN = "ithaca-enc-v2"
+MAC_DOMAIN = "ithaca-mac-v2"
 
 
 class BakeError(Exception):
@@ -256,10 +269,18 @@ def pack_entry(e):
                        e["frames"], e["rms_db"], e["attack_end"], e["name_offset"])
 
 
+def license_bytes(info: dict) -> bytes:
+    # Deterministicky JSON (tridene klice, kompaktni) — TYTEZ bajty do KDF, MAC
+    # i do souboru license.ithaca. Jakakoliv zmena rozbije klic/tag.
+    return json.dumps(info, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def write_ithaca(out_path, analysis, bank_name, analysis_preload_ms,
-                 created_at="", progress=None):
+                 created_at="", progress=None, enc=None):
     """Zapise soundbank.ithaca. analysis: list dictu {path, midi, frames,
-    sample_rate, rms_db, attack_end}. RIFF layout pole doplni z parse_riff."""
+    sample_rate, rms_db, attack_end}. RIFF layout pole doplni z parse_riff.
+    enc (volitelne): {bank_key, mac_key, nonce, license} → zasifruje blob
+    (CTR keystream) a zapise flags/cipher_id/nonce/hmac_tag (v2 licensed)."""
     if not analysis:
         raise BakeError("prazdna analyza (zadne soubory)")
     for a in analysis:
@@ -279,18 +300,38 @@ def write_ithaca(out_path, analysis, bank_name, analysis_preload_ms,
     index_bytes = b"".join(pack_entry(e) for e in entries)
     sha_index = hashlib.sha256(metadata + index_bytes + names_blob).digest()
 
+    # v2: kdyz enc, spocti hmac_tag a priprav sifrovaci stav. Plaintext cesta
+    # (enc=None) zustava byte-identicka s v1 (flags 0, nesifrovany blob, nulova
+    # rezerva).
+    flags = 0
+    cipher_id = 0
+    nonce = b"\x00" * 32
+    hmac_tag = b"\x00" * 32
+    if enc is not None:
+        flags = FLAG_ENCRYPTED
+        cipher_id = CIPHER_SHA256_CTR
+        nonce = enc["nonce"]
+        hmac_tag = ic.hmac_sha256(
+            enc["mac_key"], metadata + index_bytes + names_blob + enc["license"])
+
     with open(out_path, "wb") as f:
-        header = struct.pack("<8sII", MAGIC, VERSION, 0)
+        header = struct.pack("<8sII", MAGIC, VERSION, flags)
         header += struct.pack("<8Q", hdr["metadata_offset"], hdr["metadata_size"],
                               hdr["index_offset"], hdr["index_size"],
                               hdr["names_offset"], hdr["names_size"],
                               hdr["blob_offset"], hdr["blob_size"])
         header += struct.pack("<II", hdr["entry_count"], 0)
-        header += sha_index + b"\x00" * 32 + b"\x00" * 256
+        # rezerva 256 B (offset 152): cipher_id@152, nonce@154, hmac_tag@186.
+        reserve = bytearray(256)
+        reserve[HDR_CIPHER_ID - 152] = cipher_id
+        reserve[HDR_NONCE - 152:HDR_NONCE - 152 + 32] = nonce
+        reserve[HDR_HMAC_TAG - 152:HDR_HMAC_TAG - 152 + 32] = hmac_tag
+        header += sha_index + b"\x00" * 32 + bytes(reserve)
         assert len(header) == HEADER_SIZE
         f.write(header + metadata + index_bytes + names_blob)
         f.write(b"\x00" * (hdr["blob_offset"] - f.tell()))
         sha_payload = hashlib.sha256()
+        blob_pos = 0   # blob-relativni pozice pro keystream (vc. paddingu)
         for i, e in enumerate(entries):
             assert f.tell() == e["entry_offset"]
             with open(e["path"], "rb") as src:
@@ -298,13 +339,20 @@ def write_ithaca(out_path, analysis, bank_name, analysis_preload_ms,
                     chunk = src.read(1 << 20)
                     if not chunk:
                         break
+                    if enc is not None:
+                        chunk = ic.keystream_xor(enc["bank_key"], nonce, blob_pos, chunk)
                     f.write(chunk)
                     sha_payload.update(chunk)
+                    blob_pos += len(chunk)
             pad = -(f.tell() - hdr["blob_offset"]) % BLOB_ALIGN
             if i == len(entries) - 1:
                 pad = 0
-            f.write(b"\x00" * pad)
-            sha_payload.update(b"\x00" * pad)
+            pad_bytes = b"\x00" * pad
+            if enc is not None and pad:
+                pad_bytes = ic.keystream_xor(enc["bank_key"], nonce, blob_pos, pad_bytes)
+            f.write(pad_bytes)
+            sha_payload.update(pad_bytes)
+            blob_pos += pad
             if progress:
                 progress(i + 1, len(entries))
         f.seek(120)
@@ -322,6 +370,9 @@ def read_ithaca_header(path):
             "<8Q", hb[16:80])
         entry_count = struct.unpack("<I", hb[80:84])[0]
         sha_index, sha_payload = hb[88:120], hb[120:152]
+        cipher_id = hb[HDR_CIPHER_ID]
+        nonce = hb[HDR_NONCE:HDR_NONCE + 32]
+        hmac_tag = hb[HDR_HMAC_TAG:HDR_HMAC_TAG + 32]
         f.seek(metadata_offset); metadata = f.read(metadata_size)
         f.seek(index_offset);    index_bytes = f.read(index_size)
         f.seek(names_offset);    names = f.read(names_size)
@@ -340,8 +391,12 @@ def read_ithaca_header(path):
                             "rms_db": rms_db, "attack_end": attack_end,
                             "name_offset": name_offset})
         return {"version": version, "flags": flags, "entry_count": entry_count,
+                "metadata_offset": metadata_offset, "metadata_size": metadata_size,
+                "index_offset": index_offset, "index_size": index_size,
+                "names_offset": names_offset, "names_size": names_size,
                 "blob_offset": blob_offset, "blob_size": blob_size,
-                "sha_payload": sha_payload,
+                "sha_payload": sha_payload, "cipher_id": cipher_id,
+                "nonce": nonce, "hmac_tag": hmac_tag,
                 "metadata": json.loads(metadata.decode("utf-8")), "entries": entries}
 
 
@@ -380,6 +435,77 @@ def verify_ithaca(path, analysis):
                 raise BakeError(f"verify: data midi {e['midi']} nesedi se zdrojem")
 
 
+def bake_licensed(src_dir, dst_dir, secret: bytes, info: dict,
+                  preload_ms=150, force=False, created_at="", progress=None):
+    """Licensed bake: zapise license.ithaca (plaintext JSON) + zasifrovany
+    soundbank.ithaca. Klice odvozene z (secret, license_bytes); blob sifrovan
+    CTR keystreamem, integrita pres hmac_tag."""
+    lic = license_bytes(info)
+    bank_key = ic.derive_key(secret, ENC_DOMAIN, lic)
+    mac_key = ic.derive_key(secret, MAC_DOMAIN, lic)
+    import secrets as _secrets
+    nonce = _secrets.token_bytes(32)
+    analysis = analyze_bank(src_dir, preload_ms)
+    os.makedirs(dst_dir, exist_ok=True)
+    out = os.path.join(dst_dir, "soundbank.ithaca")
+    if os.path.exists(out) and not force:
+        raise BakeError(f"{out} existuje (pouzij force=True / --force)")
+    # license.ithaca = PRESNE bajty lic (KDF i MAC jsou nad nimi).
+    with open(os.path.join(dst_dir, "license.ithaca"), "wb") as f:
+        f.write(lic)
+    write_ithaca(out, analysis, bank_name=info.get("bank_name", "bank"),
+                 analysis_preload_ms=preload_ms, created_at=created_at,
+                 progress=progress,
+                 enc={"bank_key": bank_key, "mac_key": mac_key, "nonce": nonce,
+                      "license": lic})
+    return out
+
+
+def verify_licensed(dst_dir, secret: bytes):
+    """Overi licensed banku: sha256_index (v read_ithaca_header) + hmac_tag
+    (license/index nezmeneny, spravny secret) + desifrovani kazdeho zaznamu."""
+    out = os.path.join(dst_dir, "soundbank.ithaca")
+    with open(os.path.join(dst_dir, "license.ithaca"), "rb") as f:
+        lic = f.read()
+    hdr = read_ithaca_header(out)
+    mac_key = ic.derive_key(secret, MAC_DOMAIN, lic)
+    with open(out, "rb") as f:
+        f.seek(hdr["metadata_offset"]); md = f.read(hdr["metadata_size"])
+        f.seek(hdr["index_offset"]);    ix = f.read(hdr["index_size"])
+        f.seek(hdr["names_offset"]);    nm = f.read(hdr["names_size"])
+    tag = ic.hmac_sha256(mac_key, md + ix + nm + lic)
+    if tag != hdr["hmac_tag"]:
+        raise BakeError("hmac_tag nesouhlasi (license/index zmenen nebo spatny secret)")
+    bank_key = ic.derive_key(secret, ENC_DOMAIN, lic)
+    with open(out, "rb") as f:
+        for e in hdr["entries"]:
+            # Staci desifrovat jen RIFF hlavicku (4 B) — ne cely zaznam (6 GB
+            # banka by jinak desifrovala cely blob jen kvuli kontrole magic).
+            f.seek(e["entry_offset"]); head = f.read(min(4, e["entry_size"]))
+            p0 = e["entry_offset"] - hdr["blob_offset"]
+            if ic.keystream_xor(bank_key, hdr["nonce"], p0, head) != b"RIFF":
+                raise BakeError(f"desifrovany zaznam midi {e['midi']} neni RIFF")
+
+
+def read_secret_file(path):
+    with open(path, "rb") as f:
+        s = f.read()
+    if len(s) != 32:
+        raise BakeError(f"{path}: secret musi mit 32 B (ma {len(s)})")
+    return s
+
+
+def prompt_license_info(src):
+    # Interaktivni dotaz na udaje vlastnika (pole vazana do klice/MAC).
+    default_name = os.path.basename(os.path.normpath(src))
+    bn = input(f"bank_name [{default_name}]: ").strip() or default_name
+    return {"bank_name": bn,
+            "owner_email": input("owner_email: ").strip(),
+            "owner_name": input("owner_name: ").strip(),
+            "transaction_id": input("transaction_id: ").strip(),
+            "issued_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -388,6 +514,12 @@ def main():
     ap.add_argument("--preload-ms", type=int, default=150)
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--license", action="store_true",
+                    help="licensed bake: interaktivni dotaz na udaje vlastnika")
+    ap.add_argument("--license-json",
+                    help="licensed bake: cesta k JSON souboru s udaji vlastnika")
+    ap.add_argument("--secret-file", default="secret/bank_secret.key",
+                    help="master secret (32 B) pro licensed bake")
     args = ap.parse_args()
 
     src = args.source_soundbank_dir
@@ -399,23 +531,51 @@ def main():
     if not has_note_dirs:
         sys.exit(f"CHYBA: {src} neni dynamicka banka (zadne m<NNN>/ slozky); "
                  "fixni banku preved tools/make_dynamic_bank.sh")
-    os.makedirs(args.destination_soundbank_dir, exist_ok=True)
-    out = os.path.join(args.destination_soundbank_dir, "soundbank.ithaca")
+    dst = args.destination_soundbank_dir
+    os.makedirs(dst, exist_ok=True)
+    out = os.path.join(dst, "soundbank.ithaca")
     if os.path.exists(out) and not args.force:
         sys.exit(f"CHYBA: {out} existuje (pouzij --force)")
 
-    print(f"Analyza banky {src} (preload {args.preload_ms} ms)...")
-    analysis = analyze_bank(src, args.preload_ms)
-    print(f"Analyza: {len(analysis)} souboru")
-    write_ithaca(out, analysis,
-                 bank_name=os.path.basename(os.path.normpath(src)),
-                 analysis_preload_ms=args.preload_ms,
-                 created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                 progress=lambda d, t: print(f"\r  pack {d}/{t}", end="", flush=True))
-    print(f"\nZapsano: {out} ({os.path.getsize(out)} B)")
-    if args.verify:
-        verify_ithaca(out, analysis)
-        print("Verify OK (hash indexu, hash blobu, bit-exact extrakce)")
+    licensed = args.license or args.license_json
+    prog = lambda d, t: print(f"\r  pack {d}/{t}", end="", flush=True)
+    try:
+        if licensed:
+            secret = read_secret_file(args.secret_file)
+            if args.license_json:
+                try:
+                    with open(args.license_json) as f:
+                        info = json.load(f)
+                except FileNotFoundError:
+                    raise BakeError(f"license JSON neexistuje: {args.license_json}")
+                except json.JSONDecodeError as e:
+                    raise BakeError(f"neplatny JSON v {args.license_json}: {e}")
+            else:
+                info = prompt_license_info(src)
+            print(f"Licensed bake {src} (preload {args.preload_ms} ms)...")
+            bake_licensed(src, dst, secret, info, preload_ms=args.preload_ms,
+                          force=args.force,
+                          created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                          progress=prog)
+            print(f"\nZapsano: {out} + license.ithaca ({os.path.getsize(out)} B)")
+            if args.verify:
+                verify_licensed(dst, secret)
+                print("Verify OK (hash indexu, hmac_tag, desifrovani)")
+        else:
+            print(f"Analyza banky {src} (preload {args.preload_ms} ms)...")
+            analysis = analyze_bank(src, args.preload_ms)
+            print(f"Analyza: {len(analysis)} souboru")
+            write_ithaca(out, analysis,
+                         bank_name=os.path.basename(os.path.normpath(src)),
+                         analysis_preload_ms=args.preload_ms,
+                         created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                         progress=prog)
+            print(f"\nZapsano: {out} ({os.path.getsize(out)} B)")
+            if args.verify:
+                verify_ithaca(out, analysis)
+                print("Verify OK (hash indexu, hash blobu, bit-exact extrakce)")
+    except BakeError as e:
+        sys.exit(f"CHYBA: {e}")
 
 
 if __name__ == "__main__":

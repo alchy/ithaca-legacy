@@ -1,10 +1,14 @@
 // engine/sample/ithaca_bank.cpp — viz ithaca_bank.h.
 #include "sample/ithaca_bank.h"
 
+#include "bank_secret_generated.h"
+#include "util/ithaca_crypto.h"
 #include "util/sha256.h"
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 namespace ithaca {
 
@@ -26,6 +30,10 @@ IthacaBankFile fail(std::string msg) {
 } // namespace
 
 IthacaBankFile openIthacaBank(const std::string& path) {
+    return openIthacaBank(path, kBankSecret);
+}
+
+IthacaBankFile openIthacaBank(const std::string& path, const uint8_t secret[32]) {
     auto handle = openFileHandle(path);
     if (!handle) return fail("nelze otevrit soubor");
     if (handle->size() < kIthacaHeaderSize) return fail("soubor kratsi nez hlavicka");
@@ -40,8 +48,8 @@ IthacaBankFile openIthacaBank(const std::string& path) {
     const IthacaHeader& h = f.header;
     if (h.version != kIthacaVersion)
         return fail("nepodporovana verze formatu (" + std::to_string(h.version) + ")");
-    if (h.flags != 0)
-        return fail("flags != 0 (sifrovana/podepsana banka — vyzaduje novejsi verzi)");
+    if (h.flags & ~kIthacaFlagEncrypted)
+        return fail("nepodporovane flags (vyzaduje novejsi verzi)");
     if (h.entry_count == 0) return fail("prazdny index (entry_count=0)");
     if (h.index_size != (uint64_t)h.entry_count * kIthacaEntrySize)
         return fail("index_size nesedi s entry_count");
@@ -89,6 +97,31 @@ IthacaBankFile openIthacaBank(const std::string& path) {
             return fail("zaznam: PCM data presahuji entry_size");
     }
 
+    // -- v2: sifrovana + licencovana banka (flags bit0) --
+    if (h.flags & kIthacaFlagEncrypted) {
+        if (h.cipher_id != kCipherSha256Ctr) {
+            f.error = "neznamy cipher_id"; f.license_invalid = true; return f;
+        }
+        const std::string lic_path =
+            (std::filesystem::path(path).parent_path() / "license.ithaca").string();
+        std::ifstream lf(lic_path, std::ios::binary);
+        if (!lf) { f.error = "chybi license.ithaca"; f.license_invalid = true; return f; }
+        std::vector<uint8_t> lic((std::istreambuf_iterator<char>(lf)),
+                                  std::istreambuf_iterator<char>());
+        auto mac_key = deriveKey(secret, "ithaca-mac-v2", lic.data(), lic.size());
+        std::vector<uint8_t> macmsg;
+        macmsg.insert(macmsg.end(), metadata.begin(), metadata.end());
+        macmsg.insert(macmsg.end(), index_bytes.begin(), index_bytes.end());
+        macmsg.insert(macmsg.end(), names.begin(), names.end());
+        macmsg.insert(macmsg.end(), lic.begin(), lic.end());
+        auto tag = hmacSha256(mac_key.data(), 32, macmsg.data(), macmsg.size());
+        if (tag != h.hmac_tag) {
+            f.error = "hmac_tag nesouhlasi"; f.license_invalid = true; return f;
+        }
+        auto bank_key = deriveKey(secret, "ithaca-enc-v2", lic.data(), lic.size());
+        handle = makeDecryptingFileHandle(handle, bank_key.data(),
+                     h.nonce.data(), h.blob_offset, h.blob_size);
+    }
     f.handle = std::move(handle);
     f.ok = true;
     return f;

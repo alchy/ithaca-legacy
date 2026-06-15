@@ -32,6 +32,7 @@ struct BankLoadProgress {
     std::atomic<size_t> bytes_loaded{0};
     std::atomic<size_t> budget_bytes{0};   // 0 = bez limitu
     std::atomic<bool>   truncated{false};
+    std::atomic<bool>   license_invalid{false};   // packed v2: license/MAC selhala
 };
 
 // Mapovani fazi na jeden progress bar 0..1: heads = 0..0.6, cache = 0.6..1.0

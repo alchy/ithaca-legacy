@@ -21,6 +21,18 @@ Build + test + smoke:
 
 Vyber Debug/Release: `make BUILD_TYPE=Debug build`. Napoveda: `make`.
 
+### Bank secret (sifrovane packed banky)
+
+`secret/bank_secret.key` (32 B) je **commitnuty v repu** (repo je privatni) —
+jeden konzistentni master secret napric vsemi buildy, CI i vyvojari. Build ho
+pri `configure` zkompiluje do binarky (`bank_secret_generated.h`, build artefakt)
+a python bake ho cte. Slouzi k sifrovani/odsifrovani licencovanych
+`soundbank.ithaca` (viz `docs/bank-format-packed.md` §7). Kdyby klic chybel
+(napr. smazany), `tools/gen-bank-secret.py` (Makefile prereq i CMake) vygeneruje
+novy nahodny — POZOR: tim by se znehodnotily drive vydane licencovane banky;
+normalne se pouzije commitnuty klic. Rotace klice = re-bake vsech licencovanych
+bank. Vyzaduje `python3`.
+
 ### Predpoklady pro `make`
 
 Top-level `Makefile` je jen orchestrator nad CMake — sam o sobe nestaci.

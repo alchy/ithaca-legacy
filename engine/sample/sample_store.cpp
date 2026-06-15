@@ -299,6 +299,8 @@ void loadPackedBank(Bank& bank, const std::string& dir, log::Logger& logger,
         logger.log("bank", log::Severity::Error,
                    "Banka '%s': soundbank.ithaca odmitnut — %s",
                    bank.name.c_str(), pf.error.c_str());
+        if (progress && pf.license_invalid)
+            progress->license_invalid.store(true, std::memory_order_relaxed);
         return;   // prazdna banka (format zustava PackedIthaca)
     }
     logger.log("bank", log::Severity::Info,
