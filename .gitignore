@@ -30,6 +30,6 @@ imgui.ini
 *.log
 .superpowers/
 
-# master secret
-secret/
+# master secret: klic je COMMITNUT (privatni repo) — jeden konzistentni secret
+# napric vsemi buildy/CI. Generovany C header je build artefakt (v build/).
 bank_secret_generated.h

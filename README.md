@@ -23,14 +23,15 @@ Vyber Debug/Release: `make BUILD_TYPE=Debug build`. Napoveda: `make`.
 
 ### Bank secret (sifrovane packed banky)
 
-Build pri kazdem `configure`/buildu (Makefile prerekvizita i CMake) zavola
-`tools/gen-bank-secret.py`, ktery **idempotentne** vytvori
-`secret/bank_secret.key` (32 nahodnych bajtu) — jen pokud jeste neexistuje, nikdy
-neprepise. Soubor je **gitignored** (necommituje se) a zkompiluje se do binarky
-(`bank_secret_generated.h`). Slouzi k sifrovani/odsifrovani licencovanych
-`soundbank.ithaca` (viz `docs/bank-format-packed.md` §7). Na cistem klonu se
-vygeneruje sam pri prvnim buildu — zadny rucni krok. **Produkcni secret zazalohuj**
-(ztrata = drive vydane licencovane banky nepujde otevrit). Vyzaduje `python3`.
+`secret/bank_secret.key` (32 B) je **commitnuty v repu** (repo je privatni) —
+jeden konzistentni master secret napric vsemi buildy, CI i vyvojari. Build ho
+pri `configure` zkompiluje do binarky (`bank_secret_generated.h`, build artefakt)
+a python bake ho cte. Slouzi k sifrovani/odsifrovani licencovanych
+`soundbank.ithaca` (viz `docs/bank-format-packed.md` §7). Kdyby klic chybel
+(napr. smazany), `tools/gen-bank-secret.py` (Makefile prereq i CMake) vygeneruje
+novy nahodny — POZOR: tim by se znehodnotily drive vydane licencovane banky;
+normalne se pouzije commitnuty klic. Rotace klice = re-bake vsech licencovanych
+bank. Vyzaduje `python3`.
 
 ### Predpoklady pro `make`
 
