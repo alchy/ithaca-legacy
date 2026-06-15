@@ -479,10 +479,11 @@ def verify_licensed(dst_dir, secret: bytes):
     bank_key = ic.derive_key(secret, ENC_DOMAIN, lic)
     with open(out, "rb") as f:
         for e in hdr["entries"]:
-            f.seek(e["entry_offset"]); enc = f.read(e["entry_size"])
+            # Staci desifrovat jen RIFF hlavicku (4 B) — ne cely zaznam (6 GB
+            # banka by jinak desifrovala cely blob jen kvuli kontrole magic).
+            f.seek(e["entry_offset"]); head = f.read(min(4, e["entry_size"]))
             p0 = e["entry_offset"] - hdr["blob_offset"]
-            dec = ic.keystream_xor(bank_key, hdr["nonce"], p0, enc)
-            if dec[:4] != b"RIFF":
+            if ic.keystream_xor(bank_key, hdr["nonce"], p0, head) != b"RIFF":
                 raise BakeError(f"desifrovany zaznam midi {e['midi']} neni RIFF")
 
 

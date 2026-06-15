@@ -23,17 +23,18 @@ def derive_key(secret: bytes, domain: str, msg: bytes) -> bytes:
 
 def keystream_xor(key: bytes, nonce: bytes, p0: int, data: bytes) -> bytes:
     # CTR keystream XOR. p0 = blob-relativni pozice prvniho bajtu data.
-    out = bytearray(len(data))
-    p = p0
-    done = 0
+    # Keystream je byte-identicky s naivni verzi (block_i = p//32, byte p%32 z
+    # HMAC(key, nonce||u64le(block_i))), ale XOR delame bignum operaci v C misto
+    # python loopu bajt-po-bajtu → radove rychlejsi pri bake velkych bank.
     n = len(data)
-    while done < n:
-        block_i = p // 32
-        ks = hmac_sha256(key, nonce + struct.pack("<Q", block_i))
-        off = p % 32
-        while off < 32 and done < n:
-            out[done] = data[done] ^ ks[off]
-            off += 1
-            done += 1
-            p += 1
-    return bytes(out)
+    if n == 0:
+        return b""
+    first_block = p0 // 32
+    last_block = (p0 + n - 1) // 32
+    ks = bytearray()
+    for i in range(first_block, last_block + 1):
+        ks += hmac_sha256(key, nonce + struct.pack("<Q", i))
+    start = p0 % 32
+    ks_slice = bytes(ks[start:start + n])   # presne n bajtu keystreamu
+    x = int.from_bytes(data, "big") ^ int.from_bytes(ks_slice, "big")
+    return x.to_bytes(n, "big")
