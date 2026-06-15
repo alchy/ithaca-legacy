@@ -1,10 +1,10 @@
 # ithaca-legacy — top-level Makefile
 # -----------------------------------
 # Build orchestrator: auto-detekce platformy / generatoru / jader.
-# Cile: help (default) / check-tools / fetch-third-party / configure /
-#       build / rebuild / test / smoke / clean / info
 #
-# Override-able promenne: BUILD_DIR, BUILD_TYPE, GENERATOR, JOBS
+# Seznam vsech cilu:  make help   (default goal)
+#
+# Override-able promenne: BUILD_DIR, BUILD_TYPE, GENERATOR, JOBS, SECRET_FILE
 # Priklady:
 #   make check-tools && make fetch-third-party && make build && make smoke
 #   make BUILD_TYPE=Debug build
@@ -66,43 +66,40 @@ ifeq ($(GENERATOR),)
     endif
 endif
 
+# -- Napoveda --
+# `help` se generuje automaticky z anotaci cilu: kazdy radek tvaru
+#   <cil>: ## <popis>
+# se objevi ve vypisu. Diky tomu seznam cilu nemuze "ujet" od reality.
+# (Popisy jsou prosty text — make promenne se v nich neexpanduji.)
 .PHONY: help
-help:
+help: ## vypis tuto napovedu (seznam cilu)
 	@printf "\nithaca-legacy — build orchestrator\n"
 	@printf "  Platforma: $(PLATFORM)   Generator: $(GENERATOR)   Jobs: $(JOBS)\n\n"
-	@printf "Cile:\n"
-	@printf "  make check-tools        over cmake / ninja\n"
-	@printf "  make fetch-third-party  stahni vendored deps\n"
-	@printf "  make configure          CMake configure -> $(BUILD_DIR)/\n"
-	@printf "  make build              zkompiluj vse\n"
-	@printf "  make rebuild            clean + configure + build\n"
-	@printf "  make test               spust doctest pres ctest\n"
-	@printf "  make smoke              ithaca-cli --selftest\n"
-	@printf "  make clean              smaze $(BUILD_DIR)/\n"
-	@printf "  make info               vypis detekovane hodnoty\n"
-	@printf "  make new-license SRC=<dyn-banka> DST=<cil>\n"
-	@printf "                          licencovana (sifrovana) banka + license.ithaca\n\n"
+	@printf "Cile (make <cil>):\n"
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\nOverride promenne: BUILD_DIR BUILD_TYPE GENERATOR JOBS SECRET_FILE\n"
+	@printf "Priklad: make BUILD_TYPE=Debug build   |   make new-license SRC=<dyn-banka> DST=<cil>\n\n"
 
 .PHONY: info
-info:
+info: ## vypis detekovane hodnoty (platform/generator/build-type/jobs)
 	@printf "PLATFORM=$(PLATFORM) GENERATOR=$(GENERATOR) BUILD_TYPE=$(BUILD_TYPE) JOBS=$(JOBS)\n"
 
 .PHONY: check-tools
-check-tools:
+check-tools: ## over dostupnost cmake / ninja
 	@cmake --version >$(NULL) 2>&1 || (printf "cmake neni v PATH (brew install cmake)\n" && exit 1)
 	@printf "cmake OK: "; cmake --version | head -1
 	@command -v ninja >$(NULL) 2>&1 && printf "ninja OK\n" || printf "ninja chybi (fallback $(GENERATOR))\n"
 
 .PHONY: fetch-third-party
-fetch-third-party:
+fetch-third-party: ## stahni vendored third-party zavislosti
 	@bash tools/fetch-third-party.sh
 
 .PHONY: bank-secret
-bank-secret:
+bank-secret: ## vygeneruj master secret klic (SECRET_FILE)
 	@python3 tools/gen-bank-secret.py $(SECRET_FILE)
 
 .PHONY: configure
-configure:
+configure: ## CMake configure do BUILD_DIR
 	@python3 tools/gen-bank-secret.py $(SECRET_FILE)
 	@cmake -S . -B $(BUILD_DIR) -G "$(GENERATOR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 
@@ -110,19 +107,19 @@ $(BUILD_DIR)/CMakeCache.txt:
 	@$(MAKE) --no-print-directory configure
 
 .PHONY: build
-build: $(BUILD_DIR)/CMakeCache.txt
+build: $(BUILD_DIR)/CMakeCache.txt ## zkompiluj vse (auto-configure pokud treba)
 	@cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --parallel $(JOBS)
 	@printf "Build OK. Binarka: $(BUILD_DIR)/ithaca-cli$(EXE)\n"
 
 .PHONY: rebuild
-rebuild: clean configure build
+rebuild: clean configure build ## clean + configure + build
 
 .PHONY: test
-test: build
+test: build ## spust doctest pres ctest
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 
 .PHONY: smoke
-smoke: build
+smoke: build ## smoke test — ithaca-cli batch render do test-samples/
 	@printf "Smoke test — batch render do test-samples/smoke.wav\n"
 	@mkdir -p test-samples/_smoke_bank test-samples
 	@# Vyrob 1 fixture WAV (1s stereo 48k konst. amplituda) pres maly python helper.
@@ -139,7 +136,7 @@ f.writeframes(b''.join(struct.pack('<hh',8000,8000) for _ in range(48000))); f.c
 	@printf "Smoke OK — test-samples/smoke.wav\n"
 
 .PHONY: clean
-clean:
+clean: ## smaze BUILD_DIR
 	@$(RM_RF) $(BUILD_DIR)
 	@printf "Build dir smazan.\n"
 
@@ -152,7 +149,7 @@ clean:
 #   make new-license SRC=... DST=... LICENSE_JSON=<json>
 #     -> neinteraktivni (udaje z JSON souboru)
 .PHONY: new-license
-new-license:
+new-license: ## licencovana (sifrovana) banka + license.ithaca [SRC=<dyn-banka> DST=<cil>]
 	@if [ -z "$(SRC)" ] || [ -z "$(DST)" ]; then \
 	    printf "usage: make new-license SRC=<dynamicka-banka> DST=<cilovy-adresar> [LICENSE_JSON=<json>]\n"; \
 	    exit 1; \

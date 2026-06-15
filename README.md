@@ -9,17 +9,14 @@ Navrh: `docs/superpowers/specs/2026-05-29-ithaca-legacy-design.md`.
 
 ## Build (macOS)
 
-Jednorazove stazeni vendored deps:
+Jednorazove stazeni vendored deps, pak build:
 
     make fetch-third-party
-
-Build + test + smoke:
-
     make build
-    make test
-    make smoke
 
-Vyber Debug/Release: `make BUILD_TYPE=Debug build`. Napoveda: `make`.
+`make` (bez argumentu) nebo `make help` vypise vsechny dostupne cile
+(configure / rebuild / test / smoke / clean / new-license / …) a override
+promenne (BUILD_TYPE, GENERATOR, JOBS, …). Napr. `make BUILD_TYPE=Debug build`.
 
 ### Bank secret (sifrovane packed banky)
 
