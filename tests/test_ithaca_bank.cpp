@@ -4,6 +4,7 @@
 #include "doctest.h"
 
 #include "ithaca_test_blob.h"
+#include "io/sample_read.h"
 #include "sample/ithaca_bank.h"
 
 #include <cstring>
@@ -78,7 +79,21 @@ TEST_CASE("openIthacaBank licensed happy path (spravny secret)") {
     IthacaBankFile f = openIthacaBank(b.ithaca_path, secret);
     REQUIRE(f.ok);
     CHECK(f.entries.size() == 1u);
-    CHECK(f.handle != nullptr);
+    REQUIRE(f.handle != nullptr);
+    // Cteni pres desifrujici handle musi vratit puvodni (plaintext) vzorky:
+    // overuje, ze openIthacaBank obalil handle spravnym klicem/nonce/offsetem.
+    const IthacaEntry& e = f.entries[0];
+    SampleFile sf;
+    sf.path = b.ithaca_path; sf.blob = f.handle; sf.valid = true;
+    sf.frames = (int)e.frames; sf.sample_rate = (int)e.sample_rate;
+    sf.channels = e.channels; sf.sample_format = e.sample_format;
+    sf.pcm_offset = e.entry_offset + e.pcm_data_offset;
+    WavData w = readSampleRange(sf, 0, 64);
+    REQUIRE(w.valid);
+    CHECK(w.frames == 64);
+    // Bit-exact proti ocekavanym (nesifrovanym) ramp datum z fixture.
+    for (size_t i = 0; i < w.samples.size(); ++i)
+        REQUIRE(w.samples[i] == b.expected_samples[0][i]);
     removeBlob(b);
 }
 

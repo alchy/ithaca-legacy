@@ -29,7 +29,7 @@ inline constexpr uint32_t kIthacaFlagSigned    = 1u << 1;
 inline constexpr size_t   kIthacaHdrCipherId = 152;
 inline constexpr size_t   kIthacaHdrNonce    = 154;
 inline constexpr size_t   kIthacaHdrHmacTag  = 186;
-inline constexpr uint16_t kCipherSha256Ctr   = 1;
+inline constexpr uint8_t  kCipherSha256Ctr   = 1;   // 1 B (hlavicka @152)
 
 // sample_format kody (pokryvaji formaty wav_readeru):
 inline constexpr uint16_t kSampleFmtPcm16   = 1;
