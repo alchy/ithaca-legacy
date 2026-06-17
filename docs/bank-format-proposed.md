@@ -448,7 +448,10 @@ as simple as legacy.
 - **Velocity curve (§5.1):** keep linear `slotIndexForVelocity`, or support a
   per-bank/per-note warp for denser bands?
 - **Sample-rate consistency:** legacy reads SR per WAV header; should the folder
-  loader enforce a single SR per bank, or allow mixed and resample?
+  loader enforce a single SR per bank, or allow mixed and resample? How SR is
+  handled today (per-file SR + runtime `pos_inc` linear-interp conversion) and
+  the recommended offline-resample-to-48k workflow are documented in
+  [resampling.md](resampling.md).
 - **`bankType()` placement:** new enum value vs. reuse of the existing
   `BankFormat::Extended` (`sample_store.cpp:32-37`, currently rejected).
 - **Metadata side-file (§9.2):** needed for v1, or strictly deferred?

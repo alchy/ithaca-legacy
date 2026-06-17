@@ -208,7 +208,7 @@ Ranges from `Limiter::kParams` (`engine/dsp/limiter.cpp`).
 | JSON key            | Type | Default | Meaning | Set by |
 |---------------------|------|---------|---------|--------|
 | `audio_block_size`  | int  | `256`   | Audio callback block size (latency). Runtime-changeable from the GUI BUFFER combo; clamped to `[32, 8192]`. | GUI (BUFFER combo) |
-| `audio_sample_rate` | int  | `48000` | Engine sample rate. **JSON-only / read-only in GUI** (the GUI displays it but does not change it). A non-positive value falls back to 48000. | JSON only |
+| `audio_sample_rate` | int  | `48000` | Engine sample rate. **JSON-only / read-only in GUI** (the GUI displays it but does not change it). A non-positive value falls back to 48000. How sample SR is converted to this engine SR at runtime, and the recommended offline-resample workflow, are in [resampling.md](resampling.md). | JSON only |
 
 ### Log
 
