@@ -2,7 +2,7 @@
 // engine/util/rt_priority.h
 // ------------------------
 // RT priorita audio vlakna napric platformami. Per-thread, idempotentni,
-// soft-failure: API vraci stav, caller loguje. Viz docs/rt-thread-priority.md
+// soft-failure: API vraci stav, caller loguje. Viz docs/reference/J-rt-priorita.md
 // pro design a navodne hlasky.
 //
 //   Linux: pthread_setschedparam(SCHED_FIFO, prio=80)

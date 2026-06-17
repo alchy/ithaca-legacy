@@ -2,8 +2,7 @@
 // engine/sample/ithaca_format.h
 // Binarni format pakovane banky soundbank.ithaca (little-endian) — konstanty,
 // POD struktury a CISTE parsovaci funkce nad byte bufferem (testovatelne bez
-// disku). Layout: docs/bank-format-packed.md; rozhodnuti: spec
-// docs/superpowers/specs/2026-06-10-packed-soundbank-design.md.
+// disku). Layout a threat model: docs/prirucka/05-format-banky.md.
 // Soubor: [hlavicka 408 B][metadata JSON][index 64 B/zaznam][names][blob].
 
 #include <array>

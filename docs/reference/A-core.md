@@ -74,7 +74,7 @@ systému / RLIMIT_RTTIME).
 | `int activeVoices() const` | GUI | — → int | GUI (diag) | `pool_->activeCount()` | — | Počet aktivních hlavních hlasů; null-safe. |
 | `uint64_t blockEpoch() const noexcept` | libovolné | — → uint64 | `waitForAudioQuiesce()`, testy, diag | `block_epoch_.load(seq_cst)` | — | Počítadlo započatých audio bloků (tik na začátku každého `processBlock`). Základ epoch handshake pro reload/recache. |
 | `bool recacheInProgress() const noexcept` | GUI | — → bool | GUI (indikace rebuilu) | čte `recache_running_` pod `recache_mtx_` | — | True dokud běží background rebuild rezonanční cache. |
-| `int resonanceVoices() const noexcept` | GUI | — → počet | `app/gui/panel_diag.cpp` | `resonance_->activeCount()` | — | Triviální diagnostický getter; null-safe. |
+| `int resonanceVoices() const noexcept` | GUI | — → počet | `app/gui/panel_indicators.cpp` | `resonance_->activeCount()` | — | Triviální diagnostický getter; null-safe. |
 | `int numRingsUsed() const noexcept` | GUI | — → součet ringů obou poolů | `app/gui/...` | `stream_main_->numRingsUsed()`, `stream_resonance_->numRingsUsed()` | — | Součet across obou stream poolů. Separátní gettery `mainRingsUsed()` / `resonanceRingsUsed()` pro jemnější pohled. |
 | `int mainRingsUsed() const noexcept` | GUI | — → int | GUI | `stream_main_->numRingsUsed()` | — | Triviální getter; null-safe. |
 | `int mainRingsTotal() const noexcept` | GUI | — → int | GUI | `stream_main_->numRings()` | — | Triviální getter; null-safe. |
@@ -112,7 +112,7 @@ Jde o centrální audio-RT funkci. Volá ji callback `AudioDevice` (~48 000/256 
 
 **Krok 0a — denormal flush:** Jednou per audio thread (`thread_local` guard) se zavolá `enableFlushDenormals()` (`util/denormals.h`) — zapne FTZ/DAZ na FPU. Doznívající denormaly (release/decay/IIR stav) by jinak shazovaly CPU na pomalou cestu → spike → underrun. Cross-platform (x86 MXCSR / ARM FPCR), na neznámé arch no-op.
 
-**Krok 0b — RT priorita (opt-in):** Jednou per audio thread (`thread_local` guard) a **jen při `cfg_.rt_priority == true`** (GUI a CLI `--play` ji nastavují; testy/offline render ne) se zavolá `enableRealtimeAudio({sr, block})` (`util/rt_priority.h` — Linux SCHED_FIFO, macOS time-constraint, Windows TIME_CRITICAL + MMCSS). Soft-failure: výsledek `Full`/`Partial`/`Failed` se loguje přes `LOG_RT_INFO`/`LOG_RT_WARN` vč. per-platform TIPu; při selhání audio běží na default scheduleru. Viz [docs/rt-thread-priority.md](../rt-thread-priority.md).
+**Krok 0b — RT priorita (opt-in):** Jednou per audio thread (`thread_local` guard) a **jen při `cfg_.rt_priority == true`** (GUI a CLI `--play` ji nastavují; testy/offline render ne) se zavolá `enableRealtimeAudio({sr, block})` (`util/rt_priority.h` — Linux SCHED_FIFO, macOS time-constraint, Windows TIME_CRITICAL + MMCSS). Soft-failure: výsledek `Full`/`Partial`/`Failed` se loguje přes `LOG_RT_INFO`/`LOG_RT_WARN` vč. per-platform TIPu; při selhání audio běží na default scheduleru. Viz [J · RT priorita](J-rt-priorita.md).
 
 **Krok 0c — epoch tick:** `block_epoch_.fetch_add(1, seq_cst)` — počítadlo započatých bloků. `reloadBank`/`rebuildResonanceCache` přes `waitForAudioQuiesce(2, 500)` čekají na epoch+2 = „in-flight blok doběhl a další blok už viděl aktuální atomic flagy" (nahrazuje dřívější sleep heuristiku, která neplatila pro block_size až 8192 ≈ 170 ms periody).
 

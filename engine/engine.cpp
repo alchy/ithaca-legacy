@@ -249,7 +249,7 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     // RT priorita audio vlakna — jednou per thread, jen kdyz si ji aplikace
     // vyzadala (cfg.rt_priority; GUI a CLI --play). Soft-failure: pri selhani
     // se loguje WARN + per-platform TIP, audio bezi na default scheduling.
-    // Viz docs/rt-thread-priority.md.
+    // Viz docs/reference/J-rt-priorita.md.
     static thread_local bool rt_set = false;
     if (!rt_set && cfg_.rt_priority) {
         const RtAudioParams rp{ cfg_.sample_rate, cfg_.block_size };

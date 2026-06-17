@@ -1,4 +1,4 @@
-// engine/util/rt_priority.cpp — viz rt_priority.h + docs/rt-thread-priority.md.
+// engine/util/rt_priority.cpp — viz rt_priority.h + docs/reference/J-rt-priorita.md.
 #include "util/rt_priority.h"
 
 #if defined(_WIN32)

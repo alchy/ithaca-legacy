@@ -37,7 +37,7 @@ Definuje kompletní datový model banky. Neobsahuje žádnou logiku ani I/O.
 | | `FixedVelocity` | — | ploché soubory `mNNN-velV-fSS.wav` |
 | | `Extended` | — | ploché soubory `mNN-MIC-HASH.wav` (fáze 7) |
 | | `DynamicVelocity` | — | podsložky `m<MIDI>/` s hašovanými WAV |
-| | `PackedIthaca` | — | jednosouborová pakovaná banka `soundbank.ithaca` (viz [packed format](../bank-format-packed.md)) |
+| | `PackedIthaca` | — | jednosouborová pakovaná banka `soundbank.ithaca` (viz [formát banky](../prirucka/05-format-banky.md)) |
 | `MicLayerMode` (enum class) | `FullyLoaded` | — | celý sampl je v `preload_head`; žádný streaming |
 | | `Streamed` | — | jen začátek + rezonanční okno v RAM, zbytek se streamuje z disku |
 | `SampleFile` | `path` | `std::string` | absolutní cesta ke zdrojovému WAV; u pakované banky cesta k `soundbank.ithaca` (pro logy) |
@@ -203,7 +203,7 @@ Zápis interleaved stereo float bufferu do 16-bit PCM WAV. Používá ho batch r
 
 Vedle adresářových formátů umí Loader načíst i jednosouborovou pakovanou banku
 `soundbank.ithaca` (jeden blob se všemi WAV daty + index s předpočítanou
-analýzou). Detail formátu pro autory bank: [bank-format-packed.md](../bank-format-packed.md).
+analýzou). Detail formátu pro autory bank: [formát banky](../prirucka/05-format-banky.md).
 
 **Detekce.** `scanBank()` má stupeň 0: existuje-li v adresáři `soundbank.ithaca`
 (konstanta `kIthacaFileName`), vrátí `BankFormat::PackedIthaca` a ostatní obsah
@@ -234,8 +234,8 @@ abstrakci:
    **U šifrované banky (flags bit0):** načte `license.ithaca` ze stejného
    adresáře, odvodí klíče z kompilovaného `kBankSecret` + license, ověří
    `hmac_tag` a obalí handle do `DecryptingFileHandle`; selhání → `LicenseInvalid`
-   (prázdná banka + overlay). Vrátí záznamy + (de)šifrující handle. v2 detaily:
-   `docs/superpowers/specs/2026-06-14-packed-soundbank-v2-security-design.md`.
+   (prázdná banka + overlay). Vrátí záznamy + (de)šifrující handle. Detail
+   formátu a threat model: [formát banky](../prirucka/05-format-banky.md).
 2. Plní kostru `Bank` **přímo z indexu** — žádný directory scan, žádná RMS
    analýza, žádný sort. Baked `rms_db`/`attack_end` jsou autoritativní; index je
    předřazený dle `(midi, rms vzestupně)`, takže `commitSample` ve scan pořadí

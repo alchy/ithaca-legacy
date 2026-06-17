@@ -6,6 +6,10 @@ a pro každý soubor jeho funkce/metody (vstup/výstup, kdo volá, koho volá a 
 parametry, vlákno, vysvětlení). Cíl: pochopit návrh i implementaci bez čtení
 celého zdrojáku.
 
+Tohle je **Část II** knížky (programová reference). Provozní část (build,
+Raspberry Pi, konfigurace, formát banky) je v `../prirucka/` — viz
+[../prirucka/01-uvod.md](../prirucka/01-uvod.md).
+
 > Stav: generováno po oblastech (viz tabulka). Každý dokument navíc obsahuje
 > sekci **Nálezy revize** — při sepisování proběhla i kontrola logiky návrhu vs
 > implementace (kód se nemění, jen se zaznamenají případné nesrovnalosti).
@@ -46,6 +50,7 @@ celého zdrojáku.
 | G | DSP | [G-dsp.md](G-dsp.md) | `dsp/dsp_stage.h`, `dsp_math.h`, `dsp_chain.{h,cpp}`, `convolver.{h,cpp}`, `ir_modal.{h,cpp}`, `ir_wav.{h,cpp}`, `agc.{h,cpp}`, `enhancer.{h,cpp}`, `limiter.{h,cpp}` |
 | H | GUI | [H-gui.md](H-gui.md) | `app/gui/main.cpp`, `app_context.{h,cpp}`, `persistence.{h,cpp}`, `log_subscriber.{h,cpp}`, `master_page.h`, `resonance_page.h`, `theme.h`, `layout.h`, `widgets.h`, `panel_*.{h,cpp}` |
 | I | Multithreading | [I-multithreading.md](I-multithreading.md) | *cross-cutting* — vlákna + synchronizace napříč A–H |
+| J | RT priorita audio vlákna | [J-rt-priorita.md](J-rt-priorita.md) | engine/util/rt_priority.{h,cpp} |
 
 ## Konvence dokumentů
 

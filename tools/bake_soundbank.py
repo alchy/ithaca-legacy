@@ -3,7 +3,7 @@
 
 Format (LE): [hlavicka 408 B][metadata JSON][index 64 B/zaznam][names]
 [blob: doslovne WAVy zarovnane na 4096 B]. Layout viz
-docs/bank-format-packed.md.
+docs/prirucka/05-format-banky.md.
 
 Analyzu (rms_db, attack_end) pocita nastroj SAM v numpy — replikuje algoritmus
 enginu (engine/sample/sample_loader.cpp): klouzave okno 50 ms, hop = pul okna,

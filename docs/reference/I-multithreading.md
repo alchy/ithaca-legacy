@@ -245,7 +245,7 @@ main() / main.cpp
    c. `stream_resonance_->stop()` (join workerů).
 4. ImGui/GLFW shutdown.
 
-### raw `StreamEngine*` v hласech — proč to není use-after-free
+### raw `StreamEngine*` v hlasech — proč to není use-after-free
 
 `Voice` i `ResonanceVoice` drží `stream_ = StreamEngine*` (raw pointer). Lifetime
 je bezpečná, protože:
