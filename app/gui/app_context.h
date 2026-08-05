@@ -102,6 +102,11 @@ struct PanelState {
         int   head = 0;                   // pozice nejnovejsiho vzorku
     };
     Wave wave;
+    // Svisly stred plochy displeje. Nastavuje shell; PLAY na nej sazi vybrany
+    // nastroj, aby byl na stredu OBRAZOVKY a ne na stredu sve vlastni plochy
+    // (ta je nesymetricka: lista nahore je vyssi nez paticka dole).
+    float lcd_center_y = 0.f;
+
     // Svisla osa vlny. Nastavuje ji stranka PLAY na stred vybraneho patche,
     // aby vlna protekala prave jmenem nactene banky. 0 = jeste neznama,
     // pozadi pak vezme stred plochy.
@@ -116,6 +121,12 @@ struct PanelState {
     // znatelne problikne, coz nastroj delat nema.
     float overlay_a = 0.f;
     float overlay_t = 0.f;
+
+    // Sporic: po peti minutach bez DOTYKU se ovladaci prvky pomalu vytrati
+    // a zustane jen vlna. Hrani obrazovku NEprobouzi — kdyz hrajes, panel
+    // nepotrebujes, a vlna zije dal. Prvni dotek vrati vsechno hned.
+    float idle_t   = 0.f;
+    float chrome_a = 1.f;
 
     // Uvodni obrazovka: cas od startu, prolnuti pri odchodu, a jestli uz dobehla.
     float splash_t    = 0.f;

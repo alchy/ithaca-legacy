@@ -30,21 +30,26 @@ const char* const kTabs[PAGE_COUNT] = {
     "PLAY", "BANK", "TONE", "RESO", "DSP", "SYS", "LOG"
 };
 
-// Radek kontrolek. Zhasle jsou taky videt — aby bylo poznat, ze existuji.
-// Zustava na KAZDE strance: co je bezpecnostne dulezite, nesmi zmizet jen
-// proto, ze uzivatel zrovna neco ladi.
+// Kontrolky. Zhasle jsou taky videt — aby bylo poznat, ze existuji.
+// Jsou na KAZDE strance: co je bezpecnostne dulezite, nesmi zmizet jen proto,
+// ze uzivatel zrovna neco ladi.
+//
+// Sedi ve stejnem radku jako paticka, ne ve vlastnim pasu: samostatny pruh
+// ukrajel 36 px vysky na kazde strance, coz je na 7" panelu citelne — a jde
+// o tyz druh informace jako zbytek paticky (stav pristroje).
 void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
     const bool ur = ctx.engine.mainStreamUnderrunRecent(4000.f) ||
                     ctx.engine.resonanceStreamUnderrunRecent(4000.f);
     const bool clip = ctx.engine.masterPeakL() >= 0.999f ||
                       ctx.engine.masterPeakR() >= 0.999f;
-    float x = pos.x;
+    // Na stred paticky, mezi stitek a audio rezim.
+    const float total = wdg::lampW("UNDERRUN") + wdg::lampW("CLIP") + wdg::lampW("LOG");
+    float x = pos.x + (w - total) * 0.5f;
     wdg::lamp(dl, ImVec2(x, pos.y), "UNDERRUN", ur ? 1.f : 0.f, Colors::warn);
     x += wdg::lampW("UNDERRUN");
     wdg::lamp(dl, ImVec2(x, pos.y), "CLIP", clip ? 1.f : 0.f, Colors::warn);
     x += wdg::lampW("CLIP");
     wdg::lamp(dl, ImVec2(x, pos.y), "LOG", ctx.panels.log_unseen ? 1.f : 0.f, Colors::warn);
-    (void)w;
 }
 
 // Paticka: stitek nastroje vlevo, audio rezim vpravo. Stitek je tu proto,
@@ -269,12 +274,33 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
     // Rozvrzeni se pocita PRED kreslenim, protoze pozadi potrebuje vedet,
     // kde konci lista a kde zacinaji kontrolky.
     const float top    = lcd_lo.y + pad + L::Dims::tab_h + L::Dims::gap;
-    const float lamp_y = lcd_hi.y - pad - L::Dims::foot_h - L::Dims::lamp_h;
     const float foot_y = lcd_hi.y - pad - L::Dims::foot_h;
-    const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, lamp_y - L::Dims::gap) };
+    const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, foot_y - L::Dims::gap) };
 
-    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi,
-               ctx.panels.page == PAGE_PLAY ? 1.0f : 0.42f);
+    ctx.panels.lcd_center_y = (lcd_lo.y + lcd_hi.y) * 0.5f;
+
+    const float wave_vis = (ctx.panels.page == PAGE_PLAY) ? 1.0f : 0.42f;
+    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi, wave_vis);
+
+    // -- Sporic ------------------------------------------------------------
+    // Po peti minutach bez DOTYKU se ovladaci prvky pomalu vytrati a zustane
+    // jen vlna. Hrani obrazovku NEprobouzi: kdyz hrajes, panel nepotrebujes.
+    // Prvni dotek vrati vsechno hned — proto je nabeh rychly a odchod pomaly.
+    //
+    // Ma to i prakticky duvod nez ze to vypada dobre: lista, ramecky a inverzni
+    // pole jsou porad na stejnem miste. Na OLED panelu (a z tech tvoje reference
+    // vychazi) je to presne recept na vypaleni.
+    {
+        auto& ps = ctx.panels;
+        ImGuiIO& io = ImGui::GetIO();
+        const float dt = io.DeltaTime;
+        const bool touched = ImGui::IsAnyMouseDown() || io.MouseWheel != 0.f
+                          || io.MouseDelta.x != 0.f || io.MouseDelta.y != 0.f;
+        ps.idle_t = touched ? 0.f : (ps.idle_t + dt);
+        const bool saver = ps.idle_t > 300.f;          // 5 minut
+        const float k = 1.f - std::exp(-dt / (saver ? 2.5f : 0.18f));
+        ps.chrome_a += ((saver ? 0.f : 1.f) - ps.chrome_a) * k;
+    }
 
     // -- Zalozky --
     ImGui::SetCursorScreenPos(ImVec2(cx, lcd_lo.y + pad));
@@ -311,8 +337,23 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
         default: break;
     }
 
-    lampRow(ctx, dl, ImVec2(cx, lamp_y), cw);
     footer(ctx, dl, ImVec2(cx, foot_y), cw);
+    lampRow(ctx, dl, ImVec2(cx, foot_y), cw);
+
+    // Zavoj sporice: prekryje UZ NAKRESLENE ovladani barvou pozadi, a vlna se
+    // pak dokresli znovu pres nej. Diky tomu se ztlumi jen chrome — vlnu by
+    // pruhledny prekryv jinak ztlumil taky.
+    if (ctx.panels.chrome_a < 0.995f) {
+        const float veil = 1.f - ctx.panels.chrome_a;
+        ImGui::PushClipRect(lcd_lo, lcd_hi, false);
+        dl->AddRectFilledMultiColor(lcd_lo, lcd_hi,
+            IM_COL32(0x0e, 0x2f, 0x7a, (int)(veil * 255)),
+            IM_COL32(0x18, 0x46, 0xa8, (int)(veil * 255)),
+            IM_COL32(0x0c, 0x27, 0x66, (int)(veil * 255)),
+            IM_COL32(0x08, 0x1c, 0x4c, (int)(veil * 255)));
+        ImGui::PopClipRect();
+        background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi, wave_vis * veil);
+    }
 
     ImGui::End();
     ImGui::PopStyleVar();

@@ -61,8 +61,15 @@ void pagePlay(AppContext& ctx, const Rect& r) {
 
     const int n = (int)ps.banks.size();
     const float row = L::Dims::row_h;
-    const float mid_y = (reel_r.lo.y + reel_r.hi.y) * 0.5f;
-    // Vlna v pozadi ma protekat stredem vybraneho patche — osu si bere odsud.
+    // Vybrany nastroj sedi na stredu OBRAZOVKY, ne na stredu plochy vytahu:
+    // ta je nesymetricka (lista nahore vyssi nez paticka dole, spodek ukrajuje
+    // rada udaju), takze by pri kazde zmene velikosti okna utikal nahoru.
+    // Clamp drzi radek uvnitr vyrezu i na velmi malem okne.
+    const float half = row * 0.5f;
+    const float mid_y = std::clamp(
+        (ps.lcd_center_y > 0.f) ? ps.lcd_center_y : (reel_r.lo.y + reel_r.hi.y) * 0.5f,
+        reel_r.lo.y + half, reel_r.hi.y - half);
+    // Vlna v pozadi protéká stredem vybraneho patche — osu si bere odsud.
     ps.scope_center_y = mid_y;
 
     // -- Interakce --------------------------------------------------------
