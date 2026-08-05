@@ -187,12 +187,11 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     // (viz screen.cpp). Tady zustava jen misto pro sustain bar.
     const float meters_x = r.hi.x;
 
+    // Pedal uz nema vlastni bar — jeho INDIKACE je pata stuha v pozadi
+    // (viz screen.cpp). Tady zustava jen cislo, protoze udaj se ma cist presne.
     const int cc = (int)ctx.engine.pedalCC();
-    char sus[24]; std::snprintf(sus, sizeof(sus), "SUSTAIN %d", cc);
-    dl->AddText(Fonts::small, lp, ImVec2(bx, sy + lp + 8.f), Colors::dimmer, sus);
-    wdg::hbar(dl, ImVec2(bx, sy + lp * 2.f + 12.f),
-              std::max(40.f, meters_x - 16.f - bx), L::Dims::bar_h,
-              (float)cc / 127.f, 0.5f);
+    statNum(dl, ImVec2(bx, sy + lp + 8.f), "SUSTAIN",
+            [&]{ static char b[8]; std::snprintf(b, sizeof(b), "%d", cc); return b; }());
 }
 
 } // namespace ithaca::gui

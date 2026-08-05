@@ -72,6 +72,7 @@ struct PanelState {
     // tvar vlny. Proto tu nejsou stopy, ale jen dve obalky a normalizace.
     struct Wave {
         float env_l = 0.f, env_r = 0.f;   // vyhlazena hlasitost kanalu 0..1
+        float env_p = 0.f;                // vyhlazena poloha pedalu 0..1
         // DVE nezavisle reference. Obalka se meri v RMS, historie ve spickach —
         // a spicka je u hudby nekolikanasobek RMS, takze delit jednu druhou
         // znamena drzet modulaci trvale na dorazu (vypadalo to jako clipping).
@@ -94,6 +95,10 @@ struct PanelState {
         // projevi nabyvanim a splaskavanim podel toku.
         static constexpr int kHist = 128;
         float hist_l[kHist]{}, hist_r[kHist]{};
+        // Pedal ma vlastni historii, aby jeho vlna plynula doprava stejne jako
+        // zvukove. Neni to audio signal, ale pomalu se menici hodnota — vyjde
+        // z nej dlouha klidna vlna, opticky odlisna od zivych L/R.
+        float hist_p[kHist]{};
         int   head = 0;                   // pozice nejnovejsiho vzorku
     };
     Wave wave;

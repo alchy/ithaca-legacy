@@ -27,12 +27,6 @@ using theme::Fonts;
 namespace L = ithaca::gui::layout;
 
 // -- Text -------------------------------------------------------------------
-
-inline void drawText(ImDrawList* dl, ImFont* f, float px, ImVec2 pos, ImU32 col,
-                     const char* txt) {
-    dl->AddText(f, px, pos, col, txt);
-}
-
 // Sirka textu v danem pismu bez ohledu na aktualne pushnuty font.
 inline float textW(ImFont* f, float px, const char* txt) {
     return f->CalcTextSizeA(px, FLT_MAX, 0.f, txt).x;
@@ -72,42 +66,6 @@ inline void lamp(ImDrawList* dl, ImVec2 pos, const char* label, bool on,
 
 inline float lampW(const char* label) {
     return 8.f + 6.f + textW(Fonts::small, fontPx(Fonts::small), label) + 18.f;
-}
-
-// -- Vodorovny bar (sustain, peak) ------------------------------------------
-// tick01 < 0 = bez rysky. Ryska znaci prah (napr. half-pedal).
-inline void hbar(ImDrawList* dl, ImVec2 pos, float w, float h, float frac01,
-                 float tick01 = -1.f, ImU32 fill = Colors::inv_bg) {
-    frac01 = std::clamp(frac01, 0.f, 1.f);
-    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), Colors::trough);
-    dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), Colors::line);
-    if (frac01 > 0.f)
-        dl->AddRectFilled(ImVec2(pos.x + 1, pos.y + 1),
-                          ImVec2(pos.x + w * frac01, pos.y + h - 1), fill);
-    if (tick01 >= 0.f) {
-        const float tx = pos.x + w * std::clamp(tick01, 0.f, 1.f);
-        dl->AddRectFilled(ImVec2(tx - L::Dims::tick * 0.5f, pos.y - 3.f),
-                          ImVec2(tx + L::Dims::tick * 0.5f, pos.y + h + 3.f),
-                          Colors::ink);
-    }
-}
-
-// -- Sloupcovy metr (peak L/R) ----------------------------------------------
-inline void vmeter(ImDrawList* dl, ImVec2 pos, float w, float h, float frac01,
-                   int segments = 12) {
-    frac01 = std::clamp(frac01, 0.f, 1.f);
-    const float seg_h = h / (float)segments;
-    const int lit = (int)std::lround(frac01 * segments);
-    for (int i = 0; i < segments; ++i) {
-        const float y1 = pos.y + h - (i + 1) * seg_h + 1.f;
-        const float y2 = pos.y + h - i * seg_h - 1.f;
-        const bool  on = i < lit;
-        // Poslednich ~15 % je jantarove: prehlceni pozna periferni videni
-        // podle barvy, ne podle vysky sloupce.
-        const ImU32 c = !on ? Colors::trough
-                            : (i >= segments - 2 ? Colors::warn : Colors::inv_bg);
-        dl->AddRectFilled(ImVec2(pos.x, y1), ImVec2(pos.x + w, y2), c);
-    }
 }
 
 // -- Vlnova cara (pozadi) ---------------------------------------------------

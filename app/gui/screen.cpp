@@ -134,6 +134,11 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * 0.995f);
     const float pref = std::max(wv.norm_peak, 0.01f);
 
+    // Pedal: vlastni obalka i historie. Neni to zvuk, takze se nenormalizuje —
+    // 0..127 je uz absolutni skala.
+    const float ped = std::clamp((float)ctx.engine.pedalCC() / 127.f, 0.f, 1.f);
+    wv.env_p += (ped - wv.env_p) * ((ped > wv.env_p) ? 0.20f : 0.08f);
+
     const int prev = wv.head;
     wv.head = (wv.head + 1) % PanelState::Wave::kHist;
     // Casove vyhlazeni pri vstupu: bez nej by kazdy frame skocil jinam a podel
@@ -142,6 +147,7 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
                        + 0.45f * wv.hist_l[prev];
     wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
                        + 0.45f * wv.hist_r[prev];
+    wv.hist_p[wv.head] = 0.35f * wv.env_p + 0.65f * wv.hist_p[prev];
 
     // -- Tvar --------------------------------------------------------------
     const float wh = wave_hi.y - wave_lo.y;
@@ -156,12 +162,21 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     // Ctyri stuhy ve dvou rodinach. KAZDY KANAL JE JINAK PROSVICEN — levy
     // svetly, pravy hlubsi modry — takze je od sebe poznas, i kdyz se prolinaji
     // kolem teze osy. Je to ambientni vizualizer: ma dychat, ne informovat.
-    struct Ribbon { float phase, speed, scale, alpha, th; ImU32 col; bool right; };
+    // src: 0 = levy kanal, 1 = pravy, 2 = pedal.
+    // Pedalova stuha ma nizsi frekvenci — je to dlouhy klidny nadech pres celou
+    // sirku, ktery se neplete s zivymi zvukovymi stuhami.
+    //
+    // POZOR na rychlost: fazova rychlost je speed/(2*pi*freq), takze prejezd
+    // sirky trva 2*pi*freq/speed sekund. Pri freq 0.55 a speed 0.05 to bylo
+    // 69 s a stuha vypadala zaseknuta s vrcholem porad na temze miste.
+    // Se speed 0.19 je to ~18 s — plyne viditelne, ale porad klidneji nez zvuk.
+    struct Ribbon { float phase, speed, freq, scale, alpha, th; ImU32 col; int src; };
     const Ribbon ribs[] = {
-        { 0.0f, 0.16f, 1.00f, 0.30f, 2.6f, Colors::ink,    false },
-        { 2.3f, 0.11f, 0.72f, 0.15f, 1.8f, Colors::inv_bg, false },
-        { 1.1f, 0.13f, 0.88f, 0.26f, 2.6f, Colors::fill,   true  },
-        { 3.7f, 0.09f, 0.58f, 0.13f, 1.6f, Colors::line,   true  },
+        { 0.0f, 0.16f, 1.00f, 1.00f, 0.30f, 2.6f, Colors::ink,    0 },
+        { 2.3f, 0.11f, 1.00f, 0.72f, 0.15f, 1.8f, Colors::inv_bg, 0 },
+        { 1.1f, 0.13f, 1.00f, 0.88f, 0.26f, 2.6f, Colors::fill,   1 },
+        { 3.7f, 0.09f, 1.00f, 0.58f, 0.13f, 1.6f, Colors::line,   1 },
+        { 5.2f, 0.19f, 0.55f, 1.15f, 0.20f, 3.0f, Colors::dim,    2 },
     };
 
     // Zar: tyz tvar trikrat pres sebe — siroky a slaby vespod, uzky a jasny
@@ -174,15 +189,19 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
 
     dl->PushClipRect(wave_lo, wave_hi, true);
     for (const Ribbon& R : ribs) {
-        const float env = R.right ? wv.env_r : wv.env_l;
+        const float env = (R.src == 2) ? wv.env_p : (R.src == 1 ? wv.env_r : wv.env_l);
+        // Pedalova stuha ma VLASTNI viditelnost: seslapnuty pedal ma byt videt
+        // i v tichu, protoze drzeni pedalu je stav, ne zvuk.
+        const float vis_r = (R.src == 2) ? wv.env_p : wv.vis;
         // Amplituda i sytost jdou s viditelnosti — vlna se pri utichnuti
         // zaroven splaskne a vytrati, misto aby zustala viset jako prazdny vzor.
-        const float amp = room * R.scale * (0.14f + 0.86f * env) * wv.vis;
+        const float amp = room * R.scale * (0.14f + 0.86f * env) * vis_r;
         // Od -9 dB se stuha zacne barvit do cervena, v 0 dB je cervena.
         const ImU32 col = Colors::lerp(
             Colors::lerp(R.col, Colors::clip_lo, std::min(wv.clip * 2.f, 1.f)),
             Colors::clip_hi, std::max(0.f, wv.clip * 2.f - 1.f));
-        const float* hist = R.right ? wv.hist_r : wv.hist_l;
+        const float* hist = (R.src == 2) ? wv.hist_p
+                          : (R.src == 1 ? wv.hist_r : wv.hist_l);
 
         for (int i = 0; i < kPts; ++i) {
             const float u = (float)i / (float)(kPts - 1);
@@ -192,9 +211,9 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
             // treplo na miste. Ruzne rychlosti delaji mekky rozpad tvaru.
             // Koeficienty davaji v souctu 1.0, takze nosna sama nikdy nepresahne
             // rozsah a tanh nize pracuje v linearni oblasti misto v nasyceni.
-            float v = 0.55f * std::sin(a * 1.0f - t * R.speed)
-                    + 0.30f * std::sin(a * 1.9f - t * R.speed * 1.4f + R.phase)
-                    + 0.15f * std::sin(a * 3.1f - t * R.speed * 2.1f + R.phase * 0.6f);
+            float v = 0.55f * std::sin(a * 1.0f * R.freq - t * R.speed)
+                    + 0.30f * std::sin(a * 1.9f * R.freq - t * R.speed * 1.4f + R.phase)
+                    + 0.15f * std::sin(a * 3.1f * R.freq - t * R.speed * 2.1f + R.phase * 0.6f);
 
             // Zvuk MODULUJE AMPLITUDU nosne vlny, neprictava se k vychylce —
             // proto zustava tvar hladky. Historie plyne doprava: nejnovejsi
@@ -209,7 +228,7 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
             const float hv = hsum / (float)hcnt;
             pts[i] = v * (0.28f + 0.72f * hv);
         }
-        glow(pts, kPts, amp, col, R.alpha * vis * wv.vis, R.th);
+        glow(pts, kPts, amp, col, R.alpha * vis * vis_r, R.th);
     }
     dl->PopClipRect();
 }
