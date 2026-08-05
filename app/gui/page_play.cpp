@@ -28,11 +28,25 @@ using theme::Fonts;
 
 namespace {
 
-// Sample-and-hold: drzi maximum za okno, jinak cisla pri 60 fps neblikaji
-// jen necitelne — primo se nedaji precist.
-float holdMax(PanelState::Hold& s, float cur, float now_s, float win = 0.4f) {
+// Jak casto se cisla vubec prekresluji. Pri 60 fps se hodnota meni rychleji,
+// nez ji stihnes precist — a nic z toho, co tady stoji, nepotrebuje rozliseni
+// jednoho snimku. Dvakrat za vterinu je tempo, ktere se da sledovat.
+constexpr float kHoldWin = 0.5f;
+
+// Drzi MAXIMUM za okno. Spravne pro veliciny, u kterych je zajimava spicka:
+// pocet hlasu, zatez DSP, peak metr.
+float holdMax(PanelState::Hold& s, float cur, float now_s, float win = kHoldWin) {
     if (cur > s.winmax) s.winmax = cur;
     if (now_s - s.t0 >= win) { s.shown = s.winmax; s.winmax = 0.f; s.t0 = now_s; }
+    return s.shown;
+}
+
+// Drzi POSLEDNI hodnotu na konci okna. Pro polohu pedalu: max-hold by po
+// pusteni jeste pul vteriny ukazoval 127, coz je u udaje, ktery se ma cist
+// presne, horsi nez pomalejsi obnova.
+float holdLast(PanelState::Hold& s, float cur, float now_s, float win = kHoldWin) {
+    s.winmax = cur;
+    if (now_s - s.t0 >= win) { s.shown = cur; s.t0 = now_s; }
     return s.shown;
 }
 
@@ -165,19 +179,26 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     // -- Stav --------------------------------------------------------------
     // Pet stejnych sloupcu na spolecne uctare: VOICES RESO PEAK DSP SUSTAIN.
     // Lampy MIDI vstupu jdou nad ne, aby nerozhazely zarovnani radky.
-    const float ly = r.hi.y - stat_h;
-    const float sy = ly + 26.f;
+    // Radek se kotvi u SPODNI hrany plochy, ne pevnym odsazenim od zacatku
+    // pasma: drzi se tak dole u paticky misto aby plaval uprostred volneho
+    // mista pod vytahem.
+    const float sy = r.hi.y - 16.f - wdg::fontPx(Fonts::num)
+                             - wdg::fontPx(Fonts::small) - 4.f;
 
     char v[16], rs[16], pk[16], ds[16], su[16];
     std::snprintf(v,  sizeof(v),  "%d", (int)holdMax(ps.h_voices,
                   (float)ctx.engine.activeVoices(), now_s));
     std::snprintf(rs, sizeof(rs), "%d", (int)holdMax(ps.h_reso,
                   (float)ctx.engine.resonanceVoices(), now_s));
+    // Peak metr drzi spicku za okno — presne to, co peak metr ma delat.
     std::snprintf(pk, sizeof(pk), "%.1f",
-                  toDb(std::max(ctx.engine.masterPeakL(), ctx.engine.masterPeakR())));
+                  toDb(holdMax(ps.h_peak,
+                       std::max(ctx.engine.masterPeakL(), ctx.engine.masterPeakR()),
+                       now_s)));
     std::snprintf(ds, sizeof(ds), "%.0f%%",
                   holdMax(ps.h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
-    std::snprintf(su, sizeof(su), "%d", (int)ctx.engine.pedalCC());
+    std::snprintf(su, sizeof(su), "%d",
+                  (int)holdLast(ps.h_sustain, (float)ctx.engine.pedalCC(), now_s));
 
     // Sest sloupcu: pet cisel + dvojice MIDI lamp jako sesty. Lampy se
     // rozsvecuji a hasnou plynule (~200 ms), aby necvakaly — vyhlazeni je

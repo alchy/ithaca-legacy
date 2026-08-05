@@ -138,8 +138,10 @@ struct PanelState {
 
     // -- Sample-and-hold pro ciselne indikatory (max za 400ms okno) --
     // Bez toho by cisla pri 60 fps necitelne blikala.
+    // Sample-and-hold pro cisla na PLAY: pri 60 fps se hodnota meni rychleji,
+    // nez ji stihnes precist. Drzi se okno (viz page_play.cpp).
     struct Hold { float shown = 0.f, winmax = 0.f, t0 = 0.f; };
-    Hold h_voices, h_reso, h_main_rings, h_reso_rings, h_load;
+    Hold h_voices, h_reso, h_main_rings, h_reso_rings, h_load, h_peak, h_sustain;
 
     // Scratch pro snapshot LOG stranky. Predalokovany, aby se LogEntry
     // (kazdy 2x std::string) nealokovaly kazdy frame; snapshot se dela do nej,
