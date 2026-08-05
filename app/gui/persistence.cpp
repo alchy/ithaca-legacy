@@ -33,18 +33,101 @@ std::filesystem::path platformConfigDir() {
     return std::filesystem::current_path();
 }
 
-// Escape JSON stringu (jen \", \\, \n).
+// Escape JSON stringu. Krome uvozovek a zpetneho lomitka musi odejit VSECHNY
+// control znaky < 0x20 — syrovy tabulator v hodnote je nevalidni JSON.
+// UTF-8 (diakritika v cestach) prochazi beze zmeny; escapovat ho neni treba.
 std::string jsonEscape(const std::string& s) {
-    std::string o; o.reserve(s.size() + 4);
-    for (char c : s) {
+    std::string o; o.reserve(s.size() + 8);
+    for (unsigned char c : s) {
         switch (c) {
             case '"':  o += "\\\""; break;
             case '\\': o += "\\\\"; break;
             case '\n': o += "\\n";  break;
-            default:   o += c;
+            case '\r': o += "\\r";  break;
+            case '\t': o += "\\t";  break;
+            case '\b': o += "\\b";  break;
+            case '\f': o += "\\f";  break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
+                    o += buf;
+                } else {
+                    o += (char)c;
+                }
         }
     }
     return o;
+}
+
+// Prida code point jako UTF-8.
+void appendUtf8(std::string& out, unsigned int cp) {
+    if (cp < 0x80) {
+        out += (char)cp;
+    } else if (cp < 0x800) {
+        out += (char)(0xC0 | (cp >> 6));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += (char)(0xE0 | (cp >> 12));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else {
+        out += (char)(0xF0 | (cp >> 18));
+        out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    }
+}
+
+// Precte 4 hexa cifry na pozici i (nepohybuje s i). false = nevalidni.
+bool readHex4(const std::string& j, size_t i, unsigned int& out) {
+    if (i + 4 > j.size()) return false;
+    unsigned int v = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        const char c = j[i + k];
+        v <<= 4;
+        if      (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+        else return false;
+    }
+    out = v;
+    return true;
+}
+
+// Rozbali escape sekvenci zacinajici na j[i] == '\\'. Posune i za ni.
+// Drive se dekodovalo jen \n, \\ a obecne \x -> x, takze \t koncil jako 't'
+// a \uXXXX jako 'uXXXX'.
+void decodeEscape(const std::string& j, size_t& i, std::string& val) {
+    const char nxt = j[i + 1];
+    i += 2;
+    switch (nxt) {
+        case 'n':  val += '\n'; break;
+        case 'r':  val += '\r'; break;
+        case 't':  val += '\t'; break;
+        case 'b':  val += '\b'; break;
+        case 'f':  val += '\f'; break;
+        case '"':  val += '"';  break;
+        case '\\': val += '\\'; break;
+        case '/':  val += '/';  break;
+        case 'u': {
+            unsigned int cp = 0;
+            if (!readHex4(j, i, cp)) { val += 'u'; break; }   // nevalidni → literal
+            i += 4;
+            // Surrogate par: high D800–DBFF + low DC00–DFFF → jeden code point.
+            if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < j.size()
+                && j[i] == '\\' && j[i + 1] == 'u') {
+                unsigned int lo = 0;
+                if (readHex4(j, i + 2, lo) && lo >= 0xDC00 && lo <= 0xDFFF) {
+                    cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                    i += 6;
+                }
+            }
+            appendUtf8(val, cp);
+            break;
+        }
+        default: val += nxt; break;   // neznamy escape → literalni znak
+    }
 }
 
 // Rozparsuje cely flat JSON na mapu klic -> raw hodnota (u stringu s vyresenymi
@@ -77,13 +160,8 @@ std::map<std::string, std::string> parseFlatJson(const std::string& j) {
         if (i < j.size() && j[i] == '"') {           // string hodnota
             ++i;
             while (i < j.size() && j[i] != '"') {
-                if (j[i] == '\\' && i + 1 < j.size()) {
-                    const char nxt = j[i + 1];
-                    val += (nxt == 'n') ? '\n' : nxt;
-                    i += 2;
-                } else {
-                    val += j[i++];
-                }
+                if (j[i] == '\\' && i + 1 < j.size()) decodeEscape(j, i, val);
+                else                                  val += j[i++];
             }
             if (i < j.size()) ++i;
         } else {                                     // cislo / bool

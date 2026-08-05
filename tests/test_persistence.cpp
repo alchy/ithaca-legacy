@@ -306,3 +306,82 @@ TEST_CASE("window geometrie se sanitizuje (0x0 z minimalizovaneho okna nezabije 
     CHECK(st->midi_channel == -1);   // mimo rozsah → OMNI
     std::filesystem::remove(p);
 }
+
+// -- JSON escape / unescape -------------------------------------------------
+// Parser drive dekodoval jen \n, \\ a obecne \x -> x. Tabulator, CR i \uXXXX
+// se tedy dekodovaly nespravne (\t -> 't'). Zapisovac zase control znaky
+// < 0x20 psal syrove, coz je nevalidni JSON.
+
+TEST_CASE("Round-trip retezce s control znaky (tab, CR, LF)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_ctrl.json";
+    GuiState s;
+    s.bank_path      = "/cesta/s\ttabem/a\rCR";
+    s.midi_port_name = "port\ns novym radkem";
+    s.bank_search_dir = "a\bb\fc";
+
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->bank_path == s.bank_path);
+    CHECK(l->midi_port_name == s.midi_port_name);
+    CHECK(l->bank_search_dir == s.bank_search_dir);
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Zapsany JSON neobsahuje syrove control znaky") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_ctrl_raw.json";
+    GuiState s;
+    s.bank_path = "x\ty";
+    REQUIRE(saveState(p, s));
+
+    std::ifstream f(p);
+    std::string txt((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    // Uvnitr hodnot nesmi byt syrovy tab; struktura pouziva jen mezery a \n.
+    CHECK(txt.find('\t') == std::string::npos);
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Dekodovani \\uXXXX escape sekvenci") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_uesc.json";
+    {
+        std::ofstream f(p);
+        // "Bösendorfer" pres \u00f6 a ceske "č" pres \u010d
+        f << "{\n  \"schema_version\": 5,\n"
+             "  \"bank_path\": \"B\\u00f6sendorfer \\u010desky\",\n"
+             "  \"midi_port_name\": \"tab:\\there\"\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->bank_path == "B\xC3\xB6sendorfer \xC4\x8D" "esky");   // UTF-8
+    CHECK(l->midi_port_name == "tab:\there");
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Dekodovani surrogate paru (\\uD83C\\uDFB9 = klavir)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_surrogate.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 5,\n"
+             "  \"bank_path\": \"\\uD83C\\uDFB9 banka\"\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->bank_path == "\xF0\x9F\x8E\xB9 banka");   // U+1F3B9 v UTF-8
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("UTF-8 v ceste projde beze zmeny (bez escapovani)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_utf8.json";
+    GuiState s;
+    s.bank_path = "/Users/j/Zvuky/piáno-ěščřžýá";
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->bank_path == s.bank_path);
+    std::filesystem::remove(p);
+}

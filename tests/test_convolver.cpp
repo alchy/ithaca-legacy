@@ -231,3 +231,54 @@ TEST_CASE("soubezny setIR + process: zadny crash, konecny vystup (smoke; plne ov
     audio.join();
     CHECK_FALSE(bad.load());
 }
+
+// -- Volba IR musi prezit re-prepare ----------------------------------------
+// Engine::setBlockSize() vola dsp_.prepare() znovu. Kdyz prepare resetuje
+// cur_choice_ na 0, zmena BUFFER v GUI tise prepne IR zpet na "Body soft"
+// a zrcadleni tu nulu jeste ulozi do state.json.
+
+TEST_CASE("Convolver: volba IR prezije re-prepare (zmena block size / SR)") {
+    Convolver c;
+    c.prepare(48000.f, 256);
+    REQUIRE(c.choiceCount() == 2);
+
+    c.selectChoice(1);                       // "Body bright (modal)"
+    REQUIRE(c.currentChoice() == 1);
+
+    c.prepare(48000.f, 64);                  // presne to, co dela setBlockSize
+    CHECK(c.currentChoice() == 1);
+
+    c.prepare(44100.f, 64);                  // zmena sample rate
+    CHECK(c.currentChoice() == 1);
+}
+
+TEST_CASE("Convolver: prvni prepare nechava vychozi volbu 0") {
+    Convolver c;
+    c.prepare(48000.f, 256);
+    CHECK(c.currentChoice() == 0);
+}
+
+TEST_CASE("Convolver: re-prepare po zmene volby zmeni i znejici IR") {
+    // Zachovani volice nesmi znamenat, ze se IR neprestavi — po prepare musi
+    // byt slyset IR odpovidajici zachovane volbe, ne prazdny/stary buffer.
+    Convolver soft;   soft.prepare(48000.f, 64);   soft.setEnabled(true);
+    Convolver bright; bright.prepare(48000.f, 64); bright.selectChoice(1);
+    bright.setEnabled(true);
+    bright.prepare(48000.f, 64);                   // re-prepare se zachovanou volbou
+    bright.setEnabled(true);
+
+    auto impulse = [](Convolver& c) {
+        std::vector<float> L(512, 0.f), R(512, 0.f);
+        L[0] = 1.f; R[0] = 1.f;
+        c.set(0, 1.f);                             // mix = 100 % wet
+        c.process(L.data(), R.data(), 512);
+        double e = 0.0;
+        for (float v : L) e += (double)v * v;
+        return e;
+    };
+    const double e_soft   = impulse(soft);
+    const double e_bright = impulse(bright);
+    CHECK(e_bright > 0.0);
+    CHECK(e_soft   > 0.0);
+    CHECK(e_bright != doctest::Approx(e_soft));    // jine IR = jina odezva
+}

@@ -306,17 +306,7 @@ Snapshot 50 nejnovějších eventů do `ctx.panels.log_scratch` (mutex ring buff
 
 ### Otevřené
 
-#### 1. `setBlockSize` resetuje volič IR u Convolveru
-
-`ctx.setAudioBlockSize()` → `engine.setBlockSize()` → `dsp_.prepare()`, a `Convolver::prepare()` nastavuje `cur_choice_ = 0` + přestavuje base IR. Změna BUFFER v top baru tedy tiše přepne IR zpět na „Body soft (modal)". Zrcadlení pak tuto nulu propíše do `state.dsp["CONVOLVER"].choice` a uloží. Chování je stejné jako před refaktorem (starý kód zrcadlil `convolver_choice` taky), ale je to reálná chyba — oprava patří do `Convolver::prepare()` (zachovat volič přes re-prepare).
-
-#### 2. `findValue` / `parseFlatJson` — neúplné unescape
-
-Dekóduje se pouze `\n`, `\\` a obecně `\x → x`. Ostatní JSON escape sekvence (`\t`, `\r`, `\uXXXX`) se dekódují nekorektně jako literální druhý znak. Pro aktuální obsah `state.json` (cesty, jména portů, klíčová slova) to nevadí, ale není to plně spec-kompatibilní parser.
-
-#### 3. `main_h` nezapočítává `ItemSpacing` následujících sekcí
-
-Nový výpočet měří `GetContentRegionAvail().y`, ale neodečítá ~4× `ItemSpacing.y`, které ImGui vloží mezi zbývající naskládané položky. Hlavní řada tak může být o ~16 px vyšší, než by přesně vyšlo, a LOG o tolik nižší. Projeví se jen při minimální výšce okna a nezpůsobí přetečení (LOG má `BeginChild` s výškou 0), takže to je vědomý kompromis proti dřívější magické konstantě.
+Žádné.
 
 ### Vyřešené
 
@@ -335,3 +325,6 @@ Nový výpočet měří `GetContentRegionAvail().y`, ale neodečítá ~4× `Item
 | 11 | `find_asset_path` hledal font jen relativně k CWD | Font zabudován do binárky; `find_asset_path` odstraněn úplně |
 | 12 | Mapovací vrstva `GuiState` ↔ Engine byla netestovatelná | `state_binding.h` + `test_gui_state_binding` |
 | 13 | Míchané fonty na řádku poskakovaly | `wdg::TextRow` se společnou účařou |
+| 14 | `setBlockSize` shodil volič IR Convolveru na 0 | `Convolver::prepare()` volbu zachovává, viz [G-dsp](G-dsp.md) |
+| 15 | Neúplné JSON unescape (`\t`, `\r`, `\uXXXX`) a control znaky psané syrově | Plný escape/unescape vč. `\uXXXX` a surrogate párů |
+| 16 | `main_h` nezapočítával `ItemSpacing` následujících sekcí | Odečítá se `kItemsBelow * spacing`; čtyřka je ověřitelná z kódu hned pod výpočtem |

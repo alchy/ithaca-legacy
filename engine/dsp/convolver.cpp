@@ -22,9 +22,15 @@ void Convolver::prepare(float sr, int /*max_block*/) {
     write_pos_ = 0;
     seen_.store(-1, std::memory_order_relaxed);   // prepare = audio stoji
     choice_names_ = {"Body soft (modal)", "Body bright (modal)"};
-    base_ir_ = generateModalIr(IrPreset::BodySoft, sr_, kMaxIr);
-    rebuildIr();
-    cur_choice_.store(0, std::memory_order_relaxed);
+    // Zachovej drive vybrane IR pres re-prepare. Engine::setBlockSize() a zmena
+    // sample rate volaji prepare znovu; drive se tu cur_choice_ natvrdo nulovalo,
+    // takze zmena BUFFER v GUI tise prepla IR zpet na "Body soft" — a zrcadleni
+    // do GuiState tu nulu jeste ulozilo do state.json.
+    // selectChoice() rovnou i pregeneruje IR pro nove sr_ (mapovani index->preset
+    // zustava na jednom miste).
+    int keep = cur_choice_.load(std::memory_order_relaxed);
+    if (keep < 0 || keep >= (int)choice_names_.size()) keep = 0;
+    selectChoice(keep);
 }
 
 void Convolver::reset() {

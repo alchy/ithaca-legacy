@@ -180,8 +180,17 @@ void renderShell(ithaca::gui::AppContext& ctx, ithaca::dsp::IParamPage** pages,
     // presahl okno a slo o par px skrolovat).
     // LOG dostava BeginChild s vyskou 0 = "vezmi presne zbytek", takze se
     // rozpocet dopocita sam a nic nikdy nepresahne.
-    const float avail  = ImGui::GetContentRegionAvail().y;
-    const float below  = L::Dims::kbd_h + L::Dims::log_h + 2.f * L::Dims::row_gap;
+    //
+    // Pod hlavni radou nasleduji 4 naskladane polozky (dummy, klaviatura,
+    // dummy, LOG) a ImGui pred kazdou vlozi ItemSpacing.y. Bez jejich odecteni
+    // by hlavni rada byla az o 4*spacing vyssi a LOG o tolik nizsi. Na rozdil
+    // od drivejsi konstanty "9 * spacing", ktera pocitala sekce CELEHO okna,
+    // je tahle ctyrka overitelna primo z kodu hned pod timhle vypoctem.
+    constexpr int kItemsBelow = 4;
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    const float avail   = ImGui::GetContentRegionAvail().y;
+    const float below   = L::Dims::kbd_h + L::Dims::log_h
+                        + 2.f * L::Dims::row_gap + kItemsBelow * spacing;
     float main_h = std::min(L::Dims::main_h_max, avail - below);
     if (main_h < 0.f) main_h = avail * 0.5f;   // velmi male okno
 
