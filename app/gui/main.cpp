@@ -1,18 +1,13 @@
-// app/gui/main.cpp - F8 GUI entry point. AppContext + ImGui skeleton.
-// Panely: top bar, keyboard viz, diag, params, log strip.
-// Lifecycle: load state → GLFW okno → ImGui init → AppContext init → render
-// loop (panely + debounced state save) → save state → cisty shutdown.
+// app/gui/main.cpp - vstupni bod celniho panelu Ithaca Legacy.
+//
+// Lifecycle: nacti stav → GLFW okno → ImGui + zabudovana pisma → AppContext
+// (engine, audio, MIDI; banka se nacita asynchronne) → render loop
+// (screen.cpp kresli panel, sem patri jen debounce a overlay) → uloz → shutdown.
 #include "app_context.h"
-#include "panel_topbar.h"
-#include "panel_keyboard.h"
-#include "panel_bank.h"
-#include "panel_indicators.h"
-#include "panel_params.h"
-#include "panel_config.h"
+#include "pages.h"
 #include "master_page.h"
 #include "resonance_page.h"
 #include "dsp_state.h"
-#include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
 #include "layout.h"
@@ -75,7 +70,7 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({W, H});
     ImGui::SetNextWindowFocus();
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(10, 10, 12, 215));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0x0a, 0x23, 0x59, 235));
     ImGui::Begin("##loading", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -86,7 +81,7 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
     const float cw = 420.f;
     ImGui::SetCursorPos({(W - cw) * 0.5f, H * 0.40f});
     ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::gold));
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::ink));
     ImGui::TextUnformatted(bank_name.c_str());
     ImGui::PopStyleColor();
     ImGui::Dummy({0, 8});
@@ -94,7 +89,7 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
     if (license_bad) {
         // Licencovana banka selhala (license/MAC) — anglicky text bez progressu
         // a RAM info; overlay drzi dokud uzivatel nepotvrdi klikem.
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xd0, 0x5a, 0x4a, 255));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::error));
         ImGui::TextUnformatted("Soundbank is corrupted or license file is invalid.");
         ImGui::TextUnformatted("Sampler is unable to load the bank.");
         ImGui::PopStyleColor();
@@ -128,12 +123,12 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
         ImGui::ProgressBar(frac, ImVec2(cw, 14));
         ImGui::Dummy({0, 4});
         ImGui::TextUnformatted(line);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::muted));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::dim));
         ImGui::TextUnformatted(memline);
         ImGui::PopStyleColor();
         if (trunc) {
             ImGui::Dummy({0, 6});
-            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xd0, 0x5a, 0x4a, 255));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::error));
             ImGui::TextUnformatted(
                 "Banka prekrocila RAM budget — nactena NEUPLNA (detail v LOG)");
             ImGui::PopStyleColor();
@@ -142,79 +137,6 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
     ImGui::EndGroup();
     ImGui::End();
     ImGui::PopStyleColor();
-}
-
-// Korenove okno a jeho vodorovna pasma:
-//   TOP BAR → INDICATOR STRIP → hlavni rada (BANK | stranka | CONFIG)
-//   → KLAVIATURA → LOG (pohlti zbytek vysky).
-void renderShell(ithaca::gui::AppContext& ctx, ithaca::dsp::IParamPage** pages,
-                 int n_pages, int n_reset, float W, float H) {
-    using namespace ithaca::gui;
-    namespace L = ithaca::gui::layout;
-    const float COL1 = L::Dims::col_bank, COL3 = L::Dims::col_dsp;
-    const float PAD  = L::Dims::pad_outer;
-
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({W, H});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(PAD, PAD));
-    ImGui::Begin("##root", nullptr,
-        ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
-        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|
-        ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
-
-    const float content_w = ImGui::GetContentRegionAvail().x;   // = W - 2*PAD
-
-    ImGui::BeginChild("##topbar", {content_w, L::Dims::topbar_h}, false);
-        renderTopBar(ctx, pages, n_reset);
-    ImGui::EndChild();
-    ImGui::Dummy({0, 2.f});   // topbar↔strip tesne (zbytek mezery = item spacing)
-    ImGui::BeginChild("##strip", {content_w, L::Dims::strip_h}, false);
-        renderIndicatorStrip(ctx, COL1, COL3);
-    ImGui::EndChild();
-    ImGui::Dummy({0, L::Dims::row_gap});
-
-    // Vertikalni rozpocet. Merime ZBYVAJICI vysku od aktualniho kurzoru
-    // (GetContentRegionAvail) — drive se scitala pevna vyska vsech pasem vcetne
-    // rucne spocitaneho "9 * ItemSpacing.y"; ta devitka byla vazana na pocet
-    // sekci v tomhle okne a pri pridani pasma se na ni zapominalo (obsah pak
-    // presahl okno a slo o par px skrolovat).
-    // LOG dostava BeginChild s vyskou 0 = "vezmi presne zbytek", takze se
-    // rozpocet dopocita sam a nic nikdy nepresahne.
-    //
-    // Pod hlavni radou nasleduji 4 naskladane polozky (dummy, klaviatura,
-    // dummy, LOG) a ImGui pred kazdou vlozi ItemSpacing.y. Bez jejich odecteni
-    // by hlavni rada byla az o 4*spacing vyssi a LOG o tolik nizsi. Na rozdil
-    // od drivejsi konstanty "9 * spacing", ktera pocitala sekce CELEHO okna,
-    // je tahle ctyrka overitelna primo z kodu hned pod timhle vypoctem.
-    constexpr int kItemsBelow = 4;
-    const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    const float avail   = ImGui::GetContentRegionAvail().y;
-    const float below   = L::Dims::kbd_h + L::Dims::log_h
-                        + 2.f * L::Dims::row_gap + kItemsBelow * spacing;
-    float main_h = std::min(L::Dims::main_h_max, avail - below);
-    if (main_h < 0.f) main_h = avail * 0.5f;   // velmi male okno
-
-    ImGui::BeginChild("##bank",  {COL1, main_h}, false); renderBankPanel(ctx); ImGui::EndChild();
-    ImGui::SameLine(0, 0);
-    ImGui::BeginChild("##voice", {content_w - COL1 - COL3, main_h}, false);
-        renderParamPage(ctx, *pages[ctx.state.config_page]);
-    ImGui::EndChild();
-    ImGui::SameLine(0, 0);
-    ImGui::BeginChild("##config", {COL3, main_h}, false);
-        renderConfigPanel(ctx, pages, n_pages, ctx.state.config_page);
-    ImGui::EndChild();
-
-    ImGui::Dummy({0, L::Dims::row_gap});
-    ImGui::BeginChild("##kbd", {content_w, L::Dims::kbd_h}, false);
-        renderKeyboardPanel(ctx);
-    ImGui::EndChild();
-    ImGui::Dummy({0, L::Dims::row_gap});
-    ImGui::BeginChild("##log", {content_w, 0}, false);   // 0 = zbytek vysky
-        renderLogPanel(ctx);
-    ImGui::EndChild();
-
-    ImGui::End();
-    ImGui::PopStyleVar();
 }
 
 } // namespace
@@ -261,7 +183,7 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
     GLFWwindow* w = glfwCreateWindow(st.window.w, st.window.h,
-                                     "ithaca-gui", nullptr, nullptr);
+                                     "Ithaca Legacy", nullptr, nullptr);
     if (!w) { glfwTerminate(); return 1; }
     glfwSetWindowPos(w, st.window.x, st.window.y);
     // Off-screen clamp: pokud byl pred ulozenim pripojeny extra monitor a po
@@ -312,7 +234,7 @@ int main(int argc, char* argv[]) {
         // Font rasterizovan na size*scale → zobraz v logicke velikosti (1/scale)
         // = ostre, spravna velikost. Viz load_fonts.
         io.FontGlobalScale = (s > 0.f) ? 1.f / s : 1.f;
-        if (ithaca::gui::theme::Fonts::body) io.FontDefault = ithaca::gui::theme::Fonts::body;
+        if (ithaca::gui::theme::Fonts::ui) io.FontDefault = ithaca::gui::theme::Fonts::ui;
     }
     ImGui_ImplGlfw_InitForOpenGL(w, true);
     ImGui_ImplOpenGL3_Init("#version 150");
@@ -366,9 +288,6 @@ int main(int argc, char* argv[]) {
         &ctx.engine.dspChain().stage(3),   // LIMITER
     };
     constexpr int kPages = (int)IM_ARRAYSIZE(pages);
-    // Rozsah tlacitka RESET v topbaru: jen prvni dve stranky (MASTER +
-    // RESONANCE). DSP chain se zamerne neresetuje.
-    constexpr int kResetPages = 2;
     if (ctx.state.config_page < 0 || ctx.state.config_page >= kPages)
         ctx.state.config_page = 0;
 
@@ -385,7 +304,7 @@ int main(int argc, char* argv[]) {
 
         const float W = (float)ctx.state.window.w;
         const float H = (float)ctx.state.window.h;
-        renderShell(ctx, pages, kPages, kResetPages, W, H);
+        renderScreen(ctx, pages, kPages);
 
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci) —
         // panely meni stage primo, takze bez tohoto by je saveState nevidel.

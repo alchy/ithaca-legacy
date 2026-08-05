@@ -159,43 +159,60 @@ set_target_properties(ithaca-cli PROPERTIES
 # Staveni jen kdyz jsou ImGui/GLFW vendorovany (fetch-third-party.sh).
 # Bez nich CLI a tests jdou stavet dal — GUI je optional.
 if(TARGET imgui AND TARGET glfw)
-    # -- Font zabudovany primo do binarky --------------------------------------
-    # Cormorant se NEnacita ze souboru: ImGui nastroj binary_to_compressed_c
-    # (vendorovany s ImGui) prevede TTF na komprimovane C pole, ktere se prilinkuje.
-    # Vysledek: ithaca-gui za behu nepotrebuje zadny asset, jen svuj state.json.
-    # .inl se generuje do build adresare, do gitu se necommituje.
+    # -- Pisma zabudovana primo do binarky -------------------------------------
+    # Zadny font se NEnacita ze souboru: ImGui nastroj binary_to_compressed_c
+    # (vendorovany s ImGui) prevede kazde TTF na komprimovane C pole, ktere se
+    # prilinkuje. Vysledek: ithaca-gui za behu nepotrebuje zadny asset, jen svuj
+    # state.json. .inl se generuji do build adresare, do gitu se necommituji.
+    #
+    # Rozhrani ma JEDNU vahu (JetBrains Mono Regular) — na skutecnych znakovych
+    # displejich zadny tucny rez neexistuje, duraz se dela inverzi pole.
+    # Dve vahy Barlow Condensed jsou jen pro wordmark na uvodni obrazovce.
+    #
     # Pozn.: nastroj se stavi pro HOST. Pri cross-compilaci je potreba pouzit
-    # uz vygenerovany .inl nebo nastroj postavit zvlast nativne.
-    set(CORMORANT_TTF ${CMAKE_CURRENT_SOURCE_DIR}/third-party/cormorant/Cormorant-Medium.ttf)
-    set(CORMORANT_INL ${CMAKE_BINARY_DIR}/generated/cormorant_medium.inl)
+    # uz vygenerovane .inl nebo nastroj postavit zvlast nativne.
     add_executable(binary_to_compressed_c
         third-party/imgui/misc/fonts/binary_to_compressed_c.cpp)
-    add_custom_command(
-        OUTPUT ${CORMORANT_INL}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated
-        COMMAND binary_to_compressed_c ${CORMORANT_TTF} CormorantMedium > ${CORMORANT_INL}
-        DEPENDS binary_to_compressed_c ${CORMORANT_TTF}
-        COMMENT "Generuji zabudovany font (Cormorant -> komprimovane C pole)"
-        VERBATIM)
-    add_custom_target(cormorant_font DEPENDS ${CORMORANT_INL})
+
+    # "<soubor>|<symbol>" — symbol se objevi jako <symbol>_compressed_data/_size.
+    set(ITHACA_FONTS
+        "fonts/JetBrainsMono-Regular.ttf|JetBrainsMono"
+        "fonts/BarlowCondensed-Bold.ttf|BarlowCondensedBold"
+        "fonts/BarlowCondensed-Light.ttf|BarlowCondensedLight")
+    set(FONT_INLS "")
+    foreach(spec IN LISTS ITHACA_FONTS)
+        string(REPLACE "|" ";" parts "${spec}")
+        list(GET parts 0 rel)
+        list(GET parts 1 sym)
+        set(ttf ${CMAKE_CURRENT_SOURCE_DIR}/third-party/${rel})
+        set(inl ${CMAKE_BINARY_DIR}/generated/${sym}.inl)
+        add_custom_command(
+            OUTPUT ${inl}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated
+            COMMAND binary_to_compressed_c ${ttf} ${sym} > ${inl}
+            DEPENDS binary_to_compressed_c ${ttf}
+            COMMENT "Generuji zabudovane pismo ${sym}"
+            VERBATIM)
+        list(APPEND FONT_INLS ${inl})
+    endforeach()
+    add_custom_target(ithaca_fonts DEPENDS ${FONT_INLS})
 
     add_executable(ithaca-gui
         app/gui/main.cpp
         app/gui/app_context.cpp
-        app/gui/embedded_font.cpp
+        app/gui/embedded_fonts.cpp
         app/gui/log_subscriber.cpp
-        app/gui/panel_topbar.cpp
-        app/gui/panel_keyboard.cpp
-        app/gui/panel_bank.cpp
-        app/gui/panel_indicators.cpp
-        app/gui/panel_config.cpp
-        app/gui/panel_params.cpp
-        app/gui/panel_log.cpp
+        app/gui/screen.cpp
+        app/gui/page_play.cpp
+        app/gui/page_bank.cpp
+        app/gui/page_params.cpp
+        app/gui/page_sys.cpp
+        app/gui/page_log.cpp
         app/gui/persistence.cpp)
     target_include_directories(ithaca-gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/app/gui
         ${CMAKE_BINARY_DIR}/generated)
-    add_dependencies(ithaca-gui cormorant_font)
+    add_dependencies(ithaca-gui ithaca_fonts)
     target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui glfw)
     set_target_properties(ithaca-gui PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})

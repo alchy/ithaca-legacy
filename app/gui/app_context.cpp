@@ -66,6 +66,8 @@ bool AppContext::initFromState(const GuiState& s) {
     // engine.init(), protoze ten vola dsp_.prepare() a teprve tam Convolver
     // naplni seznam IR (choiceCount) — drive by se persistovany volic zahodil.
     applyDspStateToChain(state, engine.dspChain());
+    panels.page = state.config_page;   // posledni otevrena stranka
+
     // Runtime settery (rezonance, layer, strop polyfonie). Bank se nacita
     // ASYNC az na konci initu — okno se ukaze hned, prubeh kryje modalni
     // overlay; layer heuristiku "1/3 rozsahu banky" resi pollReloadCompletion.

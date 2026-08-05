@@ -13,6 +13,7 @@
 #include "sample/sample_store.h"   // BankLoadProgress
 
 #include "log_subscriber.h"
+#include "motion.h"
 #include "persistence.h"
 
 #include <atomic>
@@ -23,36 +24,60 @@
 
 namespace ithaca::gui {
 
-// Stav panelu, ktery musi prezit mezi framy: cache seznamu (jejich poroizeni
-// je drahe) a sample-and-hold citace indikatoru. Drive to byly function-local
-// `static` promenne primo v render funkcich — skryty globalni stav, ktery
-// nesel ani otestovat, ani resetovat pri reloadu.
+// Jedna banka nabidnuta v prohlizeci. `dir` je plna cesta, `name` jen posledni
+// slozka (to, co se zobrazuje).
+struct BankEntry {
+    std::string dir;
+    std::string name;
+};
+
+// Stav panelu, ktery musi prezit mezi framy: cache seznamu (jejich porizeni je
+// drahe), animace a sample-and-hold citace indikatoru. Drive to byly
+// function-local `static` promenne primo v render funkcich — skryty globalni
+// stav, ktery nesel ani otestovat, ani resetovat pri reloadu.
 struct PanelState {
-    // MIDI porty. listPorts() konstruuje RtMidi klienta (OS IPC), takze
-    // per-frame volani bylo nejdrazsi operace celeho GUI. Rescan jen pri
-    // prvnim frame, otevreni comba a tlacitkem RESCAN.
+    // -- Navigace --
+    int page      = 0;   // PLAY BANK TONE RESO DSP SYS LOG
+    int dsp_stage = 0;   // podzalozka na strance DSP
+
+    // -- MIDI porty --
+    // listPorts() konstruuje RtMidi klienta (OS IPC), takze per-frame volani
+    // bylo nejdrazsi operace celeho GUI. Rescan jen pri prvnim frame a RESCANem.
     std::vector<std::string> midi_ports;
     bool                     midi_ports_scanned = false;
-    bool                     midi_combo_open    = false;
 
-    // Kandidati na banku = podadresare bank_search_dir. Rescanuje se pri zmene
-    // rootu A pri otevreni comba — jen na zmenu rootu to nestacilo: nove
-    // zkopirovana banka se v seznamu neobjevila az do restartu aplikace.
-    std::vector<std::string> bank_cands;
-    std::string              bank_cands_root;
-    bool                     bank_cands_valid   = false;
-    bool                     bank_combo_open    = false;
+    // -- Prohlizec bank --
+    // Kdyz neni nastaveny bank_search_dir, prochazi se adresare od startovniho.
+    // V seznamu jsou JEN adresare, ktere vypadaji jako banka (levna sonda),
+    // ne cely obsah filesystemu.
+    std::string              browse_dir;
+    std::vector<BankEntry>   banks;
+    bool                     banks_valid = false;
 
-    // Sample-and-hold pro ciselne dlazdice: drzi maximum za okno (400 ms),
-    // jinak by cisla pri 60 fps necitelne blikala.
+    // -- Vytah v PLAY --
+    // Posun je ve VIRTUALNICH pixelech: index * row_h. Klepnuti nastavi cil,
+    // tah hybe primo a po pusteni se dojede k nejblizsimu radku. Nacteni banky
+    // se spusti az v okamziku USTALENI, ne behem rolovani — jinak by projeti
+    // seznamu spustilo desitky loadu za sebou.
+    motion::Settle reel;
+    int   reel_sel      = 0;
+    bool  reel_dragging = false;
+    float reel_grab0    = 0.f;   // posun na zacatku tahu
+    bool  reel_armed    = false; // ceka se na ustaleni, pak nacist
+
+    // -- LOG --
+    bool log_unseen = false;     // kontrolka sviti, dokud se stranka neotevre
+
+    // -- Sample-and-hold pro ciselne indikatory (max za 400ms okno) --
+    // Bez toho by cisla pri 60 fps necitelne blikala.
     struct Hold { float shown = 0.f, winmax = 0.f, t0 = 0.f; };
     Hold h_voices, h_reso, h_main_rings, h_reso_rings, h_load;
 
-    // Scratch pro snapshot LOG stripu. Predalokovany, aby se 50 LogEntry
-    // (kazdy 2x std::string) nealokovalo kazdy frame. Snapshot se dela do nej,
+    // Scratch pro snapshot LOG stranky. Predalokovany, aby se LogEntry
+    // (kazdy 2x std::string) nealokovaly kazdy frame; snapshot se dela do nej,
     // aby se mutex ring bufferu nedrzel po celou dobu renderu.
-    static constexpr int      kLogSnapshot = 50;
-    std::vector<log::LogEntry> log_scratch  = std::vector<log::LogEntry>(kLogSnapshot);
+    static constexpr int       kLogSnapshot = 64;
+    std::vector<log::LogEntry> log_scratch = std::vector<log::LogEntry>(kLogSnapshot);
 };
 
 struct AppContext {
