@@ -37,7 +37,6 @@ float holdMax(PanelState::Hold& s, float cur, float now_s, float win = 0.4f) {
 }
 
 float toDb(float lin) { return lin < 1e-6f ? -120.f : 20.f * std::log10(lin); }
-float dbTo01(float db) { return std::clamp((db + 60.f) / 60.f, 0.f, 1.f); }
 
 // Jedno cislo se svym popiskem.
 void statNum(ImDrawList* dl, ImVec2 pos, const char* label, const char* value,
@@ -57,7 +56,7 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     const float now_s = (float)ImGui::GetTime();
 
     // -- Rozvrzeni: vytah nahore, cisla + sustain dole --------------------
-    const float stat_h = 96.f;
+    const float stat_h = 110.f;
     const Rect reel_r{ r.lo, ImVec2(r.hi.x, r.hi.y - stat_h) };
 
     const int n = (int)ps.banks.size();
@@ -157,8 +156,21 @@ void pagePlay(AppContext& ctx, const Rect& r) {
                 ImVec2(reel_r.hi.x, mid_y + row * 0.5f), Colors::line);
 
     // -- Stav --------------------------------------------------------------
-    const float sy = r.hi.y - stat_h + 8.f;
-    char v[16], rs[16], pk[16], ds[16];
+    // Pet stejnych sloupcu na spolecne uctare: VOICES RESO PEAK DSP SUSTAIN.
+    // Lampy MIDI vstupu jdou nad ne, aby nerozhazely zarovnani radky.
+    const float ly = r.hi.y - stat_h;
+    const float sy = ly + 26.f;
+
+    // MIDI vstup: kratke bliknuti na note-on / note-off. Ukazuje, ze DO nas
+    // neco chodi — coz je jina informace nez ze neco hraje.
+    {
+        float x = r.hi.x - wdg::lampW("NOTE") - wdg::lampW("OFF");
+        wdg::lamp(dl, ImVec2(x, ly), "NOTE", ctx.engine.noteOnRecent(120.f), Colors::ink);
+        x += wdg::lampW("NOTE");
+        wdg::lamp(dl, ImVec2(x, ly), "OFF", ctx.engine.noteOffRecent(120.f), Colors::dim);
+    }
+
+    char v[16], rs[16], pk[16], ds[16], su[16];
     std::snprintf(v,  sizeof(v),  "%d", (int)holdMax(ps.h_voices,
                   (float)ctx.engine.activeVoices(), now_s));
     std::snprintf(rs, sizeof(rs), "%d", (int)holdMax(ps.h_reso,
@@ -167,31 +179,17 @@ void pagePlay(AppContext& ctx, const Rect& r) {
                   toDb(std::max(ctx.engine.masterPeakL(), ctx.engine.masterPeakR())));
     std::snprintf(ds, sizeof(ds), "%.0f%%",
                   holdMax(ps.h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
+    std::snprintf(su, sizeof(su), "%d", (int)ctx.engine.pedalCC());
 
     const float col = r.w() / 5.f;
-    statNum(dl, ImVec2(r.lo.x,             sy), "VOICES", v);
-    statNum(dl, ImVec2(r.lo.x + col,       sy), "RESO",   rs);
+    statNum(dl, ImVec2(r.lo.x,             sy), "VOICES",  v);
+    statNum(dl, ImVec2(r.lo.x + col,       sy), "RESO",    rs);
     statNum(dl, ImVec2(r.lo.x + col * 2.f, sy), "PEAK dB", pk);
-    statNum(dl, ImVec2(r.lo.x + col * 3.f, sy), "DSP",    ds,
-            ctx.engine.overloadRecent(4000.f) ? Colors::error : Colors::ink);
-
-    // NOTE lampy + SUSTAIN. Pedal je spojity 0-127 s prahem half-pedalu —
-    // u piana zasadni zpetna vazba, proto ma vlastni bar a ne jen cislo.
-    const float bx = r.lo.x + col * 4.f;
-    const float lp = wdg::fontPx(Fonts::small);
-    wdg::lamp(dl, ImVec2(bx, sy), "NOTE", ctx.engine.noteOnRecent(120.f), Colors::inv_bg);
-    wdg::lamp(dl, ImVec2(bx + wdg::lampW("NOTE"), sy), "OFF",
-              ctx.engine.noteOffRecent(120.f), Colors::dim);
-
-    // Prubeh L/R uz neni widget — teče jako vlna v pozadi cele plochy
-    // (viz screen.cpp). Tady zustava jen misto pro sustain bar.
-    const float meters_x = r.hi.x;
-
+    statNum(dl, ImVec2(r.lo.x + col * 3.f, sy), "DSP",     ds,
+            ctx.engine.overloadRecent(4000.f) ? Colors::warn : Colors::ink);
     // Pedal uz nema vlastni bar — jeho INDIKACE je pata stuha v pozadi
     // (viz screen.cpp). Tady zustava jen cislo, protoze udaj se ma cist presne.
-    const int cc = (int)ctx.engine.pedalCC();
-    statNum(dl, ImVec2(bx, sy + lp + 8.f), "SUSTAIN",
-            [&]{ static char b[8]; std::snprintf(b, sizeof(b), "%d", cc); return b; }());
+    statNum(dl, ImVec2(r.lo.x + col * 4.f, sy), "SUSTAIN", su);
 }
 
 } // namespace ithaca::gui

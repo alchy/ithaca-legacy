@@ -170,13 +170,15 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     // sirky trva 2*pi*freq/speed sekund. Pri freq 0.55 a speed 0.05 to bylo
     // 69 s a stuha vypadala zaseknuta s vrcholem porad na temze miste.
     // Se speed 0.19 je to ~18 s — plyne viditelne, ale porad klidneji nez zvuk.
+    // Amplituda je zamerne jen ~3/4 puvodni: pedal je doprovodny stav, nema
+    // prekrikovat stuhy, ktere nesou samotny zvuk.
     struct Ribbon { float phase, speed, freq, scale, alpha, th; ImU32 col; int src; };
     const Ribbon ribs[] = {
         { 0.0f, 0.16f, 1.00f, 1.00f, 0.30f, 2.6f, Colors::ink,    0 },
         { 2.3f, 0.11f, 1.00f, 0.72f, 0.15f, 1.8f, Colors::inv_bg, 0 },
         { 1.1f, 0.13f, 1.00f, 0.88f, 0.26f, 2.6f, Colors::fill,   1 },
         { 3.7f, 0.09f, 1.00f, 0.58f, 0.13f, 1.6f, Colors::line,   1 },
-        { 5.2f, 0.19f, 0.55f, 1.15f, 0.20f, 3.0f, Colors::dim,    2 },
+        { 5.2f, 0.19f, 0.55f, 0.86f, 0.20f, 3.0f, Colors::dim,    2 },
     };
 
     // Zar: tyz tvar trikrat pres sebe — siroky a slaby vespod, uzky a jasny
