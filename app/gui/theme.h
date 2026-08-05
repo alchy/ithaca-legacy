@@ -6,8 +6,8 @@
 // rezem. Skutecne znakove displeje zadny druhy rez nemaji; proto ma rozhrani
 // jedinou vahu pisma a zvyrazneni se dela plnym polem s tmavym textem.
 //
-// Barva nese informaci, ne dekoraci: jantarova = varovani, cervena = chyba.
-// Vsechno ostatni je jedna modra a odstupnovany jas.
+// Cela paleta je JEDNA modra v odstinech. Informaci nese jas a inverze,
+// ne barevny kod — stejne jako na skutecnem znakovem displeji.
 #include "imgui.h"
 
 namespace ithaca::gui::theme {
@@ -28,9 +28,12 @@ struct Colors {
     // Inverzni pole = vyber / duraz
     static constexpr ImU32 inv_bg    = IM_COL32(0xcf, 0xe0, 0xff, 255);
     static constexpr ImU32 inv_fg    = IM_COL32(0x0e, 0x2f, 0x7a, 255);
-    // Stavy
-    static constexpr ImU32 warn      = IM_COL32(0xff, 0xd1, 0x66, 255); // jantarova
-    static constexpr ImU32 error     = IM_COL32(0xff, 0x6b, 0x6b, 255);
+    // Stavy. ZADNA jina barva nez modra: varovani a chyby nese JAS a INVERZE,
+    // presne jako na monochromatickem LCD. Barevny kod by tu byl cizorody —
+    // a na podsvicenem modrem poli stejne nikdy nevypada dobre.
+    static constexpr ImU32 warn      = IM_COL32(0xea, 0xf2, 0xff, 255); // plny jas
+    static constexpr ImU32 error     = IM_COL32(0xcf, 0xe0, 0xff, 255); // inverzni blok
+    static constexpr ImU32 hot       = IM_COL32(0xff, 0xff, 0xff, 255); // spicka metru
 
     static ImVec4 v(ImU32 c) {
         return ImVec4(( c        & 0xFF) / 255.f,

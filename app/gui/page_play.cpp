@@ -48,6 +48,54 @@ void statNum(ImDrawList* dl, ImVec2 pos, const char* label, const char* value,
     dl->AddText(Fonts::num, np, ImVec2(pos.x, pos.y + lp + 4.f), col, value);
 }
 
+// Nabere novou stopu z enginu a vykresli celou historii s klesajici sytosti.
+// Vzorky se sbaluji do kPts bodu pres MIN/MAX v kazdem kosi — prumer by
+// u zvukoveho signalu vykrátil spicky a stopa by vypadala mrtve.
+void drawScope(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w, float h) {
+    auto& sc = ctx.panels.scope;
+    static float raw_l[ithaca::Engine::kScopeSize];
+    static float raw_r[ithaca::Engine::kScopeSize];
+    constexpr int kN = ithaca::Engine::kScopeSize;
+    ctx.engine.scopeSnapshot(raw_l, raw_r, kN);
+
+    // Nova stopa na pozici head.
+    float* dl_ = sc.l[sc.head];
+    float* dr_ = sc.r[sc.head];
+    const int bucket = kN / PanelState::Scope::kPts;
+    for (int i = 0; i < PanelState::Scope::kPts; ++i) {
+        float mx_l = 0.f, mx_r = 0.f;
+        for (int k = 0; k < bucket; ++k) {
+            const float a = raw_l[i * bucket + k];
+            const float b = raw_r[i * bucket + k];
+            if (std::fabs(a) > std::fabs(mx_l)) mx_l = a;
+            if (std::fabs(b) > std::fabs(mx_r)) mx_r = b;
+        }
+        dl_[i] = mx_l;
+        dr_[i] = mx_r;
+    }
+    sc.head = (sc.head + 1) % PanelState::Scope::kGhosts;
+    if (sc.count < PanelState::Scope::kGhosts) ++sc.count;
+
+    // Ramecek vyrezu + osa.
+    dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), Colors::line);
+    dl->AddLine(ImVec2(pos.x, pos.y + h * 0.5f),
+                ImVec2(pos.x + w, pos.y + h * 0.5f), Colors::trough);
+
+    dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+    // Od nejstarsi k nejnovejsi: starsi slabsi a tencí.
+    for (int g = 0; g < sc.count; ++g) {
+        const int idx = (sc.head - 1 - g + PanelState::Scope::kGhosts * 2)
+                        % PanelState::Scope::kGhosts;
+        const float age = (float)g / (float)PanelState::Scope::kGhosts;
+        const float a   = (1.f - age) * (1.f - age);      // kvadraticky dosvit
+        wdg::scopeTrace(dl, pos, w, h, sc.r[idx], PanelState::Scope::kPts,
+                        Colors::fill, a * 0.55f, 1.f);
+        wdg::scopeTrace(dl, pos, w, h, sc.l[idx], PanelState::Scope::kPts,
+                        Colors::inv_bg, a * 0.75f, g == 0 ? 1.8f : 1.f);
+    }
+    dl->PopClipRect();
+}
+
 } // namespace
 
 void pagePlay(AppContext& ctx, const Rect& r) {
@@ -122,7 +170,7 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     dl->PushClipRect(reel_r.lo, reel_r.hi, true);
     if (n == 0) {
         const float px = wdg::fontPx(Fonts::ui);
-        const char* msg = "zadna banka \xE2\x80\x94 vyber adresar na strance BANK";
+        const char* msg = "no bank - choose a folder on the BANK page";
         dl->AddText(Fonts::ui, px,
                     ImVec2(reel_r.lo.x, mid_y - px * 0.5f), Colors::dimmer, msg);
     }
@@ -181,15 +229,13 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     wdg::lamp(dl, ImVec2(bx + wdg::lampW("NOTE"), sy), "OFF",
               ctx.engine.noteOffRecent(120.f), Colors::dim);
 
-    // Peak L/R jako sloupce uplne vpravo — pohyb zachyti periferni videni,
-    // cislo ne. Sirku si berou prvni, sustain bar pak konci pred nimi.
-    const float mw = 12.f, mh = 56.f, mgap = 4.f;
-    const float meters_x = r.hi.x - (mw * 2.f + mgap);
-    wdg::vmeter(dl, ImVec2(meters_x, sy), mw, mh,
-                dbTo01(toDb(ctx.engine.masterPeakL())));
-    wdg::vmeter(dl, ImVec2(meters_x + mw + mgap, sy), mw, mh,
-                dbTo01(toDb(ctx.engine.masterPeakR())));
-    dl->AddText(Fonts::small, lp, ImVec2(meters_x, sy + mh + 3.f), Colors::dimmer, "L R");
+    // Osciloskop misto sloupcoveho metru: ukazuje skutecny prubeh L a R
+    // s dosvitem. Sirku si bere prvni, sustain bar pak konci pred nim.
+    const float scope_w = 300.f, scope_h = 62.f;
+    const float meters_x = r.hi.x - scope_w;
+    drawScope(ctx, dl, ImVec2(meters_x, sy), scope_w, scope_h);
+    dl->AddText(Fonts::small, lp, ImVec2(meters_x, sy + scope_h + 3.f),
+                Colors::dimmer, "L \xC2\xB7 R");
 
     const int cc = (int)ctx.engine.pedalCC();
     char sus[24]; std::snprintf(sus, sizeof(sus), "SUSTAIN %d", cc);

@@ -75,7 +75,7 @@ void pageSys(AppContext& ctx, const Rect& r) {
         // Seznam portu + polozka pro zadny. Otevira se podle JMENA, ne podle
         // indexu do cache: kdyz se zarizeni mezitim odpoji, index ukazuje jinam.
         std::vector<const char*> items;
-        items.push_back("(zadny)");
+        items.push_back("(none)");
         for (const auto& s : ps.midi_ports) items.push_back(s.c_str());
         int cur = 0;
         for (size_t i = 0; i < ps.midi_ports.size(); ++i)
@@ -97,7 +97,7 @@ void pageSys(AppContext& ctx, const Rect& r) {
                 if (ctx.midi.open(ctx.engine, idx)) ctx.state.midi_port_name = want;
             } else {
                 log::Logger::default_().log("gui", log::Severity::Warning,
-                    "MIDI port zmizel: %s", want.c_str());
+                    "MIDI port disappeared: %s", want.c_str());
                 ps.midi_ports = live;
             }
         }
@@ -108,7 +108,7 @@ void pageSys(AppContext& ctx, const Rect& r) {
     y += lh;
 
     // -- MIDI kanal --------------------------------------------------------
-    label(dl, ImVec2(r.lo.x, y), "KANAL");
+    label(dl, ImVec2(r.lo.x, y), "CHANNEL");
     {
         static const char* kCh[] = { "OMNI","1","2","3","4","5","6","7","8",
                                      "9","10","11","12","13","14","15","16" };
@@ -160,13 +160,13 @@ void pageSys(AppContext& ctx, const Rect& r) {
     std::snprintf(rb, sizeof(rb), "MAIN %d/%d    RESO %d/%d",
                   ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal(),
                   ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
-    label(dl, ImVec2(r.lo.x, y), "RINGY");
+    label(dl, ImVec2(r.lo.x, y), "RINGS");
     dl->AddText(Fonts::ui, wdg::fontPx(Fonts::ui), ImVec2(r.lo.x, y + px_s + 6.f),
                 Colors::dim, rb);
 
     // -- RESET -------------------------------------------------------------
     ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 190.f, r.hi.y - L::Dims::touch));
-    if (wdg::toggle("##reset", "RESET PARAMETRU", false)) {
+    if (wdg::toggle("##reset", "RESET PARAMS", false)) {
         // Genericky pres Param::def — MASTER a RESONANCE, ne DSP retezec:
         // smazani celeho retezce jednim klepnutim by bylo destruktivni prekvapeni.
         ctx.engine.setMasterGain(1.f);

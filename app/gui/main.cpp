@@ -108,11 +108,11 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
 
         char line[96];
         if (phase == 2)
-            std::snprintf(line, sizeof(line), "Stavim rezonancni cache (%d/%d)", done, total);
+            std::snprintf(line, sizeof(line), "Building resonance cache (%d/%d)", done, total);
         else if (phase == 1)
-            std::snprintf(line, sizeof(line), "Nacitam samply (%d/%d)", done, total);
+            std::snprintf(line, sizeof(line), "Loading samples (%d/%d)", done, total);
         else
-            std::snprintf(line, sizeof(line), "Prohledavam banku...");
+            std::snprintf(line, sizeof(line), "Scanning bank...");
 
         char memline[96];
         if (bud_mb > 0)
@@ -130,7 +130,7 @@ void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
             ImGui::Dummy({0, 6});
             ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::error));
             ImGui::TextUnformatted(
-                "Banka prekrocila RAM budget — nactena NEUPLNA (detail v LOG)");
+                "Bank exceeded RAM budget - loaded INCOMPLETE (see LOG)");
             ImGui::PopStyleColor();
         }
     }

@@ -182,6 +182,15 @@ public:
     // -- Master peak meter (GUI; atomic) --
     // Vraci aktualni peak |out| po master_gain, s decay ~100ms mezi bloky.
     // Cteni je lock-free, GUI muze vzorkovat libovolne casto.
+    // -- Scope (osciloskop v GUI) --
+    // Kruhovy buffer poslednich vzorku vystupu PO master gainu i DSP retezci —
+    // tedy presne to, co jde do prevodniku. Audio vlakno pise, GUI cte; zadny
+    // zamek: pripadne "roztrzeni" snimku je na osciloskopu neviditelne a zamek
+    // v audio ceste by byl mnohem horsi nez chvilkovy artefakt ve vykreslení.
+    static constexpr int kScopeSize = 1024;   // ~21 ms @ 48 kHz
+    // Zkopiruje poslednich `n` vzorku (nejstarsi prvni). n se orizne na kScopeSize.
+    void scopeSnapshot(float* dst_l, float* dst_r, int n) const noexcept;
+
     float masterPeakL() const noexcept { return master_peak_l_.load(std::memory_order_relaxed); }
     float masterPeakR() const noexcept { return master_peak_r_.load(std::memory_order_relaxed); }
 
@@ -232,6 +241,11 @@ private:
     std::atomic<float>                master_gain_{1.0f};
     dsp::DspChain                     dsp_;
     // Master peak meter — psano z audio threadu (processBlock), cteno z GUI.
+    // Scope ring. Zapisuje jen audio vlakno (single producer), cte jen GUI.
+    alignas(64) float                 scope_l_[kScopeSize]{};
+    alignas(64) float                 scope_r_[kScopeSize]{};
+    std::atomic<int>                  scope_w_{0};   // kam se bude psat dal
+
     std::atomic<float>                master_peak_l_{0.f};
     std::atomic<float>                master_peak_r_{0.f};
     // DSP load meter — psano z audio threadu (processBlock), cteno z GUI.

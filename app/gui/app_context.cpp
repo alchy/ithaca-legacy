@@ -57,7 +57,7 @@ bool AppContext::initFromState(const GuiState& s) {
     const ithaca::EngineConfig cfg = engineConfigFromState(state);
     if (!engine.init(cfg)) {
         log::Logger::default_().log("gui", log::Severity::Error,
-            "Engine init selhal");
+            "Engine init failed");
         return false;
     }
 
@@ -78,7 +78,7 @@ bool AppContext::initFromState(const GuiState& s) {
     audio = std::make_unique<ithaca::AudioDevice>();
     if (!audio->start(&audioCallback, &engine, cfg.sample_rate, cfg.block_size)) {
         log::Logger::default_().log("gui", log::Severity::Warning,
-            "Nelze otevrit audio device");
+            "Cannot open audio device");
         // Bez audio device GUI stale funguje (uzivatel uvidi engine metriky a
         // logy); nevracime false, ale logujem.
     }
@@ -102,7 +102,7 @@ bool AppContext::initFromState(const GuiState& s) {
         }
         if (!opened) {
             log::Logger::default_().log("gui", log::Severity::Warning,
-                "MIDI port nenalezen: %s", state.midi_port_name.c_str());
+                "MIDI port not found: %s", state.midi_port_name.c_str());
         }
     }
 
@@ -140,7 +140,7 @@ void AppContext::pollReloadCompletion() {
     bank_license_invalid_ = load_progress_.license_invalid.load(std::memory_order_relaxed);
     if (!reload_ok_.load(std::memory_order_acquire)) {
         log::Logger::default_().log("gui", log::Severity::Warning,
-            "Nelze nacist banku: %s", reload_dir_.c_str());
+            "Cannot load bank: %s", reload_dir_.c_str());
         return;
     }
     // Default Resonance Layer = 1/3 rozsahu banky, kdyz uzivatel drzi default
@@ -151,9 +151,9 @@ void AppContext::pollReloadCompletion() {
     if (hi > lo && state.resonance_layer_db == -30.f)
         state.resonance_layer_db = lo + (hi - lo) / 3.f;
     log::Logger::default_().log("gui", log::Severity::Info,
-        "Banka nactena: %s (%d not, %d samplu)%s", reload_dir_.c_str(),
+        "Bank loaded: %s (%d notes, %d samples)%s", reload_dir_.c_str(),
         engine.recordedNotes(), engine.loadedSamples(),
-        bank_truncated_ ? " — NEUPLNA (RAM budget)" : "");
+        bank_truncated_ ? " - INCOMPLETE (RAM budget)" : "");
 }
 
 void AppContext::shutdown() {
@@ -180,10 +180,10 @@ void AppContext::setAudioBlockSize(int n) {
     if (audio) {
         if (!audio->start(&audioCallback, &engine, engine.sampleRate(), applied)) {
             log::Logger::default_().log("gui", log::Severity::Warning,
-                "Restart audio device s block=%d selhal", applied);
+                "Audio device restart with block=%d failed", applied);
         } else {
             log::Logger::default_().log("gui", log::Severity::Info,
-                "Audio buffer zmenen na %d framu", applied);
+                "Audio buffer changed to %d frames", applied);
         }
     }
 }

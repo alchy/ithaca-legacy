@@ -110,6 +110,29 @@ inline void vmeter(ImDrawList* dl, ImVec2 pos, float w, float h, float frac01,
     }
 }
 
+// -- Osciloskop s dosvitem ---------------------------------------------------
+// Misto sloupcoveho metru ukazuje SKUTECNY prubeh L a R. Starsi stopy zustavaji
+// slabe viditelne (ghosting) — jako dosvit luminoforu; diky tomu je videt, jak
+// se vlna vyvijela, ne jen jak vypada ted, a pohyb je mekky misto trhaneho.
+//
+// Kresli se dve krivky pres sebe v tomtez modrem odstinu, odlisene jasem:
+// L plnym jasem, R tlumene.
+inline void scopeTrace(ImDrawList* dl, ImVec2 pos, float w, float h,
+                       const float* pts, int n, ImU32 col, float alpha,
+                       float thickness) {
+    if (n < 2 || alpha <= 0.004f) return;
+    const float cy = pos.y + h * 0.5f;
+    const float half = h * 0.5f;
+    const ImU32 c = (col & 0x00FFFFFF) | ((ImU32)(alpha * 255.f) << 24);
+    dl->PathClear();
+    for (int i = 0; i < n; ++i) {
+        const float x = pos.x + w * ((float)i / (float)(n - 1));
+        const float y = cy - std::clamp(pts[i], -1.f, 1.f) * half;
+        dl->PathLineTo(ImVec2(x, y));
+    }
+    dl->PathStroke(c, 0, thickness);
+}
+
 // -- Dotykovy slider --------------------------------------------------------
 // Hodnota se meni JEN tahem, nikdy klepnutim. Stock ImGui slider skace na
 // misto kliknuti — pri testovani stare verze to omylem prepsalo prah limiteru

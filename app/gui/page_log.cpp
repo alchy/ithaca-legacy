@@ -51,7 +51,7 @@ void pageLog(AppContext& ctx, const Rect& r) {
     }
 
     if (n == 0)
-        dl->AddText(Fonts::small, px, r.lo, Colors::dimmer, "zadne udalosti");
+        dl->AddText(Fonts::small, px, r.lo, Colors::dimmer, "no events");
 }
 
 } // namespace ithaca::gui

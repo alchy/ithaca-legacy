@@ -126,7 +126,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
         }
     }
     {
-        const char* up = "\xE2\x96\xB2 O UROVEN VYS";
+        const char* up = "\xE2\x96\xB2 UP ONE LEVEL";
         dl->AddText(Fonts::small, px_s,
                     ImVec2(r.hi.x - wdg::textW(Fonts::small, px_s, up), r.lo.y),
                     Colors::dim, up);
@@ -140,7 +140,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
 
     if (n == 0) {
         dl->AddText(Fonts::ui, px_u, ImVec2(r.lo.x, y), Colors::dimmer,
-                    "v tomto adresari neni zadna banka");
+                    "no bank in this folder");
     }
     for (int i = 0; i < n && y + row <= r.hi.y - 96.f; ++i, y += row + 4.f) {
         const auto& e = ps.banks[(size_t)i];
@@ -185,13 +185,13 @@ void pageBank(AppContext& ctx, const Rect& r) {
     x += fsz.x + 16.f;
 
     char facts[64];
-    std::snprintf(facts, sizeof(facts), "%d not \xC2\xB7 %d samplu",
+    std::snprintf(facts, sizeof(facts), "%d notes \xC2\xB7 %d samples",
                   ctx.engine.recordedNotes(), ctx.engine.loadedSamples());
     dl->AddText(Fonts::small, px_s, ImVec2(x, fy), Colors::dim, facts);
 
     if (ctx.bank_truncated_)
         dl->AddText(Fonts::small, px_s, ImVec2(r.lo.x, fy + px_s + 8.f),
-                    Colors::warn, "NEUPLNA \xE2\x80\x94 banka prekrocila RAM budget");
+                    Colors::warn, "INCOMPLETE - bank exceeded RAM budget");
 
     // RELOAD vpravo dole.
     ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 160.f, fy + 4.f));

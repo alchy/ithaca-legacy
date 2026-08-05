@@ -432,6 +432,18 @@ void Engine::processBlock(float* out_l, float* out_r, int n_samples) noexcept {
     // 3b. DSP chain (CONVOLVER -> AGC -> ENHANCER -> Limiter). Disabled stage = no-op.
     dsp_.process(out_l, out_r, n_samples);
 
+    // 3c. Scope: poslednich kScopeSize vzorku vystupu do kruhoveho bufferu.
+    // Az za DSP retezcem, aby osciloskop ukazoval to, co je opravdu slyset.
+    {
+        int w = scope_w_.load(std::memory_order_relaxed);
+        for (int i = 0; i < n_samples; ++i) {
+            scope_l_[w] = out_l[i];
+            scope_r_[w] = out_r[i];
+            w = (w + 1) & (kScopeSize - 1);       // kScopeSize je mocnina dvou
+        }
+        scope_w_.store(w, std::memory_order_release);
+    }
+
     // 4. Master peak meter pro GUI (decay ~100 ms; non-blocking atomic).
     // Pocitame ABS peak per blok a kombinujeme s predchozim peak * decay.
     // Decay vzorec: exp(-n_samples / (tau_s * sample_rate)). Pro tau=0.1 s
@@ -647,6 +659,19 @@ float Engine::scaledReleaseMs() const {
     const float t  = (float)pedal_.sustainCC() / 127.f;
     const float kf = std::exp(t * std::log(20.f));
     return cfg_.release_ms * kf;
+}
+
+void Engine::scopeSnapshot(float* dst_l, float* dst_r, int n) const noexcept {
+    if (!dst_l || !dst_r || n <= 0) return;
+    if (n > kScopeSize) n = kScopeSize;
+    // Ctem od nejstarsiho k nejnovejsimu, konec je na pozici zapisu.
+    const int w = scope_w_.load(std::memory_order_acquire);
+    int idx = (w - n) & (kScopeSize - 1);
+    for (int i = 0; i < n; ++i) {
+        dst_l[i] = scope_l_[idx];
+        dst_r[i] = scope_r_[idx];
+        idx = (idx + 1) & (kScopeSize - 1);
+    }
 }
 
 } // namespace ithaca
