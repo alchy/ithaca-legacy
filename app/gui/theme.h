@@ -3,8 +3,10 @@
 // zlato=zivy akcent), fonty (Cormorant), apply_theme/load_fonts. Header-only,
 // vzor prevzat z icr2 player/gui/theme.h.
 #include "imgui.h"
+#include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace ithaca::gui::theme {
 
@@ -28,18 +30,41 @@ struct Colors {
     }
 };
 
-// Najdi asset relativne k CWD (vzor icr2 util::find_asset_path). Vraci prazdne
-// kdyz nenalezeno → load_fonts spadne na default ImGui font.
+// Adresar spustitelneho souboru. Nastavuje main() z argv[0] — bez nej hleda
+// find_asset_path jen relativne k CWD a spusteni binarky z jineho adresare
+// (napr. `~/proj/build/ithaca-gui` z domova) prislo o fonty.
+inline std::string g_exe_dir;
+
+inline void set_exe_dir(const char* argv0) {
+    if (!argv0 || !*argv0) return;
+    std::error_code ec;
+    auto p = std::filesystem::path(argv0);
+    if (!p.has_parent_path()) return;            // nalezeno pres PATH, nemame co odvodit
+    auto abs = std::filesystem::weakly_canonical(p, ec);
+    if (ec) abs = p;
+    g_exe_dir = abs.parent_path().string();
+}
+
+// Najdi asset relativne k CWD nebo k adresari binarky (vzor icr2
+// util::find_asset_path). Vraci prazdne kdyz nenalezeno → load_fonts spadne
+// na default ImGui font.
 inline std::string find_asset_path(const std::string& rel) {
     auto exists = [](const std::string& p) {
         std::ifstream f(p); return f.good();
     };
     if (exists(rel)) return rel;
-    static const char* prefixes[] = {
+    std::vector<std::string> prefixes = {
         "./third-party/", "./", "../third-party/",
     };
-    for (const char* pre : prefixes) {
-        std::string c = std::string(pre) + rel;
+    // Adresar binarky a jeho rodic (build/ vs. korenu repa).
+    if (!g_exe_dir.empty()) {
+        const std::filesystem::path e(g_exe_dir);
+        prefixes.push_back((e / "third-party").string() + "/");
+        prefixes.push_back(e.string() + "/");
+        prefixes.push_back((e.parent_path() / "third-party").string() + "/");
+    }
+    for (const auto& pre : prefixes) {
+        std::string c = pre + rel;
         if (exists(c)) return c;
     }
     return {};
@@ -49,7 +74,7 @@ inline std::string find_asset_path(const std::string& rel) {
 struct Fonts {
     static inline ImFont* body    = nullptr; // 18px
     static inline ImFont* eyebrow = nullptr; // 11px, +1.5 tracking
-    static inline ImFont* value   = nullptr; // 26px stat cisla
+    static inline ImFont* value   = nullptr; // 34px stat cisla
     static inline ImFont* brand   = nullptr; // 20px logo, +6 tracking
 };
 

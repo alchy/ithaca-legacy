@@ -5,6 +5,7 @@
 // jediny konzument). Stejny vzor jako app/cli/main.cpp::playAudioCb.
 #include "app_context.h"
 #include "dsp_state.h"
+#include "state_binding.h"
 
 #include "util/log.h"
 
@@ -51,26 +52,9 @@ bool AppContext::initFromState(const GuiState& s) {
     log::Logger::default_().addSubscriber(
         [this](const log::LogEntry& e) { log_buf.push(e); });
 
-    // Engine config z GuiState. master_gain je v dB v GUI, prevod na linear.
-    ithaca::EngineConfig cfg;
-    // Validace perzistovanych audio hodnot (JSON muze byt rucne editovany).
-    // SR <= 0 → fallback 48000 (jinak deleni nulou v load metru / pos_inc).
-    // block_size clamp na [32, 8192] (stejne meze jako Engine::setBlockSize).
-    cfg.sample_rate          = state.audio_sample_rate > 0 ? state.audio_sample_rate : 48000;
-    cfg.block_size           = std::clamp(state.audio_block_size, 32, 8192);
-    state.audio_sample_rate  = cfg.sample_rate;   // promitni validovane zpet do state
-    state.audio_block_size   = cfg.block_size;
-    cfg.master_gain          = std::pow(10.f, state.master_gain_db / 20.f);
-    cfg.resonance_enabled    = state.resonance_enabled;
-    cfg.resonance_gain_db    = state.resonance_gain_db;
-    cfg.resonance_layer_db   = state.resonance_layer_db;
-    cfg.release_ms           = state.release_ms;
-    cfg.excite_decay_ms      = state.excite_decay_ms;
-    cfg.max_resonance_voices = state.max_resonance_voices;
-    cfg.resonance_window_ms  = state.resonance_window_ms;  // jen JSON, ne GUI
-    cfg.preload_ms           = state.preload_ms;           // jen JSON, ne GUI
-    cfg.cache_budget_mb      = state.cache_budget_mb;      // jen JSON, ne GUI (0=auto)
-    cfg.rt_priority          = true;   // realna audio aplikace → RT priorita audio threadu
+    // Engine config z GuiState (vc. validace persistovanych hodnot a jejich
+    // zapisu zpet do state) — viz state_binding.h, ma vlastni testy.
+    const ithaca::EngineConfig cfg = engineConfigFromState(state);
     if (!engine.init(cfg)) {
         log::Logger::default_().log("gui", log::Severity::Error,
             "Engine init selhal");
@@ -82,16 +66,10 @@ bool AppContext::initFromState(const GuiState& s) {
     // engine.init(), protoze ten vola dsp_.prepare() a teprve tam Convolver
     // naplni seznam IR (choiceCount) — drive by se persistovany volic zahodil.
     applyDspStateToChain(state, engine.dspChain());
-    // Zivý strop rezonancni polyfonie (uz predano pres cfg, ale explicitne
-    // volame setter aby cesta setMaxResonanceVoices byla vzdy exercisovana).
-    engine.setMaxResonanceVoices(state.max_resonance_voices);
-    engine.setResonanceEnabled(state.resonance_enabled);
-    engine.setResonanceGainDb(state.resonance_gain_db);
-
-    // Bank se nacita ASYNC (requestBankReload na konci initu) — okno se ukaze
-    // hned, prubeh kryje modalni overlay. Layer heuristika "1/3 rozsahu banky"
-    // se aplikuje v pollReloadCompletion (po dokonceni loadu).
-    engine.setResonanceLayerDb(state.resonance_layer_db);
+    // Runtime settery (rezonance, layer, strop polyfonie). Bank se nacita
+    // ASYNC az na konci initu — okno se ukaze hned, prubeh kryje modalni
+    // overlay; layer heuristiku "1/3 rozsahu banky" resi pollReloadCompletion.
+    applyStateToEngine(engine, state);
 
     // Audio device start. AudioCallback je free funkce + userdata (Engine*).
     // Musi byt AZ po engine.init() (voice pool / stream / ringy uz priprazene).

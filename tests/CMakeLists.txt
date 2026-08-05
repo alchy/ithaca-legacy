@@ -118,6 +118,13 @@ target_include_directories(test_gui_dsp_state PRIVATE
 target_link_libraries(test_gui_dsp_state PRIVATE ithaca_core doctest)
 add_test(NAME test_gui_dsp_state COMMAND test_gui_dsp_state)
 
+# Mapovani GuiState -> EngineConfig / Engine (state_binding.h, header-only).
+add_executable(test_gui_state_binding test_gui_state_binding.cpp)
+target_include_directories(test_gui_state_binding PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_link_libraries(test_gui_state_binding PRIVATE ithaca_core doctest)
+add_test(NAME test_gui_state_binding COMMAND test_gui_state_binding)
+
 add_executable(test_midi_channel test_midi_channel.cpp)
 target_link_libraries(test_midi_channel PRIVATE ithaca_core doctest)
 add_test(NAME test_midi_channel COMMAND test_midi_channel)

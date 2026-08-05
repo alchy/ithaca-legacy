@@ -295,6 +295,7 @@ int main(int argc, char* argv[]) {
         glfwGetWindowContentScale(w, &xs, &ys);
         ithaca::gui::layout::g_scale = (xs > 0.f) ? xs : 1.f;   // DPI scale (Retina ~2.0)
         ithaca::gui::theme::apply_theme();
+        ithaca::gui::theme::set_exe_dir(argv[0]);   // fonty i mimo CWD
         std::string ttf = ithaca::gui::theme::find_asset_path("cormorant/Cormorant-Medium.ttf");
         if (ttf.empty())
             std::fprintf(stderr, "WARN: Cormorant TTF nenalezen — default font.\n");
