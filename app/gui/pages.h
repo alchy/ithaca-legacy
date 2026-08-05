@@ -29,7 +29,10 @@ enum Page { PAGE_PLAY = 0, PAGE_BANK, PAGE_TONE, PAGE_RESO, PAGE_DSP, PAGE_SYS, 
 
 // Shell: ramecek, zalozky, dispatch stranky, radek kontrolek, paticka.
 // Vola se jednou za frame z main().
-void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages);
+// W/H se predavaji, nectou se z GuiState: v rezimu panelu se skutecna velikost
+// lisi od persistovane (tu bychom v panelu prepsali rozlisenim displeje).
+void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
+                  float W, float H);
 
 // Jednotlive stranky. `r` je oblast, do ktere smi stranka kreslit (obrazovkove
 // souradnice: r.lo = levy horni roh, r.hi = pravy dolni).

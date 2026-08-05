@@ -42,6 +42,8 @@ static void printUsage(const char* argv0) {
         "                     persistovano v state.json, staci zadat jednou.\n"
         "  --log-level <lvl>  debug | info | warn | error | fatal (default info);\n"
         "                     persistovano v state.json, menitelne i za behu v UI.\n"
+        "  --fullscreen       bez dekoraci pres celou obrazovku (rezim panelu);\n"
+        "                     na zabudovanem displeji nema byt videt titulek okna.\n"
         "  --help, -h         tato napoveda\n", argv0);
 }
 
@@ -185,6 +187,7 @@ int main(int argc, char* argv[]) {
     // 0. CLI parse: jen --bank-dir a --help.
     std::string cli_bank_dir;
     std::string cli_log_level;
+    bool cli_fullscreen = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") { printUsage(argv[0]); return 0; }
@@ -192,6 +195,8 @@ int main(int argc, char* argv[]) {
             cli_bank_dir = argv[++i];
         } else if (a == "--log-level" && i + 1 < argc) {
             cli_log_level = argv[++i];
+        } else if (a == "--fullscreen") {
+            cli_fullscreen = true;
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n", a.c_str());
             printUsage(argv[0]);
@@ -220,10 +225,39 @@ int main(int argc, char* argv[]) {
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-    GLFWwindow* w = glfwCreateWindow(st.window.w, st.window.h,
-                                     "Ithaca Legacy", nullptr, nullptr);
-    if (!w) { glfwTerminate(); return 1; }
-    glfwSetWindowPos(w, st.window.x, st.window.y);
+    // Rezim panelu: bez dekoraci pres celou obrazovku. Na displeji zabudovanem
+    // v nastroji nema byt videt titulek okna ani ramecek okenniho manazera —
+    // ramecek panelu si kreslime sami (a je to mrtva zona pro dotyk).
+    GLFWwindow* w = nullptr;
+    if (cli_fullscreen) {
+        GLFWmonitor* mon = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = mon ? glfwGetVideoMode(mon) : nullptr;
+        if (mode) {
+            // Bez dekoraci a pres celou plochu, ale NE exkluzivni fullscreen:
+            // ten prepina rezim obrazovky a na Pi zbytecne komplikuje prepnuti
+            // na konzoli, kdyz se neco pokazi.
+            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+            glfwWindowHint(GLFW_RED_BITS, mode->redBits);
+            glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
+            glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
+            glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
+            w = glfwCreateWindow(mode->width, mode->height,
+                                 "Ithaca Legacy", nullptr, nullptr);
+            if (w) {
+                int mx = 0, my = 0;
+                glfwGetMonitorPos(mon, &mx, &my);
+                glfwSetWindowPos(w, mx, my);
+                st.window.w = mode->width;
+                st.window.h = mode->height;
+            }
+        }
+    }
+    if (!w) {
+        w = glfwCreateWindow(st.window.w, st.window.h,
+                             "Ithaca Legacy", nullptr, nullptr);
+        if (!w) { glfwTerminate(); return 1; }
+        glfwSetWindowPos(w, st.window.x, st.window.y);
+    }
     // Off-screen clamp: pokud byl pred ulozenim pripojeny extra monitor a po
     // restartu uz neni, restorovana pozice muze byt mimo viditelne plochy.
     // Spocteme prekryv okna s kazdym pripojenym monitorem; pokud nikde neni
@@ -248,7 +282,7 @@ int main(int argc, char* argv[]) {
         }
         return false;
     };
-    if (!isWindowOnAnyMonitor()) {
+    if (!cli_fullscreen && !isWindowOnAnyMonitor()) {
         glfwSetWindowPos(w, 100, 100);
         st.window.x = 100;
         st.window.y = 100;
@@ -313,6 +347,8 @@ int main(int argc, char* argv[]) {
     Debouncer layer_db;                // rezonancni cache: 400 ms od posledni
     float prev_layer_db = ctx.state.resonance_layer_db;
     GuiState last_saved = ctx.state;
+    // Rozmery pro layout. V rezimu panelu se lisi od persistovanych.
+    int win_w = ctx.state.window.w, win_h = ctx.state.window.h;
 
     // CONFIG stranky (6): MASTER + RESONANCE + 4 DSP stage z chainu.
     MasterPage    master_page(ctx);
@@ -333,19 +369,28 @@ int main(int argc, char* argv[]) {
         glfwPollEvents();
         // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
         // pocitat layout pri resize. Predtim se aktualizovalo jen pri shutdown.
-        glfwGetWindowSize(w, &ctx.state.window.w, &ctx.state.window.h);
-        glfwGetWindowPos(w, &ctx.state.window.x, &ctx.state.window.y);
+        // V rezimu panelu geometrii NEpersistujeme: ulozilo by se rozliseni
+        // panelu a pri pristim okennim spusteni by se okno otevrelo obri.
+        // Rozmery pro layout ale potrebujeme tak jako tak.
+        if (cli_fullscreen) {
+            glfwGetWindowSize(w, &win_w, &win_h);
+        } else {
+            glfwGetWindowSize(w, &ctx.state.window.w, &ctx.state.window.h);
+            glfwGetWindowPos(w, &ctx.state.window.x, &ctx.state.window.y);
+            win_w = ctx.state.window.w;
+            win_h = ctx.state.window.h;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        const float W = (float)ctx.state.window.w;
-        const float H = (float)ctx.state.window.h;
+        const float W = (float)win_w;
+        const float H = (float)win_h;
 
         // Panel se kresli vzdy — splash se pres nej jen prolne, takze na konci
         // animace uz je pod nim hotovy panel a neni videt zadny skok.
-        renderScreen(ctx, pages, kPages);
+        renderScreen(ctx, pages, kPages, W, H);
         const bool splash = renderSplash(ctx, W, H);
 
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci) —

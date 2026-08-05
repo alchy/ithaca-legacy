@@ -244,9 +244,8 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
 
 } // namespace
 
-void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages) {
-    const float W = (float)ctx.state.window.w;
-    const float H = (float)ctx.state.window.h;
+void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
+                  float W, float H) {
 
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({W, H});
