@@ -13,6 +13,7 @@
 #include "sample/sample_store.h"   // BankLoadProgress
 
 #include "log_subscriber.h"
+#include "motion.h"
 #include "persistence.h"
 
 #include <atomic>
@@ -23,36 +24,130 @@
 
 namespace ithaca::gui {
 
-// Stav panelu, ktery musi prezit mezi framy: cache seznamu (jejich poroizeni
-// je drahe) a sample-and-hold citace indikatoru. Drive to byly function-local
-// `static` promenne primo v render funkcich — skryty globalni stav, ktery
-// nesel ani otestovat, ani resetovat pri reloadu.
+// Jedna banka nabidnuta v prohlizeci. `dir` je plna cesta, `name` jen posledni
+// slozka (to, co se zobrazuje).
+struct BankEntry {
+    std::string dir;
+    std::string name;
+};
+
+// Stav panelu, ktery musi prezit mezi framy: cache seznamu (jejich porizeni je
+// drahe), animace a sample-and-hold citace indikatoru. Drive to byly
+// function-local `static` promenne primo v render funkcich — skryty globalni
+// stav, ktery nesel ani otestovat, ani resetovat pri reloadu.
 struct PanelState {
-    // MIDI porty. listPorts() konstruuje RtMidi klienta (OS IPC), takze
-    // per-frame volani bylo nejdrazsi operace celeho GUI. Rescan jen pri
-    // prvnim frame, otevreni comba a tlacitkem RESCAN.
+    // -- Navigace --
+    int page      = 0;   // PLAY BANK TONE RESO DSP SYS LOG
+    int dsp_stage = 0;   // podzalozka na strance DSP
+
+    // -- MIDI porty --
+    // listPorts() konstruuje RtMidi klienta (OS IPC), takze per-frame volani
+    // bylo nejdrazsi operace celeho GUI. Rescan jen pri prvnim frame a RESCANem.
     std::vector<std::string> midi_ports;
     bool                     midi_ports_scanned = false;
-    bool                     midi_combo_open    = false;
 
-    // Kandidati na banku = podadresare bank_search_dir. Rescanuje se pri zmene
-    // rootu A pri otevreni comba — jen na zmenu rootu to nestacilo: nove
-    // zkopirovana banka se v seznamu neobjevila az do restartu aplikace.
-    std::vector<std::string> bank_cands;
-    std::string              bank_cands_root;
-    bool                     bank_cands_valid   = false;
-    bool                     bank_combo_open    = false;
+    // -- Prohlizec bank --
+    // Kdyz neni nastaveny bank_search_dir, prochazi se adresare od startovniho.
+    // V seznamu jsou JEN adresare, ktere vypadaji jako banka (levna sonda),
+    // ne cely obsah filesystemu.
+    std::string              browse_dir;
+    std::vector<BankEntry>   banks;
+    bool                     banks_valid = false;
 
-    // Sample-and-hold pro ciselne dlazdice: drzi maximum za okno (400 ms),
-    // jinak by cisla pri 60 fps necitelne blikala.
+    // -- Vytah v PLAY --
+    // Posun je ve VIRTUALNICH pixelech: index * row_h. Klepnuti nastavi cil,
+    // tah hybe primo a po pusteni se dojede k nejblizsimu radku. Nacteni banky
+    // se spusti az v okamziku USTALENI, ne behem rolovani — jinak by projeti
+    // seznamu spustilo desitky loadu za sebou.
+    motion::Settle reel;
+    int   reel_sel      = 0;
+    bool  reel_dragging = false;
+    float reel_grab0    = 0.f;   // posun na zacatku tahu
+    bool  reel_armed    = false; // ceka se na ustaleni, pak nacist
+
+    // -- Vlna v pozadi --
+    // Tvar je PARAMETRICKY (soucet pomalych sinusovek), zvuk mu jen moduluje
+    // amplitudu. Kreslit primo prubeh vzorku bylo pri pomalem tempu prilis
+    // neklidne: pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal cist
+    // tvar vlny. Proto tu nejsou stopy, ale jen dve obalky a normalizace.
+    struct Wave {
+        float env_l = 0.f, env_r = 0.f;   // vyhlazena hlasitost kanalu 0..1
+        float env_p = 0.f;                // vyhlazena poloha pedalu 0..1
+        // DVE nezavisle reference. Obalka se meri v RMS, historie ve spickach —
+        // a spicka je u hudby nekolikanasobek RMS, takze delit jednu druhou
+        // znamena drzet modulaci trvale na dorazu (vypadalo to jako clipping).
+        float norm_rms  = 0.f;            // pro obalku
+        float norm_peak = 0.f;            // pro posuvnou historii
+        // Viditelnost cele vizualizace. Kdyz se nehraje, pozvolna vyhasne —
+        // vcetne nosne vlny — aby pri prochazeni menu nerusila. Rizeno
+        // ABSOLUTNIM prahem, ne normalizovanou urovni: auto-rozsah v tichu
+        // zesili sum a vizualizace by nikdy nezhasla.
+        float vis = 0.f;
+        // Blizkost clippingu 0..1 (od -9 dB do 0 dB). Barvi vlnu do cervena.
+        float clip = 0.f;
+        // Posuvna historie hlasitosti (0..1, NE znamenkova spicka): kazdy frame
+        // vstoupi zleva jedna nova hodnota a starsi se odsouvaji doprava — vlna
+        // tim PLYNE, protoze se prehrava. Pri 60 fps trva pruchod sirkou ~2 s.
+        //
+        // Zamerne hlasitost a ne prubeh: znamenkova spicka preskakuje mezi
+        // + a - kazdy frame, coz delalo zubatou caru se schody. Hlasitost
+        // MODULUJE AMPLITUDU nosne vlny, takze tvar zustava hladky a zvuk se
+        // projevi nabyvanim a splaskavanim podel toku.
+        static constexpr int kHist = 128;
+        float hist_l[kHist]{}, hist_r[kHist]{};
+        // Pedal ma vlastni historii, aby jeho vlna plynula doprava stejne jako
+        // zvukove. Neni to audio signal, ale pomalu se menici hodnota — vyjde
+        // z nej dlouha klidna vlna, opticky odlisna od zivych L/R.
+        float hist_p[kHist]{};
+        int   head = 0;                   // pozice nejnovejsiho vzorku
+    };
+    Wave wave;
+    // Svisly stred plochy displeje. Nastavuje shell; PLAY na nej sazi vybrany
+    // nastroj, aby byl na stredu OBRAZOVKY a ne na stredu sve vlastni plochy
+    // (ta je nesymetricka: lista nahore je vyssi nez paticka dole).
+    float lcd_center_y = 0.f;
+
+    // Svisla osa vlny. Nastavuje ji stranka PLAY na stred vybraneho patche,
+    // aby vlna protekala prave jmenem nactene banky. 0 = jeste neznama,
+    // pozadi pak vezme stred plochy.
+    float scope_center_y = 0.f;
+
+    // Vyhlazene rozsviceni MIDI lamp 0..1. Engine dava jen ano/ne s oknem
+    // 120 ms; bez vyhlazeni by lampa cvakala. Casova konstanta ~200 ms.
+    float lamp_note = 0.f, lamp_off = 0.f;
+
+    // Prolnuti modalniho overlaye 0..1 + jak dlouho uz load bezi.
+    // Kratke loady overlay VUBEC neukaze — jinak pri prepnuti banky panel
+    // znatelne problikne, coz nastroj delat nema.
+    float overlay_a = 0.f;
+    float overlay_t = 0.f;
+
+    // Sporic: po peti minutach bez DOTYKU se ovladaci prvky pomalu vytrati
+    // a zustane jen vlna. Hrani obrazovku NEprobouzi — kdyz hrajes, panel
+    // nepotrebujes, a vlna zije dal. Prvni dotek vrati vsechno hned.
+    float idle_t   = 0.f;
+    float chrome_a = 1.f;
+
+    // Uvodni obrazovka: cas od startu, prolnuti pri odchodu, a jestli uz dobehla.
+    float splash_t    = 0.f;
+    float splash_fade = 0.f;
+    bool  splash_done = false;
+
+    // -- LOG --
+    bool log_unseen = false;     // kontrolka sviti, dokud se stranka neotevre
+
+    // -- Sample-and-hold pro ciselne indikatory (max za 400ms okno) --
+    // Bez toho by cisla pri 60 fps necitelne blikala.
+    // Sample-and-hold pro cisla na PLAY: pri 60 fps se hodnota meni rychleji,
+    // nez ji stihnes precist. Drzi se okno (viz page_play.cpp).
     struct Hold { float shown = 0.f, winmax = 0.f, t0 = 0.f; };
-    Hold h_voices, h_reso, h_main_rings, h_reso_rings, h_load;
+    Hold h_voices, h_reso, h_main_rings, h_reso_rings, h_load, h_peak, h_sustain;
 
-    // Scratch pro snapshot LOG stripu. Predalokovany, aby se 50 LogEntry
-    // (kazdy 2x std::string) nealokovalo kazdy frame. Snapshot se dela do nej,
+    // Scratch pro snapshot LOG stranky. Predalokovany, aby se LogEntry
+    // (kazdy 2x std::string) nealokovaly kazdy frame; snapshot se dela do nej,
     // aby se mutex ring bufferu nedrzel po celou dobu renderu.
-    static constexpr int      kLogSnapshot = 50;
-    std::vector<log::LogEntry> log_scratch  = std::vector<log::LogEntry>(kLogSnapshot);
+    static constexpr int       kLogSnapshot = 64;
+    std::vector<log::LogEntry> log_scratch = std::vector<log::LogEntry>(kLogSnapshot);
 };
 
 struct AppContext {
@@ -89,6 +184,11 @@ struct AppContext {
     void pollReloadCompletion();
     const ithaca::BankLoadProgress& loadProgress() const { return load_progress_; }
     bool bankLicenseInvalid() const { return bank_license_invalid_; }
+
+    // Povedlo se otevrit audio device? Drive se vysledek jen zalogoval a zahodil;
+    // uvodni obrazovka ho ukazuje jako krok initu, takze si ho musime pamatovat.
+    bool audioOk() const { return audio_ok_; }
+    bool audio_ok_ = false;
     void clearBankLicenseInvalid() { bank_license_invalid_ = false; }
 
     std::thread              reload_thread_;

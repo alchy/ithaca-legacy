@@ -197,7 +197,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         std::string sv = raw("schema_version");
         if (sv.empty()) return std::nullopt;
         s.schema_version = std::stoi(sv);
-        if (s.schema_version < 3 || s.schema_version > 5) return std::nullopt;
+        if (s.schema_version < 3 || s.schema_version > 6) return std::nullopt;
         s.bank_search_dir       = raw("bank_search_dir");
         s.bank_path             = raw("bank_path");
         s.midi_port_name        = raw("midi_port_name");
@@ -244,22 +244,28 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
 
-        // -- DSP chain: genericke klice "dsp.<STAGE>.<Param::id>" (v5+) --------
+        // -- Genericke sekce "<prefix><STAGE>.<Param::id>" ---------------------
         // Persistence jmena parametru nezna — proste vezme vse pod prefixem
-        // "dsp." a naleje do mapy. Novy parametr ve stage tedy projde bez
-        // jakekoli zmeny tady.
-        for (const auto& [k, v] : kv) {
-            if (k.rfind("dsp.", 0) != 0) continue;
-            const size_t dot = k.find('.', 4);
-            if (dot == std::string::npos) continue;
-            const std::string stage = k.substr(4, dot - 4);
-            const std::string field = k.substr(dot + 1);
-            if (stage.empty() || field.empty()) continue;
-            auto& st = s.dsp[stage];
-            if      (field == "enabled") st.enabled = (v == "true" || v == "1");
-            else if (field == "choice")  { try { st.choice = std::stoi(v); } catch (...) {} }
-            else                         { try { st.params[field] = std::stof(v); } catch (...) {} }
-        }
+        // a naleje do mapy. Novy parametr ve stage tedy projde bez jakekoli
+        // zmeny tady. Stejny tvar pouziva "dsp." (v5+) i "defaults." (v6+).
+        auto readSection = [&](const std::string& prefix,
+                               std::map<std::string, DspStageState>& into) {
+            const size_t pl = prefix.size();
+            for (const auto& [k, v] : kv) {
+                if (k.rfind(prefix, 0) != 0) continue;
+                const size_t dot = k.find('.', pl);
+                if (dot == std::string::npos) continue;
+                const std::string stage = k.substr(pl, dot - pl);
+                const std::string field = k.substr(dot + 1);
+                if (stage.empty() || field.empty()) continue;
+                auto& st = into[stage];
+                if      (field == "enabled") st.enabled = (v == "true" || v == "1");
+                else if (field == "choice")  { try { st.choice = std::stoi(v); } catch (...) {} }
+                else                         { try { st.params[field] = std::stof(v); } catch (...) {} }
+            }
+        };
+        readSection("dsp.", s.dsp);
+        readSection("defaults.", s.defaults);
 
         // -- Migrace v3/v4 -> v5: ploche DSP klice na genericke ----------------
         // Klice odpovidaji Param::id v jednotlivych stage (agc.cpp, enhancer.cpp,
@@ -303,7 +309,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
                 { try { s.dsp["CONVOLVER"].choice = std::stoi(c); } catch (...) {} }
         }
 
-        s.schema_version = 5;   // po nacteni vzdy ulozime jako v5
+        s.schema_version = 6;   // po nacteni vzdy ulozime jako v6
     } catch (...) {
         return std::nullopt;
     }
@@ -343,15 +349,21 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"config_page\": "        << s.config_page          << ",\n";
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate;
-        // DSP chain genericky: "dsp.<STAGE>.<Param::id>". Carka se pise PRED
+        // Genericke sekce: "<prefix><STAGE>.<Param::id>". Carka se pise PRED
         // kazdy radek (ne za), takze prazdna mapa nenecha visici carku.
-        for (const auto& [stage, st] : s.dsp) {
-            f << ",\n  \"dsp." << stage << ".enabled\": " << (st.enabled ? "true" : "false");
-            if (st.choice >= 0)
-                f << ",\n  \"dsp." << stage << ".choice\": " << st.choice;
-            for (const auto& [id, v] : st.params)
-                f << ",\n  \"dsp." << stage << "." << id << "\": " << v;
-        }
+        auto writeSection = [&](const char* prefix,
+                                const std::map<std::string, DspStageState>& m) {
+            for (const auto& [stage, st] : m) {
+                f << ",\n  \"" << prefix << stage << ".enabled\": "
+                  << (st.enabled ? "true" : "false");
+                if (st.choice >= 0)
+                    f << ",\n  \"" << prefix << stage << ".choice\": " << st.choice;
+                for (const auto& [id, v] : st.params)
+                    f << ",\n  \"" << prefix << stage << "." << id << "\": " << v;
+            }
+        };
+        writeSection("dsp.", s.dsp);
+        writeSection("defaults.", s.defaults);
         f << "\n}\n";
         f.flush();
         if (!f.good()) {

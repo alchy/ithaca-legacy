@@ -1,274 +1,338 @@
 #pragma once
-// app/gui/widgets.h — Art Deco widget vrstva. Vzor icr2 player/gui/widgets.h,
-// adaptovano na nase tokeny (stribro/zlato) a nase indikatory (sustain/peak
-// vodorovne, half-pedal ryska, 88-key klaviatura, grid rysky).
+// app/gui/widgets.h — primitivy znakoveho displeje.
+// ----------------------------------------------------------------------------
+// Vsechno se kresli pres ImDrawList, ne pres stock ImGui widgety — ty maji
+// vlastni vzhled i vlastni chovani (napr. skok na misto kliknuti), ktere se
+// s pojetim znakoveho displeje i s dotykem tluce.
+//
+// Dve pravidla, ktera se tahnou celym souborem:
+//   1. Duraz = INVERZNI POLE (plna vypln + tmavy text). Na dotyku neni hover,
+//      takze vyber musi byt videt bez najeti; a skutecne znakove displeje
+//      zadny tucny rez nemaji.
+//   2. Nic interaktivniho pod Dims::touch (74 px). Kdyz je prvek opticky mensi,
+//      dotykova zona se zvetsi neviditelne.
 #include "theme.h"
 #include "layout.h"
+#include "motion.h"
 #include "imgui.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
 namespace ithaca::gui::wdg {
+
 using theme::Colors;
 using theme::Fonts;
+namespace L = ithaca::gui::layout;
 
-// Eyebrow: maly prostrkany uppercase popisek.
-inline void Eyebrow(const char* t, ImU32 col = Colors::muted) {
-    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(col));
-    ImGui::TextUnformatted(t);
-    ImGui::PopStyleColor();
-    if (Fonts::eyebrow) ImGui::PopFont();
+// -- Text -------------------------------------------------------------------
+// Sirka textu v danem pismu bez ohledu na aktualne pushnuty font.
+inline float textW(ImFont* f, float px, const char* txt) {
+    return f->CalcTextSizeA(px, FLT_MAX, 0.f, txt).x;
 }
 
-// -- Radek michanych fontu na spolecne uctare ------------------------------
-// ImGui sklada polozky na radku podle HORNI hrany. Kdyz na jednom radku potkas
-// dve velikosti fontu (eyebrow 11 px "TYPE" + body 18 px "PACKED"), sednou si
-// na ruzne uctary a text opticky poskakuje. TextRow spocita nejvetsi ascent na
-// radku a kazdy usek posadi tak, aby vsechny stály na TEZE uctare.
+// Velikost, v jake je pismo skutecne renderovano. Pisma jsou rasterizovana ve
+// fyzickem rozliseni (size * g_scale) a zobrazovana pres io.FontGlobalScale,
+// takze logicka velikost = FontSize * FontGlobalScale.
+inline float fontPx(ImFont* f) {
+    return f->FontSize * ImGui::GetIO().FontGlobalScale;
+}
+
+// -- Inverzni pole ----------------------------------------------------------
+// Duraz na znakovem displeji. Vraci obdelnik, ktery pole zabralo.
+inline ImVec2 invField(ImDrawList* dl, ImVec2 pos, ImFont* f, const char* txt,
+                       float pad_x = 8.f, float h = 0.f,
+                       ImU32 bg = Colors::inv_bg, ImU32 fg = Colors::inv_fg) {
+    const float px = fontPx(f);
+    const float w  = textW(f, px, txt) + pad_x * 2.f;
+    if (h <= 0.f) h = px * 1.45f;
+    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), bg);
+    dl->AddText(f, px, ImVec2(pos.x + pad_x, pos.y + (h - px) * 0.5f), fg, txt);
+    return ImVec2(w, h);
+}
+
+// -- Kontrolka --------------------------------------------------------------
+// Bere INTENZITU 0..1, ne ano/ne: nahle prepnuti cvaka, plynuly nabeh
+// a dozniv se cte klidneji. Zhasla kontrolka musi byt videt, aby bylo poznat,
+// ze existuje — proto se kresli i zhasla, jen nejtlumeneji.
+inline void lamp(ImDrawList* dl, ImVec2 pos, const char* label, float intensity,
+                 ImU32 on_col = Colors::warn) {
+    const float px = fontPx(Fonts::small);
+    const float r  = 4.f;
+    const ImU32 c  = Colors::lerp(Colors::dimmer, on_col,
+                                  std::clamp(intensity, 0.f, 1.f));
+    dl->AddCircleFilled(ImVec2(pos.x + r, pos.y + px * 0.5f), r, c, 12);
+    dl->AddText(Fonts::small, px, ImVec2(pos.x + r * 2.f + 6.f, pos.y), c, label);
+}
+
+inline float lampW(const char* label) {
+    return 8.f + 6.f + textW(Fonts::small, fontPx(Fonts::small), label) + 18.f;
+}
+
+// -- Vlnova cara (pozadi) ---------------------------------------------------
+// Pozadi ve stylu PS3 XMB: mekke cary tekouci pres plochu. Tvar rizne SKUTECNY
+// zvuk, ale silne vyhlazeny — syrovy prubeh je zubaty a na pozadi by rusil
+// cteni; vyhlazenim zustane reakce na hru, ale pohyb je hedvabny.
 //
-// Kresli se pres ImDrawList (stejne jako DecoSlider) a misto se rezervuje
-// jednim Dummy — vyska radku je pak dana nejvyssim ascentem a nejhlubsim
-// descentem, ne nahodne poslednim useknem.
-struct Span {
-    const char* text;
-    ImFont*     font  = nullptr;          // nullptr = prave aktivni font
-    ImU32       color = Colors::silver;
-};
-
-// Vyska radku pro dany seznam useku (kdyz si volajici potrebuje predpocitat
-// misto). Vraci ascent + descent nejvetsiho useku.
-inline float TextRowHeight(const Span* spans, int n) {
-    float asc = 0.f, desc = 0.f;
+// Zadna vypln: samotna cara staci a nechava text citelny. Zato je siroka —
+// tenka linka by se na pozadi ztratila a pusobila jako grafova mrizka.
+//
+// base_y je ABSOLUTNI souradnice osy, ne pomer: osa ma prochazet stredem
+// vybraneho patche, ktery zna az stranka PLAY.
+inline void waveLine(ImDrawList* dl, float x0, float w, float base_y,
+                     const float* pts, int n, float amp_px, float gain,
+                     ImU32 col, float alpha, float thickness) {
+    if (n < 2 || alpha <= 0.004f) return;
+    const ImU32 c = (col & 0x00FFFFFF) | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
+    dl->PathClear();
     for (int i = 0; i < n; ++i) {
-        ImFont* f = spans[i].font ? spans[i].font : ImGui::GetFont();
-        ImGui::PushFont(f);
-        const float k = ImGui::GetFontSize() / f->FontSize;   // render / raster
-        asc  = std::max(asc,   f->Ascent  * k);
-        desc = std::max(desc, -f->Descent * k);
-        ImGui::PopFont();
+        const float x = x0 + w * ((float)i / (float)(n - 1));
+        // MEKKY limit misto tvrdeho orezu: soucet nosne vlny a modulace zvukem
+        // muze presahnout 1.0 a clamp by vrcholy usekl naplocho (bylo videt
+        // jako "clipovani"). tanh je ohne, takze tvar zustane hladky.
+        // Mekky limit misto tvrdeho orezu. Vstup je konstruovan tak, aby se
+        // bezne pohyboval hluboko v LINEARNI oblasti tanh — saturace slouzi
+        // jen jako pojistka pro spicky, ne jako bezny rezim.
+        const float y = base_y - std::tanh(pts[i] * gain * 0.85f) * amp_px * 1.15f;
+        dl->PathLineTo(ImVec2(x, y));
     }
-    return asc + desc;
+    dl->PathStroke(c, 0, thickness);
 }
 
-inline void TextRow(const Span* spans, int n, float gap = 6.f) {
-    if (n <= 0) return;
-    // 1) Spolecna uctara = nejvetsi ascent na radku.
-    float max_asc = 0.f, max_desc = 0.f;
-    for (int i = 0; i < n; ++i) {
-        ImFont* f = spans[i].font ? spans[i].font : ImGui::GetFont();
-        ImGui::PushFont(f);
-        const float k = ImGui::GetFontSize() / f->FontSize;
-        max_asc  = std::max(max_asc,   f->Ascent  * k);
-        max_desc = std::max(max_desc, -f->Descent * k);
-        ImGui::PopFont();
-    }
-    // 2) Kresli useky za sebou, kazdy posunuty o rozdil ascentu.
+// -- Dotykovy slider --------------------------------------------------------
+// Hodnota se meni JEN tahem, nikdy klepnutim. Stock ImGui slider skace na
+// misto kliknuti — pri testovani stare verze to omylem prepsalo prah limiteru
+// a na dotyku by to bylo mnohem horsi.
+//
+// Vraci true, kdyz se hodnota v tomhle framu zmenila.
+inline bool paramSlider(const char* id, const char* label, float* v,
+                        float lo, float hi, const char* fmt,
+                        bool enabled = true, float trk_h = 0.f) {
+    if (trk_h <= 0.f) trk_h = L::Dims::param_trk;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
-    auto* dl = ImGui::GetWindowDrawList();
-    float x = o.x;
-    for (int i = 0; i < n; ++i) {
-        ImFont* f = spans[i].font ? spans[i].font : ImGui::GetFont();
-        ImGui::PushFont(f);
-        const float k   = ImGui::GetFontSize() / f->FontSize;
-        const float asc = f->Ascent * k;
-        dl->AddText(ImVec2(x, o.y + (max_asc - asc)), spans[i].color, spans[i].text);
-        x += ImGui::CalcTextSize(spans[i].text).x + gap;
-        ImGui::PopFont();
-    }
-    // 3) Rezervuj misto (bez zaverecne mezery za poslednim useknem).
-    ImGui::Dummy(ImVec2(std::max(0.f, x - o.x - gap), max_asc + max_desc));
-}
+    const float  w = ImGui::GetContentRegionAvail().x;
+    const float  lab_px = fontPx(Fonts::small);
+    const float  val_px = fontPx(Fonts::ui);
 
-// StatTile: eyebrow popisek nad velkou hodnotou. value_col rozhoduje zlato/stribro.
-// align = 0 (vlevo) / 0.5 (na stred) / 1 (vpravo) — zarovnani OBOU radku v ramci
-// bunky (sirka = GetContentRegionAvail). margin = horizontalni odsazeni od kraju
-// (drzi krajni dlazdice u okraje, ale ne nalepene). Pri align=0.5 se margin rusi
-// (presny stred). Tim lze tri dlazdice roztahnout: vlevo | stred | vpravo.
-inline void StatTile(const char* label, const char* value, ImU32 value_col,
-                     float align = 0.f, float margin = 0.f) {
-    const float cell_w = ImGui::GetContentRegionAvail().x;
-    const float startx = ImGui::GetCursorPosX();
-    auto place = [&](float tw) {
-        ImGui::SetCursorPosX(startx + margin + (cell_w - 2.f*margin - tw) * align);
+    const ImU32 lab_c = enabled ? Colors::dim   : Colors::dimmer;
+    const ImU32 val_c = enabled ? Colors::ink   : Colors::dimmer;
+    const ImU32 fil_c = enabled ? Colors::fill  : Colors::trough;
+
+    // Track.
+    const float ty = o.y;
+    const float th = trk_h;
+    dl->AddRectFilled(ImVec2(o.x, ty), ImVec2(o.x + w, ty + th), Colors::trough);
+    dl->AddRect(ImVec2(o.x, ty), ImVec2(o.x + w, ty + th), Colors::line);
+
+    const float t = (hi > lo) ? std::clamp((*v - lo) / (hi - lo), 0.f, 1.f) : 0.f;
+    if (t > 0.f)
+        dl->AddRectFilled(ImVec2(o.x + 1, ty + 1),
+                          ImVec2(o.x + w * t, ty + th - 1), fil_c);
+    // Zarazka — siroka, at je videt kde presne hodnota je.
+    const float gx = o.x + w * t;
+    dl->AddRectFilled(ImVec2(gx - 3.f, ty - 2.f), ImVec2(gx + 3.f, ty + th + 2.f),
+                      enabled ? Colors::ink : Colors::dimmer);
+
+    // Popisek a hodnota DOVNITR pasu. Usetri to 24 px na kazdem parametru
+    // (na strance DSP jsou ctyri) a pas pak vypada jako tah faderu, ne jako
+    // formularove pole s popiskem nad nim.
+    //
+    // Text lezi castecne na vyplni a castecne na korytu, takze jedna barva
+    // vzdy nekde splyne (svetly popisek na svetle vyplni zmizel). Kresli se
+    // proto DVAKRAT, orezany na hrane vyplne: nad vyplni inverzne, nad korytem
+    // normalne. Az po zarazce, aby ji text prekryl a ne naopak.
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), fmt, *v);
+    auto splitText = [&](ImFont* f, float px, ImVec2 pos, ImU32 c_over, ImU32 c_out,
+                         const char* txt) {
+        dl->PushClipRect(ImVec2(o.x, ty), ImVec2(gx, ty + th), true);
+        dl->AddText(f, px, pos, c_over, txt);
+        dl->PopClipRect();
+        dl->PushClipRect(ImVec2(gx, ty), ImVec2(o.x + w, ty + th), true);
+        dl->AddText(f, px, pos, c_out, txt);
+        dl->PopClipRect();
     };
-    // Radek 1: eyebrow popisek (tlumeny).
-    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
-    place(ImGui::CalcTextSize(label).x);
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-    ImGui::TextUnformatted(label);
-    ImGui::PopStyleColor();
-    if (Fonts::eyebrow) ImGui::PopFont();
-    // Radek 2: velka hodnota.
-    if (Fonts::value) ImGui::PushFont(Fonts::value);
-    place(ImGui::CalcTextSize(value).x);
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(value_col));
-    ImGui::TextUnformatted(value);
-    ImGui::PopStyleColor();
-    if (Fonts::value) ImGui::PopFont();
-}
+    const ImU32 over_c = enabled ? Colors::inv_fg : Colors::dimmer;
+    splitText(Fonts::small, lab_px,
+              ImVec2(o.x + 14.f, ty + (th - lab_px) * 0.5f), over_c, lab_c, label);
+    splitText(Fonts::ui, val_px,
+              ImVec2(o.x + w - textW(Fonts::ui, val_px, buf) - 14.f,
+                     ty + (th - val_px) * 0.5f), over_c, val_c, buf);
 
-// Lampa: ● rozsvicena (col) / ○ zhasla (muted).
-inline void Lamp(const char* label, bool on, ImU32 on_col = Colors::gold) {
-    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(on ? on_col : Colors::muted));
-    ImGui::Text("%s %s", on ? "\xE2\x97\x8F" : "\xE2\x97\x8B", label); // ● / ○
-    ImGui::PopStyleColor();
-    if (Fonts::eyebrow) ImGui::PopFont();
-}
+    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y));
+    ImGui::InvisibleButton(id, ImVec2(w, th));
 
-// ON/OFF prepinac (chip). Vraci true kdyz uzivatel kliknul (volajici prepne stav).
-inline bool ToggleChip(const char* id, bool on) {
-    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(on ? Colors::gold : Colors::muted));
-    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0,0,0,0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Colors::v(Colors::line_soft));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Colors::v(Colors::line));
-    char buf[32]; std::snprintf(buf, sizeof(buf), "%s  %s##%s",
-                                on ? "\xE2\x97\x8F" : "\xE2\x97\x8B",
-                                on ? "ON" : "OFF", id);   // ● ON / ○ OFF
-    bool clicked = ImGui::Button(buf);
-    ImGui::PopStyleColor(4);
-    if (Fonts::eyebrow) ImGui::PopFont();
-    return clicked;
-}
-
-// ParamSlider: eyebrow label + plnosirkovy slider.
-inline bool ParamSliderF(const char* label, float* v, float lo, float hi,
-                         const char* fmt = "%.2f") {
-    Eyebrow(label);
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    return ImGui::SliderFloat((std::string("##") + label).c_str(), v, lo, hi, fmt);
-}
-
-// Deco slider: tenka linka (track) + mala zarazka (grab) + hodnota vpravo.
-// Kresleny pres ImDrawList (NE defaultni tlusty ImGui slider). grab_col rozhoduje
-// zlato/stribro. Plnosirkovy. Vraci true kdyz se meni.
-// enabled=false → read-only: stejny vzhled, ztlumene barvy, bez interakce
-// (pro init-only parametry jako MAX RESONANCE).
-inline bool DecoSlider(const char* label, float* v, float lo, float hi,
-                       const char* fmt = "%.2f",
-                       ImU32 grab_col = Colors::silver2,
-                       bool enabled = true) {
-    using namespace ithaca::gui::layout;
-    const float row_h   = Dims::slider_h;
-    const float track_h = Dims::slider_track;
-    const float grab_h  = Dims::slider_grab;
-    const float grab_w  = 3.f;
-
-    const float width = ImGui::GetContentRegionAvail().x;
-    ImVec2 o = ImGui::GetCursorScreenPos();
-    auto* dl = ImGui::GetWindowDrawList();
-
-    // Ztlumene barvy v read-only rezimu (init-only parametr).
-    const ImU32 fill_col  = enabled ? grab_col      : Colors::line;
-    const ImU32 grab_dot  = enabled ? Colors::ink    : Colors::muted;
-    const ImU32 value_col = enabled ? Colors::ink    : Colors::muted;
-
-    // Label (eyebrow, vlevo) + hodnota (vpravo) na horni linii radku.
-    if (Fonts::eyebrow) ImGui::PushFont(Fonts::eyebrow);
-    dl->AddText(ImVec2(o.x, o.y), Colors::muted, label);
-    char buf[32]; std::snprintf(buf, sizeof(buf), fmt, *v);
-    float tw = ImGui::CalcTextSize(buf).x;
-    dl->AddText(ImVec2(o.x + width - tw, o.y), value_col, buf);
-    if (Fonts::eyebrow) ImGui::PopFont();
-
-    // Track linie ve spodni tretine radku.
-    float track_y = o.y + row_h - grab_h * 0.5f - 2.f;
-    dl->AddRectFilled(ImVec2(o.x, track_y - track_h*0.5f),
-                      ImVec2(o.x + width, track_y + track_h*0.5f),
-                      Colors::line_soft);
-    // Vyplnena cast po grab.
-    float t = (hi > lo) ? (*v - lo) / (hi - lo) : 0.f;
-    t = std::clamp(t, 0.f, 1.f);
-    float gx = o.x + width * t;
-    dl->AddRectFilled(ImVec2(o.x, track_y - track_h*0.5f),
-                      ImVec2(gx, track_y + track_h*0.5f), fill_col);
-    // Zarazka (svisla).
-    dl->AddRectFilled(ImVec2(gx - grab_w*0.5f, track_y - grab_h*0.5f),
-                      ImVec2(gx + grab_w*0.5f, track_y + grab_h*0.5f),
-                      grab_dot);
-
-    // Read-only: jen rezervuj misto (Dummy), zadna interakce.
-    if (!enabled) {
-        ImGui::SetCursorScreenPos(o);
-        ImGui::Dummy(ImVec2(width, row_h));
-        return false;
-    }
-    // Interakce: invisible button pres cely radek, drag nastavuje hodnotu.
-    ImGui::SetCursorScreenPos(o);
-    ImGui::InvisibleButton((std::string("##ds_")+label).c_str(), ImVec2(width, row_h));
     bool changed = false;
-    if (ImGui::IsItemActive()) {
-        float mx = ImGui::GetIO().MousePos.x;
-        float nt = std::clamp((mx - o.x) / width, 0.f, 1.f);
-        float nv = lo + nt * (hi - lo);
-        if (nv != *v) { *v = nv; changed = true; }
+    if (enabled && ImGui::IsItemActive()) {
+        const ImVec2 d = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, L::Dims::drag_slop);
+        if (d.x != 0.f || d.y != 0.f) {   // az za prahem tahu
+            const float mx = ImGui::GetIO().MousePos.x;
+            const float nt = std::clamp((mx - o.x) / w, 0.f, 1.f);
+            const float nv = lo + nt * (hi - lo);
+            if (nv != *v) { *v = nv; changed = true; }
+        }
     }
+    ImGui::Dummy(ImVec2(0.f, L::Dims::param_gap));
     return changed;
 }
 
-// Vodorovny gradient fill bar s volitelnou ryskou. Pouziti: sustain (jeden,
-// threshold ryska), peak L/R (dva, bez rysky). Kresli na aktualni cursor,
-// rezervuje (width x h). width<=0 → cela dostupna sirka.
-inline void HBar(float frac01, float width, float h,
-                 ImU32 fill_lo, ImU32 fill_hi,
-                 float tick01 = -1.f) {
-    frac01 = std::clamp(frac01, 0.f, 1.f);
-    if (width <= 0) width = ImGui::GetContentRegionAvail().x;
-    ImVec2 o = ImGui::GetCursorScreenPos();
-    ImGui::Dummy(ImVec2(width, h));
-    auto* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(o, ImVec2(o.x + width, o.y + h), Colors::line_soft);
-    if (frac01 > 0.f)
-        dl->AddRectFilledMultiColor(
-            o, ImVec2(o.x + width * frac01, o.y + h),
-            fill_lo, fill_hi, fill_hi, fill_lo); // horizontalni gradient
-    if (tick01 >= 0.f) {
-        float tx = o.x + width * std::clamp(tick01, 0.f, 1.f);
-        dl->AddLine(ImVec2(tx, o.y - 2.f), ImVec2(tx, o.y + h + 2.f),
-                    Colors::silver2, 1.f);
+// -- Akcni tlacitko ---------------------------------------------------------
+// Pro akce (RELOAD, RESCAN, RESET). Prepinac by k nim vykreslil stav ON/OFF,
+// coz u akce nedava smysl — nic se nezapina.
+//
+// `fixed_w > 0` = tlacitko dostane presne tuhle sirku (roztazeny radek). Bez
+// nej se sirka meri z popisku, coz je v mrizce nezadouci: sousedni tlacitka by
+// koncila jinde.
+inline bool button(const char* id, const char* label, float fixed_w = 0.f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float px = fontPx(Fonts::small);
+    const float tw = textW(Fonts::small, px, label);
+    const float w  = (fixed_w > 0.f) ? fixed_w : (tw + 44.f);
+    const float h  = L::Dims::touch * 0.62f;
+    // Pri mereni z popisku zustava text vlevo (tak to vypada v liste),
+    // pri pevne sirce se centruje — jinak by v siroke bunce plaval u kraje.
+    const float tx = (fixed_w > 0.f) ? (o.x + (w - tw) * 0.5f) : (o.x + 22.f);
+
+    ImGui::SetCursorScreenPos(o);
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, L::Dims::touch));
+    const bool down    = ImGui::IsItemActive();
+
+    if (down) {
+        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Colors::inv_bg);
+        dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
+                    Colors::inv_fg, label);
+    } else {
+        dl->AddRect(o, ImVec2(o.x + w, o.y + h), Colors::line);
+        dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
+                    Colors::ink, label);
     }
+    return clicked;
 }
 
-// 88-key klaviatura (MIDI 21..108). active(midi)=primarni hlas (ZLATA),
-// resonating(midi)=sympaticka rezonance (STRIBRNA, sekundarni). active ma
-// prednost (kdyz nota hraje i rezonuje, je zlata). Kresli do (width x height).
-template <typename ActiveFn, typename ResoFn>
-inline void Keyboard(float width, float height, ActiveFn active, ResoFn resonating) {
-    constexpr int FIRST = 21, LAST = 108;
-    auto is_black = [](int m){ int n=m%12; return n==1||n==3||n==6||n==8||n==10; };
-    int n_white = 0; for (int m=FIRST;m<=LAST;++m) if(!is_black(m)) ++n_white;
-    if (width <= 0) width = ImGui::GetContentRegionAvail().x;
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy(ImVec2(width, height));
-    float kw = width / (float)n_white, bw = kw*0.6f, bh = height*0.62f;
-    auto* dl = ImGui::GetWindowDrawList();
-    int wi = 0;
-    // Rezonujici noty: jen lehce svetlejsi nez podklad klavesy (decentni "zar",
-    // ne druhy vyrazny highlight) — aby nekonkurovaly aktivnim (zlatym) hlasum.
-    constexpr ImU32 kWhiteBase = IM_COL32(0x1c,0x20,0x24,255);
-    constexpr ImU32 kWhiteReso = IM_COL32(0x2a,0x30,0x36,255);  // o malo svetlejsi
-    for (int m=FIRST;m<=LAST;++m){ if(is_black(m)) continue;
-        float kx=p.x+wi*kw;
-        ImU32 col = active(m)     ? Colors::gold
-                  : resonating(m) ? kWhiteReso
-                                  : kWhiteBase;
-        dl->AddRectFilled({kx,p.y},{kx+kw-1.f,p.y+height},col);
-        dl->AddLine({kx+kw-1.f,p.y},{kx+kw-1.f,p.y+height},Colors::line,0.5f);
-        ++wi; }
-    wi = 0;
-    // Cerna klapka je sama tmava, takze rezonancni seda musi byt VYRAZNEJSI nez
-    // u bile klapky (kWhiteReso 0x2a3036) — jinak na tmavem podkladu splyne.
-    // Volime o krok svetlejsi sedou, aby byla cerna rezonujici klapka citelna.
-    constexpr ImU32 kBlackReso = IM_COL32(0x3c,0x44,0x4c,255);
-    for (int m=FIRST;m<=LAST;++m){ if(!is_black(m)){++wi;continue;}
-        float kx=p.x+(wi-1)*kw+kw-bw*0.5f;
-        ImU32 col = active(m)     ? IM_COL32(0x8a,0x73,0x30,255)  // zlata-tmava
-                  : resonating(m) ? kBlackReso
-                                  : Colors::bg;
-        dl->AddRectFilled({kx,p.y},{kx+bw,p.y+bh},col); }
+// -- ON/OFF prepinac --------------------------------------------------------
+// `fixed_w` viz button(). Popisek zustava vlevo a stav vpravo i v roztazene
+// bunce — to je cteni "co / jak", ktere se centrovanim rozpadne.
+inline bool toggle(const char* id, const char* label, bool on, float fixed_w = 0.f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float px = fontPx(Fonts::small);
+    const float w  = (fixed_w > 0.f) ? fixed_w
+                                     : (textW(Fonts::small, px, label) + 60.f);
+    const float h  = L::Dims::touch * 0.62f;   // opticky mensi, zona plna (nize)
+
+    if (on) {
+        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Colors::inv_bg);
+        dl->AddText(Fonts::small, px, ImVec2(o.x + 12.f, o.y + (h - px) * 0.5f),
+                    Colors::inv_fg, label);
+        dl->AddText(Fonts::small, px,
+                    ImVec2(o.x + w - textW(Fonts::small, px, "ON") - 12.f,
+                           o.y + (h - px) * 0.5f), Colors::inv_fg, "ON");
+    } else {
+        dl->AddRect(o, ImVec2(o.x + w, o.y + h), Colors::line);
+        dl->AddText(Fonts::small, px, ImVec2(o.x + 12.f, o.y + (h - px) * 0.5f),
+                    Colors::dim, label);
+        dl->AddText(Fonts::small, px,
+                    ImVec2(o.x + w - textW(Fonts::small, px, "OFF") - 12.f,
+                           o.y + (h - px) * 0.5f), Colors::dimmer, "OFF");
+    }
+    ImGui::SetCursorScreenPos(o);
+    // Dotykova zona je vyssi nez vykresleny chip.
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, L::Dims::touch));
+    return clicked;
+}
+
+// -- Pole v roztazenem radku ------------------------------------------------
+// Jedna bunka radku rozdeleneho pres layout::splitRow: ramecek nebo inverzni
+// vypln + text NA STREDU. Text se orezava na bunku — jmena IR jsou cesty
+// k souboru a ta se do bunky nevejdou.
+inline void cell(ImDrawList* dl, ImVec2 p, ImVec2 q, const char* txt, bool on,
+                 ImFont* f = nullptr) {
+    if (!f) f = Fonts::small;
+    const float px = fontPx(f);
+    if (on) dl->AddRectFilled(p, q, Colors::inv_bg);
+    else    dl->AddRect(p, q, Colors::line);
+    const float tw = textW(f, px, txt);
+    dl->PushClipRect(ImVec2(p.x + 4.f, p.y), ImVec2(q.x - 4.f, q.y), true);
+    dl->AddText(f, px,
+                ImVec2(p.x + (q.x - p.x - tw) * 0.5f,
+                       p.y + (q.y - p.y - px) * 0.5f),
+                on ? Colors::inv_fg : Colors::dim, txt);
+    dl->PopClipRect();
+}
+
+// -- Radek voleb ------------------------------------------------------------
+// Volby jako pole vedle sebe, ROZTAZENE na celou zadanou sirku. Na dotyku lepsi
+// nez rozbalovaci seznam: jedno klepnuti misto dvou a vzdy je videt cela
+// nabidka. Vraci index, na ktery se kliklo (jinak -1).
+//
+// Sirka bunky se NEODVIJI od delky textu — jinak by radky pod sebou koncily
+// jinde a kazdy cil by byl jinak velky.
+// `hit_h` = vyska dotykove zony (0 = auto). Zona je vyssi nez vykreslena bunka,
+// takze ji volajici musi omezit roztecí radku — jinak by zony sousednich radku
+// zasahovaly do sebe a klepnuti by padalo do spatneho.
+inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items,
+                   int n, int cur, float h = 48.f, float hit_h = 0.f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const L::Row row = L::splitRow(pos, w, h, n);
+    if (hit_h <= 0.f)
+        hit_h = (row.rows > 1) ? (h + row.gap) : L::Dims::touch;
+    hit_h = std::max(hit_h, h);
+    int hit = -1;
+
+    for (int i = 0; i < n; ++i) {
+        const ImVec2 p = row.at(i), q = row.end(i);
+        const bool on = (i == cur);
+        cell(dl, p, q, items[i], on);
+
+        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y - (hit_h - h) * 0.5f));
+        char bid[48]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
+        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, hit_h)) && !on) hit = i;
+    }
+    return hit;
+}
+
+// Vyska, kterou takovy radek zabere (kvuli zalomeni ji volajici nezna dopredu).
+inline float chipRowHeight(float w, int n, float h = 48.f) {
+    return L::splitRow(ImVec2(0, 0), w, h, n).height();
+}
+
+// -- Radek zalozek ----------------------------------------------------------
+// Zvyraznena zalozka je zaroven nadpis stranky, proto stranky nemaji vlastni
+// hlavicku. Vraci true pri zmene.
+// `square` = dlazdice se kresli jako CTVEREC o strane h, vycentrovany v bunce,
+// ale dotykova zona zustava cela bunka. Ctverec pres celou sirku bunky by pri
+// sedmi zalozkach mel 175 px na vysku a stranka DSP by se uz nevesla; takhle
+// je videt ctverec, prst ma k dispozici vic.
+inline bool tabBar(const char* id, const char* const* labels, int n, int& sel,
+                   float h, bool square = false) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float  total = ImGui::GetContentRegionAvail().x;
+    const L::Row row = L::splitRow(o, total, h, n, L::Dims::tab_gap);
+    bool changed = false;
+
+    for (int i = 0; i < n; ++i) {
+        const ImVec2 p = row.at(i);
+        const bool on = (i == sel);
+        if (square) {
+            const float s  = std::min(h, row.cell);
+            const float mx = p.x + row.cell * 0.5f;
+            cell(dl, ImVec2(mx - s * 0.5f, p.y), ImVec2(mx + s * 0.5f, p.y + s),
+                 labels[i], on);
+        } else {
+            cell(dl, p, row.end(i), labels[i], on);
+        }
+
+        ImGui::SetCursorScreenPos(p);
+        char bid[32]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
+        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, h)) && !on) { sel = i; changed = true; }
+    }
+    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + row.height()));
+    ImGui::Dummy(ImVec2(total, 0.f));
+    return changed;
 }
 
 } // namespace ithaca::gui::wdg

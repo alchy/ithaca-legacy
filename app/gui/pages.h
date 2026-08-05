@@ -1,0 +1,66 @@
+#pragma once
+// app/gui/pages.h — stranky rozhrani.
+// ----------------------------------------------------------------------------
+// Plocha struktura sedmi stranek prepinanych hornim radkem zalozek. Zvyraznena
+// zalozka je zaroven nadpis stranky, proto zadna stranka nema vlastni hlavicku.
+//
+// Kazda render funkce dostane obdelnik, ve kterem smi kreslit — shell uz
+// odectl ramecek, zalozky, radek kontrolek i paticku.
+#include "imgui.h"
+
+namespace ithaca::gui {
+// Obdelnik v obrazovkovych souradnicich. Vlastni typ, at nemusime tahnout
+// imgui_internal.h (ImRect je interni API).
+struct Rect {
+    ImVec2 lo, hi;
+    float w() const { return hi.x - lo.x; }
+    float h() const { return hi.y - lo.y; }
+};
+}
+
+namespace ithaca::dsp { struct IParamPage; }
+
+namespace ithaca::gui {
+
+struct AppContext;
+
+enum Page { PAGE_PLAY = 0, PAGE_BANK, PAGE_TONE, PAGE_RESO, PAGE_DSP, PAGE_SYS, PAGE_LOG,
+            PAGE_COUNT };
+
+// Shell: ramecek, zalozky, dispatch stranky, radek kontrolek, paticka.
+// Vola se jednou za frame z main().
+// W/H se predavaji, nectou se z GuiState: v rezimu panelu se skutecna velikost
+// lisi od persistovane (tu bychom v panelu prepsali rozlisenim displeje).
+void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
+                  float W, float H);
+
+// Jednotlive stranky. `r` je oblast, do ktere smi stranka kreslit (obrazovkove
+// souradnice: r.lo = levy horni roh, r.hi = pravy dolni).
+// Zajisti, ze je nactena nabidka bank (a vybrana ta aktualni). Vola shell pred
+// dispatchem — vytah v PLAY ji potrebuje stejne jako stranka BANK, a PLAY je
+// vychozi stranka, takze cekat na navstevu BANKu nejde.
+void ensureBankList(AppContext& ctx);
+
+// Uroven logu jako radek voleb. Sdileji ji stranky SYS i LOG: na SYS proto,
+// ze je to nastaveni, na LOG proto, ze potreba ji zmenit vznika prave ve
+// chvili, kdy vypis ctes. Jedna definice, aby se nabidka ani chovani
+// nerozesly. Vraci vysku, kterou radek zabral.
+float logLevelRow(AppContext& ctx, ImVec2 pos, float w, float cell_h, float hit_h);
+
+void pagePlay (AppContext& ctx, const Rect& r);
+void pageBank (AppContext& ctx, const Rect& r);
+// pageSys dostava POLE vsech stranek parametru: SAVE AS DEFAULT / RESET
+// PARAMS pracuji genericky se vsemi (MASTER, RESONANCE i DSP stage).
+void pageSys  (AppContext& ctx, const Rect& r,
+               ithaca::dsp::IParamPage** pages, int n_pages);
+void pageLog  (AppContext& ctx, const Rect& r);
+
+// Genericky renderer libovolne IParamPage — slouzi strankam TONE, RESO
+// i vsem ctyrem DSP stage. Nezna konkretni parametry, jede pres paramCount()
+// a Param tabulky, takze novy parametr se objevi sam.
+void pageParams(AppContext& ctx, const Rect& r, ithaca::dsp::IParamPage& page);
+
+// DSP: druhy radek zalozek (CONVOLVER/AGC/ENHANCER/LIMITER) + parametry vybrane.
+void pageDsp(AppContext& ctx, const Rect& r, ithaca::dsp::IParamPage** stages, int n);
+
+} // namespace ithaca::gui

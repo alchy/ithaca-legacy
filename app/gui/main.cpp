@@ -1,20 +1,17 @@
-// app/gui/main.cpp - F8 GUI entry point. AppContext + ImGui skeleton.
-// Panely: top bar, keyboard viz, diag, params, log strip.
-// Lifecycle: load state → GLFW okno → ImGui init → AppContext init → render
-// loop (panely + debounced state save) → save state → cisty shutdown.
+// app/gui/main.cpp - vstupni bod celniho panelu Ithaca Legacy.
+//
+// Lifecycle: nacti stav → GLFW okno → ImGui + zabudovana pisma → AppContext
+// (engine, audio, MIDI; banka se nacita asynchronne) → render loop
+// (screen.cpp kresli panel, sem patri jen debounce a overlay) → uloz → shutdown.
 #include "app_context.h"
-#include "panel_topbar.h"
-#include "panel_keyboard.h"
-#include "panel_bank.h"
-#include "panel_indicators.h"
-#include "panel_params.h"
-#include "panel_config.h"
+#include "pages.h"
+#include "splash.h"
 #include "master_page.h"
 #include "resonance_page.h"
 #include "dsp_state.h"
-#include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
+#include "widgets.h"
 #include "layout.h"
 
 #include "imgui.h"
@@ -23,6 +20,8 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cmath>
+#include <filesystem>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -38,11 +37,15 @@ static void glfwErrorCb(int err, const char* desc) {
 
 static void printUsage(const char* argv0) {
     std::fprintf(stderr,
-        "Pouziti: %s [--bank-dir <path>] [--log-level <lvl>] [--help]\n"
-        "  --bank-dir <path>  adresar s bankami (dropdown bude scanovat odtud);\n"
-        "                     persistovano v state.json, staci zadat jednou.\n"
+        "Pouziti: %s [--bank-dir <path>] [--log-level <lvl>] [--fullscreen] [--help]\n"
+        "  --bank-dir <path>  adresar, od ktereho zacina prochazeni bank na strance\n"
+        "                     BANK; persistovano v state.json, staci zadat jednou.\n"
         "  --log-level <lvl>  debug | info | warn | error | fatal (default info);\n"
         "                     persistovano v state.json, menitelne i za behu v UI.\n"
+        "  --fullscreen       rezim panelu: okno bez dekoraci pres celou obrazovku.\n"
+        "                     Na displeji zabudovanem v nastroji nema byt videt\n"
+        "                     titulek okna. Vyzaduje bezici display server (X11/\n"
+        "                     Wayland) — z hole konzole okno nevznikne.\n"
         "  --help, -h         tato napoveda\n", argv0);
 }
 
@@ -66,155 +69,116 @@ struct Debouncer {
     }
 };
 
-// Fullscreen modalni overlay pres celou plochu: pohlti vsechen vstup (topmost
-// + SetNextWindowFocus). Kresli se ve dvou rezimech — prubeh nacitani banky,
-// nebo hlaseni o neplatne licenci, ktere drzi dokud uzivatel neklikne.
+// Modalni overlay pres celou plochu. Kresli se ve dvou rezimech: prubeh
+// nacitani banky, nebo hlaseni o neplatne licenci (to drzi dokud uzivatel
+// neklikne).
+//
+// DULEZITE — proc se prolina a proc ma zpozdeni: pakovana banka se nacte
+// za necelou vterinu a overlay pak jen problikl pres cely panel. Nastroj
+// takhle blikat nema. Proto se overlay vubec neobjevi u loadu kratsich nez
+// ~350 ms a nabiha i mizi prolnutim.
 void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
-                        bool license_bad) {
+                        bool license_bad, float alpha) {
     using namespace ithaca::gui;
+    namespace L = ithaca::gui::layout;
+    using theme::Colors;
+    using theme::Fonts;
+    if (alpha <= 0.004f) return;
+
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({W, H});
     ImGui::SetNextWindowFocus();
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(10, 10, 12, 215));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
     ImGui::Begin("##loading", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoScrollbar);
 
-    const std::string bank_name =
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const auto A = [&](ImU32 c, float m = 1.f) {
+        return (c & 0x00FFFFFF)
+             | ((ImU32)(((c >> 24) & 0xFF) * alpha * m) << 24);
+    };
+
+    // Zatemneni panelu, ne prekryti — pod nim je porad videt, co se deje.
+    dl->AddRectFilled({0, 0}, {W, H}, A(IM_COL32(0x06, 0x16, 0x3c, 225)));
+
+    const float bw = 560.f;
+    const float bx = (W - bw) * 0.5f;
+    float y = H * 0.38f;
+    const float px_u = wdg::fontPx(Fonts::ui);
+    const float px_s = wdg::fontPx(Fonts::small);
+
+    const std::string bank =
         std::filesystem::path(ctx.state.bank_path).filename().string();
-    const float cw = 420.f;
-    ImGui::SetCursorPos({(W - cw) * 0.5f, H * 0.40f});
-    ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::gold));
-    ImGui::TextUnformatted(bank_name.c_str());
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0, 8});
 
     if (license_bad) {
-        // Licencovana banka selhala (license/MAC) — anglicky text bez progressu
-        // a RAM info; overlay drzi dokud uzivatel nepotvrdi klikem.
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xd0, 0x5a, 0x4a, 255));
-        ImGui::TextUnformatted("Soundbank is corrupted or license file is invalid.");
-        ImGui::TextUnformatted("Sampler is unable to load the bank.");
+        wdg::invField(dl, ImVec2(bx, y), Fonts::small, "LICENSE", 10.f, 0.f,
+                      A(Colors::inv_bg), A(Colors::inv_fg));
+        y += px_s * 1.45f + 16.f;
+        dl->AddText(Fonts::ui, px_u, ImVec2(bx, y), A(Colors::ink), bank.c_str());
+        y += px_u + 14.f;
+        dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dim),
+                    "Soundbank is corrupted or license file is invalid.");
+        y += px_s + 6.f;
+        dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dim),
+                    "Sampler is unable to load the bank.");
+        y += px_s + 22.f;
+        ImGui::SetCursorScreenPos(ImVec2(bx, y));
+        if (wdg::button("##lic_ok", "CONTINUE")) ctx.clearBankLicenseInvalid();
+        ImGui::End();
         ImGui::PopStyleColor();
-        ImGui::Dummy({0, 12});
-        if (ImGui::Button("Click to continue", ImVec2(cw, 0)))
-            ctx.clearBankLicenseInvalid();
-    } else {
-        const auto& p = ctx.loadProgress();
-        const int    phase  = p.phase.load(std::memory_order_relaxed);
-        const int    done   = p.done.load(std::memory_order_relaxed);
-        const int    total  = p.total.load(std::memory_order_relaxed);
-        const size_t mb     = p.bytes_loaded.load(std::memory_order_relaxed) / (1024 * 1024);
-        const size_t bud_mb = p.budget_bytes.load(std::memory_order_relaxed) / (1024 * 1024);
-        const bool   trunc  = p.truncated.load(std::memory_order_relaxed);
-        const float  frac   = ithaca::bankLoadFraction(phase, done, total);
-
-        char line[96];
-        if (phase == 2)
-            std::snprintf(line, sizeof(line), "Stavim rezonancni cache (%d/%d)", done, total);
-        else if (phase == 1)
-            std::snprintf(line, sizeof(line), "Nacitam samply (%d/%d)", done, total);
-        else
-            std::snprintf(line, sizeof(line), "Prohledavam banku...");
-
-        char memline[96];
-        if (bud_mb > 0)
-            std::snprintf(memline, sizeof(memline), "RAM: %zu / %zu MB (budget)", mb, bud_mb);
-        else
-            std::snprintf(memline, sizeof(memline), "RAM: %zu MB", mb);
-
-        ImGui::ProgressBar(frac, ImVec2(cw, 14));
-        ImGui::Dummy({0, 4});
-        ImGui::TextUnformatted(line);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::muted));
-        ImGui::TextUnformatted(memline);
-        ImGui::PopStyleColor();
-        if (trunc) {
-            ImGui::Dummy({0, 6});
-            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xd0, 0x5a, 0x4a, 255));
-            ImGui::TextUnformatted(
-                "Banka prekrocila RAM budget — nactena NEUPLNA (detail v LOG)");
-            ImGui::PopStyleColor();
-        }
+        return;
     }
-    ImGui::EndGroup();
+
+    const auto& p = ctx.loadProgress();
+    const int    phase  = p.phase.load(std::memory_order_relaxed);
+    const int    done   = p.done.load(std::memory_order_relaxed);
+    const int    total  = p.total.load(std::memory_order_relaxed);
+    const size_t mb     = p.bytes_loaded.load(std::memory_order_relaxed) / (1024 * 1024);
+    const size_t bud_mb = p.budget_bytes.load(std::memory_order_relaxed) / (1024 * 1024);
+    const bool   trunc  = p.truncated.load(std::memory_order_relaxed);
+    const float  frac   = ithaca::bankLoadFraction(phase, done, total);
+
+    wdg::invField(dl, ImVec2(bx, y), Fonts::small, "LOADING", 10.f, 0.f,
+                  A(Colors::inv_bg), A(Colors::inv_fg));
+    y += px_s * 1.45f + 16.f;
+    dl->AddText(Fonts::ui, px_u, ImVec2(bx, y), A(Colors::ink), bank.c_str());
+    y += px_u + 16.f;
+
+    // Progres jako retez bloku — znakovy displej nema plynuly pruh.
+    constexpr int kSeg = 40;
+    const float seg_w = bw / (float)kSeg;
+    const int lit = (int)(frac * kSeg + 0.5f);
+    for (int i = 0; i < kSeg; ++i) {
+        const ImVec2 a(bx + i * seg_w + 1.f, y);
+        const ImVec2 b(bx + (i + 1) * seg_w - 1.f, y + 16.f);
+        if (i < lit) dl->AddRectFilled(a, b, A(Colors::inv_bg));
+        else         dl->AddRect(a, b, A(Colors::line));
+    }
+    y += 16.f + 12.f;
+
+    char line[96];
+    if (phase == 2)      std::snprintf(line, sizeof(line), "BUILDING RESONANCE CACHE  %d/%d", done, total);
+    else if (phase == 1) std::snprintf(line, sizeof(line), "LOADING SAMPLES  %d/%d", done, total);
+    else                 std::snprintf(line, sizeof(line), "SCANNING BANK");
+    dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dim), line);
+    y += px_s + 6.f;
+
+    char memline[96];
+    if (bud_mb > 0) std::snprintf(memline, sizeof(memline), "RAM  %zu / %zu MB", mb, bud_mb);
+    else            std::snprintf(memline, sizeof(memline), "RAM  %zu MB", mb);
+    dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dimmer), memline);
+
+    if (trunc) {
+        y += px_s + 12.f;
+        wdg::invField(dl, ImVec2(bx, y), Fonts::small,
+                      "INCOMPLETE - EXCEEDED RAM BUDGET", 10.f, 0.f,
+                      A(Colors::inv_bg), A(Colors::inv_fg));
+    }
+
     ImGui::End();
     ImGui::PopStyleColor();
-}
-
-// Korenove okno a jeho vodorovna pasma:
-//   TOP BAR → INDICATOR STRIP → hlavni rada (BANK | stranka | CONFIG)
-//   → KLAVIATURA → LOG (pohlti zbytek vysky).
-void renderShell(ithaca::gui::AppContext& ctx, ithaca::dsp::IParamPage** pages,
-                 int n_pages, int n_reset, float W, float H) {
-    using namespace ithaca::gui;
-    namespace L = ithaca::gui::layout;
-    const float COL1 = L::Dims::col_bank, COL3 = L::Dims::col_dsp;
-    const float PAD  = L::Dims::pad_outer;
-
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({W, H});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(PAD, PAD));
-    ImGui::Begin("##root", nullptr,
-        ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
-        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|
-        ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
-
-    const float content_w = ImGui::GetContentRegionAvail().x;   // = W - 2*PAD
-
-    ImGui::BeginChild("##topbar", {content_w, L::Dims::topbar_h}, false);
-        renderTopBar(ctx, pages, n_reset);
-    ImGui::EndChild();
-    ImGui::Dummy({0, 2.f});   // topbar↔strip tesne (zbytek mezery = item spacing)
-    ImGui::BeginChild("##strip", {content_w, L::Dims::strip_h}, false);
-        renderIndicatorStrip(ctx, COL1, COL3);
-    ImGui::EndChild();
-    ImGui::Dummy({0, L::Dims::row_gap});
-
-    // Vertikalni rozpocet. Merime ZBYVAJICI vysku od aktualniho kurzoru
-    // (GetContentRegionAvail) — drive se scitala pevna vyska vsech pasem vcetne
-    // rucne spocitaneho "9 * ItemSpacing.y"; ta devitka byla vazana na pocet
-    // sekci v tomhle okne a pri pridani pasma se na ni zapominalo (obsah pak
-    // presahl okno a slo o par px skrolovat).
-    // LOG dostava BeginChild s vyskou 0 = "vezmi presne zbytek", takze se
-    // rozpocet dopocita sam a nic nikdy nepresahne.
-    //
-    // Pod hlavni radou nasleduji 4 naskladane polozky (dummy, klaviatura,
-    // dummy, LOG) a ImGui pred kazdou vlozi ItemSpacing.y. Bez jejich odecteni
-    // by hlavni rada byla az o 4*spacing vyssi a LOG o tolik nizsi. Na rozdil
-    // od drivejsi konstanty "9 * spacing", ktera pocitala sekce CELEHO okna,
-    // je tahle ctyrka overitelna primo z kodu hned pod timhle vypoctem.
-    constexpr int kItemsBelow = 4;
-    const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    const float avail   = ImGui::GetContentRegionAvail().y;
-    const float below   = L::Dims::kbd_h + L::Dims::log_h
-                        + 2.f * L::Dims::row_gap + kItemsBelow * spacing;
-    float main_h = std::min(L::Dims::main_h_max, avail - below);
-    if (main_h < 0.f) main_h = avail * 0.5f;   // velmi male okno
-
-    ImGui::BeginChild("##bank",  {COL1, main_h}, false); renderBankPanel(ctx); ImGui::EndChild();
-    ImGui::SameLine(0, 0);
-    ImGui::BeginChild("##voice", {content_w - COL1 - COL3, main_h}, false);
-        renderParamPage(ctx, *pages[ctx.state.config_page]);
-    ImGui::EndChild();
-    ImGui::SameLine(0, 0);
-    ImGui::BeginChild("##config", {COL3, main_h}, false);
-        renderConfigPanel(ctx, pages, n_pages, ctx.state.config_page);
-    ImGui::EndChild();
-
-    ImGui::Dummy({0, L::Dims::row_gap});
-    ImGui::BeginChild("##kbd", {content_w, L::Dims::kbd_h}, false);
-        renderKeyboardPanel(ctx);
-    ImGui::EndChild();
-    ImGui::Dummy({0, L::Dims::row_gap});
-    ImGui::BeginChild("##log", {content_w, 0}, false);   // 0 = zbytek vysky
-        renderLogPanel(ctx);
-    ImGui::EndChild();
-
-    ImGui::End();
-    ImGui::PopStyleVar();
 }
 
 } // namespace
@@ -225,6 +189,7 @@ int main(int argc, char* argv[]) {
     // 0. CLI parse: jen --bank-dir a --help.
     std::string cli_bank_dir;
     std::string cli_log_level;
+    bool cli_fullscreen = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") { printUsage(argv[0]); return 0; }
@@ -232,6 +197,8 @@ int main(int argc, char* argv[]) {
             cli_bank_dir = argv[++i];
         } else if (a == "--log-level" && i + 1 < argc) {
             cli_log_level = argv[++i];
+        } else if (a == "--fullscreen") {
+            cli_fullscreen = true;
         } else {
             std::fprintf(stderr, "Neznama volba: %s\n", a.c_str());
             printUsage(argv[0]);
@@ -260,10 +227,39 @@ int main(int argc, char* argv[]) {
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-    GLFWwindow* w = glfwCreateWindow(st.window.w, st.window.h,
-                                     "ithaca-gui", nullptr, nullptr);
-    if (!w) { glfwTerminate(); return 1; }
-    glfwSetWindowPos(w, st.window.x, st.window.y);
+    // Rezim panelu: bez dekoraci pres celou obrazovku. Na displeji zabudovanem
+    // v nastroji nema byt videt titulek okna ani ramecek okenniho manazera —
+    // ramecek panelu si kreslime sami (a je to mrtva zona pro dotyk).
+    GLFWwindow* w = nullptr;
+    if (cli_fullscreen) {
+        GLFWmonitor* mon = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = mon ? glfwGetVideoMode(mon) : nullptr;
+        if (mode) {
+            // Bez dekoraci a pres celou plochu, ale NE exkluzivni fullscreen:
+            // ten prepina rezim obrazovky a na Pi zbytecne komplikuje prepnuti
+            // na konzoli, kdyz se neco pokazi.
+            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+            glfwWindowHint(GLFW_RED_BITS, mode->redBits);
+            glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
+            glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
+            glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
+            w = glfwCreateWindow(mode->width, mode->height,
+                                 "Ithaca Legacy", nullptr, nullptr);
+            if (w) {
+                int mx = 0, my = 0;
+                glfwGetMonitorPos(mon, &mx, &my);
+                glfwSetWindowPos(w, mx, my);
+                st.window.w = mode->width;
+                st.window.h = mode->height;
+            }
+        }
+    }
+    if (!w) {
+        w = glfwCreateWindow(st.window.w, st.window.h,
+                             "Ithaca Legacy", nullptr, nullptr);
+        if (!w) { glfwTerminate(); return 1; }
+        glfwSetWindowPos(w, st.window.x, st.window.y);
+    }
     // Off-screen clamp: pokud byl pred ulozenim pripojeny extra monitor a po
     // restartu uz neni, restorovana pozice muze byt mimo viditelne plochy.
     // Spocteme prekryv okna s kazdym pripojenym monitorem; pokud nikde neni
@@ -288,7 +284,7 @@ int main(int argc, char* argv[]) {
         }
         return false;
     };
-    if (!isWindowOnAnyMonitor()) {
+    if (!cli_fullscreen && !isWindowOnAnyMonitor()) {
         glfwSetWindowPos(w, 100, 100);
         st.window.x = 100;
         st.window.y = 100;
@@ -312,7 +308,7 @@ int main(int argc, char* argv[]) {
         // Font rasterizovan na size*scale → zobraz v logicke velikosti (1/scale)
         // = ostre, spravna velikost. Viz load_fonts.
         io.FontGlobalScale = (s > 0.f) ? 1.f / s : 1.f;
-        if (ithaca::gui::theme::Fonts::body) io.FontDefault = ithaca::gui::theme::Fonts::body;
+        if (ithaca::gui::theme::Fonts::ui) io.FontDefault = ithaca::gui::theme::Fonts::ui;
     }
     ImGui_ImplGlfw_InitForOpenGL(w, true);
     ImGui_ImplOpenGL3_Init("#version 150");
@@ -353,6 +349,8 @@ int main(int argc, char* argv[]) {
     Debouncer layer_db;                // rezonancni cache: 400 ms od posledni
     float prev_layer_db = ctx.state.resonance_layer_db;
     GuiState last_saved = ctx.state;
+    // Rozmery pro layout. V rezimu panelu se lisi od persistovanych.
+    int win_w = ctx.state.window.w, win_h = ctx.state.window.h;
 
     // CONFIG stranky (6): MASTER + RESONANCE + 4 DSP stage z chainu.
     MasterPage    master_page(ctx);
@@ -366,9 +364,6 @@ int main(int argc, char* argv[]) {
         &ctx.engine.dspChain().stage(3),   // LIMITER
     };
     constexpr int kPages = (int)IM_ARRAYSIZE(pages);
-    // Rozsah tlacitka RESET v topbaru: jen prvni dve stranky (MASTER +
-    // RESONANCE). DSP chain se zamerne neresetuje.
-    constexpr int kResetPages = 2;
     if (ctx.state.config_page < 0 || ctx.state.config_page >= kPages)
         ctx.state.config_page = 0;
 
@@ -376,16 +371,29 @@ int main(int argc, char* argv[]) {
         glfwPollEvents();
         // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
         // pocitat layout pri resize. Predtim se aktualizovalo jen pri shutdown.
-        glfwGetWindowSize(w, &ctx.state.window.w, &ctx.state.window.h);
-        glfwGetWindowPos(w, &ctx.state.window.x, &ctx.state.window.y);
+        // V rezimu panelu geometrii NEpersistujeme: ulozilo by se rozliseni
+        // panelu a pri pristim okennim spusteni by se okno otevrelo obri.
+        // Rozmery pro layout ale potrebujeme tak jako tak.
+        if (cli_fullscreen) {
+            glfwGetWindowSize(w, &win_w, &win_h);
+        } else {
+            glfwGetWindowSize(w, &ctx.state.window.w, &ctx.state.window.h);
+            glfwGetWindowPos(w, &ctx.state.window.x, &ctx.state.window.y);
+            win_w = ctx.state.window.w;
+            win_h = ctx.state.window.h;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        const float W = (float)ctx.state.window.w;
-        const float H = (float)ctx.state.window.h;
-        renderShell(ctx, pages, kPages, kResetPages, W, H);
+        const float W = (float)win_w;
+        const float H = (float)win_h;
+
+        // Panel se kresli vzdy — splash se pres nej jen prolne, takze na konci
+        // animace uz je pod nim hotovy panel a neni videt zadny skok.
+        renderScreen(ctx, pages, kPages, W, H);
+        const bool splash = renderSplash(ctx, W, H);
 
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci) —
         // panely meni stage primo, takze bez tohoto by je saveState nevidel.
@@ -395,8 +403,22 @@ int main(int argc, char* argv[]) {
         // Async bank reload: completion (GUI vlakno) + modalni overlay.
         ctx.pollReloadCompletion();
         const bool license_bad = ctx.bankLicenseInvalid();
-        if (ctx.reloadInProgress() || license_bad)
-            drawLoadingOverlay(ctx, W, H, license_bad);
+        if (!splash) {
+            // Behem uvodni obrazovky se modal nekresli — prvni load uz je
+            // videt na ni samotne a dva prekryvajici se progresy by byly zmatek.
+            //
+            // Prodleva + prolnuti. Licence se ukaze hned (je to chyba, ktera
+            // ceka na potvrzeni), prubeh nacitani az kdyz opravdu trva —
+            // jinak by kratky load jen problikl pres cely panel.
+            auto& ps = ctx.panels;
+            const float dt = ImGui::GetIO().DeltaTime;
+            const bool busy = ctx.reloadInProgress();
+            ps.overlay_t = busy ? (ps.overlay_t + dt) : 0.f;
+            const bool show = license_bad || (busy && ps.overlay_t > 0.35f);
+            const float k = 1.f - std::exp(-dt / 0.12f);
+            ps.overlay_a += ((show ? 1.f : 0.f) - ps.overlay_a) * k;
+            drawLoadingOverlay(ctx, W, H, license_bad, ps.overlay_a);
+        }
 
         // Persistence debounce. Porovnava se CELY GuiState (operator== =
         // default) — drive tu byl rucni retezec 30 poli, ktery vynechaval

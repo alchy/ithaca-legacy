@@ -28,7 +28,7 @@ struct WindowGeom {
 };
 
 struct GuiState {
-    int         schema_version    = 5;
+    int         schema_version    = 6;
     // Adresar, ve kterem se hleda banky (dropdown ho scanu). Pri prazdnem
     // bank_path je tohle jediny zdroj kandidatu — bez ne by uzivatel nemel
     // jak vybrat banku z GUI. Settable pres --bank-dir CLI flag nebo
@@ -59,6 +59,17 @@ struct GuiState {
     // genericky pres dspStateFromChain()/applyDspStateToChain(), viz dsp_state.h.
     // Prazdna mapa = stage si drzi vlastni defaulty (vsechny vyple).
     std::map<std::string, DspStageState> dsp;
+
+    // UZIVATELSKE vychozi hodnoty — to, na co vraci RESET PARAMS na strance SYS.
+    // Neplest s Param::def: ten je TOVARNI konstanta v kodu a o konkretni bance
+    // ani sestave nic nevi. Tohle je snapshot, ktery si uzivatel poridi tlacitkem
+    // SAVE AS DEFAULT ve chvili, kdy nastroj zni tak, jak ma.
+    //
+    // Klicem je jmeno IParamPage ("MASTER", "RESONANCE", "CONVOLVER", ...), takze
+    // pokryva VSECHNY stranky parametru stejnym mechanismem jako `dsp` — vcetne
+    // MASTER a RESONANCE, ktere zadna DSP stage nejsou. Prazdna mapa = uzivatel
+    // si zadne neulozil a RESET jede na tovarni Param::def.
+    std::map<std::string, DspStageState> defaults;
 
     WindowGeom window;
 

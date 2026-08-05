@@ -10,7 +10,7 @@ provozní nastavení RT práv na cílovém hardwaru v
 > Přehled: audio vlákno (`processBlock`) si při **prvním bloku per thread** —
 > a jen pokud aplikace nastavila `EngineConfig::rt_priority` — vyžádá u OS
 > scheduleru vyšší prioritu / RT politiku. Cílem je odstranit jitter (na Windows
-> se projevoval oscilací DSP LOAD 40–120 % i v klidu). Implementace je
+> se projevoval oscilací hodnoty `DSP` 40–120 % i v klidu). Implementace je
 > **idempotentní** (`thread_local` guard), **soft-failure** (při selhání jen
 > WARN + TIP, audio běží dál na default scheduling — žádná regrese) a **per-thread**
 > (stejný vzor jako `enableFlushDenormals`).
