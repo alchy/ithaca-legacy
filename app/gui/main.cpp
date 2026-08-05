@@ -452,6 +452,12 @@ int main(int argc, char* argv[]) {
 
     // 7. Save state pred shutdown. ctx.state.window_* uz je aktualni z render
     //    loopu (per-frame update), nemusime znovu volat glfwGetWindow*.
+    //
+    //    Aktualni hodnoty se pritom ulozi jako USER profil. Uzivatel tak nemusi
+    //    na nic klikat: cim nastroj vypnul, s tim ho zase zapne. Tlacitko
+    //    SET CURRENT AS USER PROFILE na SYS dela tedy jen to, co se stejne
+    //    stane pri ukonceni — jen hned a bez cekani na vypnuti.
+    snapshotPages(ctx.state.defaults, pages, kPages);
     saveState(defaultStatePath(), ctx.state);
 
     // 8. Shutdown — RT flush thread → AppContext → ImGui → GLFW.

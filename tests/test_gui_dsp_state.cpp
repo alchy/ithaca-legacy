@@ -220,3 +220,35 @@ TEST_CASE("Snapshot cele GUI sady pokryje DSP retezec i stranky mimo nej") {
     applyPagesState(snap, pages, 5);
     CHECK(ch.stage(1).get(0) != doctest::Approx(0.9f));
 }
+
+// -- Rozpoznani tovarniho profilu (stitek v paticce) ------------------------
+
+TEST_CASE("pagesAreFactory: cerstvy chain jede na tovarnich hodnotach") {
+    DspChain ch;  ch.prepare(48000.f, 512);
+    ithaca::dsp::IParamPage* pages[] = {
+        &ch.stage(0), &ch.stage(1), &ch.stage(2), &ch.stage(3),
+    };
+    CHECK(pagesAreFactory(pages, 4));
+}
+
+TEST_CASE("pagesAreFactory: zmena jedineho parametru staci") {
+    DspChain ch;  ch.prepare(48000.f, 512);
+    ithaca::dsp::IParamPage* pages[] = {
+        &ch.stage(0), &ch.stage(1), &ch.stage(2), &ch.stage(3),
+    };
+    const float def = ch.stage(1).param(0).def;
+    ch.stage(1).set(0, def + (ch.stage(1).param(0).max - def) * 0.5f);
+    CHECK_FALSE(pagesAreFactory(pages, 4));
+
+    // resetToDefaults to musi vratit — na tom stoji RESET TO FACTORY PROFILE.
+    for (auto* p : pages) p->resetToDefaults();
+    CHECK(pagesAreFactory(pages, 4));
+}
+
+TEST_CASE("pagesAreFactory nezavadi na prepinaci: enabled se neporovnava") {
+    // Tovarni stav prepinace neni v Param tabulce, takze ho stitek ignoruje.
+    DspChain ch;  ch.prepare(48000.f, 512);
+    ithaca::dsp::IParamPage* pages[] = { &ch.stage(0) };
+    ch.stage(0).setEnabled(!ch.stage(0).enabled());
+    CHECK(pagesAreFactory(pages, 1));
+}

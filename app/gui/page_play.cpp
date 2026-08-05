@@ -28,11 +28,11 @@ using theme::Fonts;
 
 namespace {
 
-// Jak casto se cisla vubec prekresluji. Pri 60 fps se hodnota meni rychleji,
-// nez ji stihnes precist — a nic z toho, co tady stoji, nepotrebuje rozliseni
-// jednoho snimku. Ctyrikrat za vterinu je porad citelne a uz to na hru
-// reaguje dost zive.
-constexpr float kHoldWin = 0.25f;
+// Jak casto se cisla vubec prekresluji. Kazdy snimek je zbytecne — hodnota se
+// meni rychleji, nez ji stihnes precist. Osmkrat za vterinu je kompromis:
+// cislo se da precist a zaroven ma stejnou zivost jako vlna v pozadi, takze
+// se ta dve na obrazovce nerozchazi.
+constexpr float kHoldWin = 0.125f;
 
 // Drzi MAXIMUM za okno. Spravne pro veliciny, u kterych je zajimava spicka:
 // pocet hlasu, zatez DSP, peak metr.

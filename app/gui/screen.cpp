@@ -12,6 +12,7 @@
 #include "theme.h"
 #include "layout.h"
 #include "widgets.h"
+#include "dsp_state.h"
 #include "dsp/dsp_stage.h"
 
 #include <algorithm>
@@ -54,18 +55,16 @@ void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
 
 // Paticka: stitek nastroje vlevo, audio rezim vpravo. Stitek je tu proto,
 // ze tohle JE celni panel nastroje — ne aplikace, ktera se jmenuje v titulku okna.
-void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
+void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w,
+            const char* profile) {
     const float px = wdg::fontPx(Fonts::small);
-    // Stitek nese i to, ze ktere sady parametru vychazi RESET PARAMS. Je to
-    // udaj, ktery clovek chce videt, aniz by kvuli nemu lezl na SYS — a stitek
-    // je jinak mrtve misto.
+    // Stitek nese i to, na kterem profilu nastroj prave jede. Je to udaj,
+    // ktery clovek chce videt, aniz by kvuli nemu lezl na SYS — a stitek je
+    // jinak mrtve misto.
     dl->AddText(Fonts::small, px, pos, Colors::dimmer, "ITHACA LEGACY");
-    {
+    if (profile) {
         const float x = pos.x + wdg::textW(Fonts::small, px, "ITHACA LEGACY") + 10.f;
-        const bool user = !ctx.state.defaults.empty();
-        const char* tag = user ? "[USER]" : "[FACTORY]";
-        dl->AddText(Fonts::small, px, ImVec2(x, pos.y),
-                    user ? Colors::dim : Colors::dimmer, tag);
+        dl->AddText(Fonts::small, px, ImVec2(x, pos.y), Colors::dim, profile);
     }
 
     char buf[48];
@@ -355,7 +354,11 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
         default: break;
     }
 
-    footer(ctx, dl, ImVec2(cx, foot_y), cw);
+    // Na kterem profilu nastroj jede. Staci porovnat s TOVARNIM: USER profil
+    // se uklada sam pri ukonceni, takze cokoli jineho nez tovarni hodnoty uz
+    // je uzivatelovo nastaveni — treti stav "rozpracovano" by nic nerekl.
+    const char* profile = pagesAreFactory(pages, n_pages) ? "[FACTORY]" : "[USER]";
+    footer(ctx, dl, ImVec2(cx, foot_y), cw, profile);
     lampRow(ctx, dl, ImVec2(cx, foot_y), cw);
 
     // Zavoj sporice: prekryje UZ NAKRESLENE ovladani barvou pozadi, a vlna se

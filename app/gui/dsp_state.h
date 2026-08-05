@@ -57,6 +57,31 @@ inline void applyPagesState(const std::map<std::string, DspStageState>& in,
     }
 }
 
+// -- Porovnani (stitek v paticce) -------------------------------------------
+// Jede nastroj na tovarnim profilu, nebo uz na uzivatelskem? USER profil se
+// uklada sam pri ukonceni, takze staci porovnat s tovarnim: cokoli jineho uz
+// je uzivatelovo nastaveni.
+//
+// Hodnoty se porovnavaji s toleranci: projdou float konverzi a u nekterych
+// stranek jeste clampem do rozsahu odvozeneho z banky.
+inline bool nearlyEq(float a, float b) {
+    const float d = a - b;
+    const float m = (a < 0.f ? -a : a);
+    return (d < 0.f ? -d : d) <= 1e-3f * (m > 1.f ? m : 1.f);
+}
+
+// Jen HODNOTY parametru proti Param::def. Enabled a volic se neporovnavaji:
+// tovarni stav prepinacu neni v Param tabulce a resetToDefaults ho u DSP
+// stage nechava byt.
+inline bool pagesAreFactory(ithaca::dsp::IParamPage* const* pages, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (!pages[i]) continue;
+        for (int j = 0; j < pages[i]->paramCount(); ++j)
+            if (!nearlyEq(pages[i]->param(j).def, pages[i]->get(j))) return false;
+    }
+    return true;
+}
+
 // -- Cely chain -------------------------------------------------------------
 
 // Chain -> state. Volano kazdy frame z render loopu, aby persistence videla

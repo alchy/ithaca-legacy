@@ -199,37 +199,40 @@ void pageSys(AppContext& ctx, const Rect& r,
         if (hit >= 0) ctx.setAudioBlockSize(kVal[hit]);
     }
 
-    // -- Uzivatelske defaulty ----------------------------------------------
-    // SAVE AS DEFAULT ulozi VSECHNY stranky parametru (MASTER, RESONANCE
-    // i cely DSP retezec) do state.json jako sekci "defaults". RESET PARAMS
-    // pak vraci prave na ne — na to, co si uzivatel oznacil za spravne
-    // naladeni, ne na tovarni Param::def, ktery o jeho bance nic nevi.
-    // Ktera z obou variant plati, sviti ve stitku v paticce.
+    // -- Profily -----------------------------------------------------------
+    // Nastroj zna dva profily:
+    //
+    //   FACTORY  zapeceny v binarce (Param::def na kazde strance). Nemenny,
+    //            nezavisly na state.json — zachranna sit, na kterou se da
+    //            vzdy vratit.
+    //   USER     to, jak ma nastroj nastaveny uzivatel. Uklada se do
+    //            state.json jako sekce "defaults" a pokryva VSECHNY stranky
+    //            parametru vcetne DSP retezce.
+    //
+    // USER profil se uklada SAM pri ukonceni programu (viz main.cpp), takze
+    // cim nastroj vypnes, s tim ho zase zapnes. Tlacitko tady dela totez, jen
+    // hned — hodi se, kdyz si chces stav pojistit jeste pred hranim.
+    //
+    // Na kterem profilu nastroj jede, sviti ve stitku v paticce.
     {
-        const bool have = !ctx.state.defaults.empty();
         const L::Row row = L::splitRow(ImVec2(r.lo.x, m.btn_y), r.w(),
                                        L::Dims::touch, 2);
 
         ImGui::SetCursorScreenPos(row.at(0));
-        if (wdg::button("##savedef", "SAVE AS DEFAULT", row.cell))
+        if (wdg::button("##setuser", "SET CURRENT AS USER PROFILE", row.cell))
             snapshotPages(ctx.state.defaults, pages, n_pages);
 
         ImGui::SetCursorScreenPos(row.at(1));
-        if (wdg::button("##reset", "RESET PARAMS", row.cell)) {
-            if (have) {
-                // Vlastni snapshot smi vratit i DSP retezec a RESONANCE LAYER:
-                // neni to destruktivni prekvapeni, je to navrat k tomu, co si
-                // uzivatel sam ulozil.
-                applyPagesState(ctx.state.defaults, pages, n_pages);
-            } else {
-                // Tovarni cesta. DSP retezec se ZAMERNE nechava byt — smazani
-                // celeho retezce jednim klepnutim by prekvapilo. Poradi stranek
-                // (0 = MASTER, 1 = RESONANCE, dal DSP stage) urcuje main.cpp
-                // a stejny predpoklad dela i dispatch v screen.cpp.
-                constexpr int kFactoryPages = 2;
-                for (int i = 0; i < n_pages && i < kFactoryPages; ++i)
-                    pages[i]->resetToDefaults();
-            }
+        if (wdg::button("##factory", "RESET TO FACTORY PROFILE", row.cell)) {
+            // Cely retezec vcetne DSP: tlacitko rika FACTORY PROFILE, takze
+            // polovicaty reset by lhal.
+            for (int i = 0; i < n_pages; ++i) pages[i]->resetToDefaults();
+            // A rovnou i USER profil — jinak by ho pri ukonceni prepsal
+            // automaticky uklad a uzivatel by mel v souboru dve ruzne verze
+            // podle toho, jestli mezitim neco zmenil. Takhle je stav po
+            // kliknuti jednoznacny: obe kopie jsou tovarni.
+            ctx.state.defaults.clear();
+            snapshotPages(ctx.state.defaults, pages, n_pages);
         }
     }
 }
