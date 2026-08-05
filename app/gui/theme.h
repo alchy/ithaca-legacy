@@ -35,6 +35,23 @@ struct Colors {
     static constexpr ImU32 error     = IM_COL32(0xcf, 0xe0, 0xff, 255); // inverzni blok
     static constexpr ImU32 hot       = IM_COL32(0xff, 0xff, 0xff, 255); // spicka metru
 
+    // Prechod mezi dvema barvami. Pouziva se na obarveni vlny do cervena
+    // pri blizeni ke clippingu — jedina zamerna vyjimka z modre palety,
+    // protoze pretizeni nejde ukazat jasem (vlna uz je pri nem nejjasnejsi).
+    static ImU32 lerp(ImU32 a, ImU32 b, float t) {
+        t = (t < 0.f) ? 0.f : (t > 1.f ? 1.f : t);
+        auto ch = [&](int sh) {
+            const float x = (float)((a >> sh) & 0xFF);
+            const float y = (float)((b >> sh) & 0xFF);
+            return (ImU32)(x + (y - x) * t) & 0xFFu;
+        };
+        return ch(0) | (ch(8) << 8) | (ch(16) << 16) | (ch(24) << 24);
+    }
+
+    // Prehlceni. Odstiny cervene, do kterych vlna prechazi od -9 dB k 0 dB.
+    static constexpr ImU32 clip_lo = IM_COL32(0xff, 0xa0, 0x6b, 255); // -9 dB
+    static constexpr ImU32 clip_hi = IM_COL32(0xff, 0x3b, 0x3b, 255); //  0 dB
+
     static ImVec4 v(ImU32 c) {
         return ImVec4(( c        & 0xFF) / 255.f,
                       ((c >>  8) & 0xFF) / 255.f,

@@ -109,6 +109,20 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     follow(wv.env_l, std::clamp(rms_l / ref, 0.f, 1.f));
     follow(wv.env_r, std::clamp(rms_r / ref, 0.f, 1.f));
 
+    // Viditelnost: rychle nabehne, ale vyhasina pomalu (~4 s), aby vizualizace
+    // po dohrani jeste chvili dozila misto aby zmizela rezem. Prah je
+    // ABSOLUTNI — kdyby se poustel z normalizovane urovne, auto-rozsah by
+    // v tichu zesilil sum a vlna by nezhasla nikdy.
+    const float lvl = std::max(rms_l, rms_r);
+    const float vis_target = (lvl > 2.0e-4f) ? 1.f : 0.f;
+    wv.vis += (vis_target - wv.vis) * (vis_target > wv.vis ? 0.14f : 0.006f);
+
+    // Blizkost prehlceni: od -9 dB (0) k 0 dB (1). Bere skutecny peak metr,
+    // ktery ma vlastni decay, takze kratka spicka zustane chvili videt.
+    const float pk = std::max(ctx.engine.masterPeakL(), ctx.engine.masterPeakR());
+    const float pk_db = (pk > 1e-6f) ? 20.f * std::log10(pk) : -120.f;
+    wv.clip = std::clamp((pk_db + 9.f) / 9.f, 0.f, 1.f);
+
     // Nova hodnota do historie: HLASITOST bloku (0..1), ne znamenkova spicka.
     auto absPeak = [](const float* v, int n) {
         float m = 0.f;
@@ -161,8 +175,13 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     dl->PushClipRect(wave_lo, wave_hi, true);
     for (const Ribbon& R : ribs) {
         const float env = R.right ? wv.env_r : wv.env_l;
-        // I v tichu se pozadi nepatrne vlni, aby panel nepusobil zamrzle.
-        const float amp = room * R.scale * (0.16f + 0.80f * env);
+        // Amplituda i sytost jdou s viditelnosti — vlna se pri utichnuti
+        // zaroven splaskne a vytrati, misto aby zustala viset jako prazdny vzor.
+        const float amp = room * R.scale * (0.14f + 0.86f * env) * wv.vis;
+        // Od -9 dB se stuha zacne barvit do cervena, v 0 dB je cervena.
+        const ImU32 col = Colors::lerp(
+            Colors::lerp(R.col, Colors::clip_lo, std::min(wv.clip * 2.f, 1.f)),
+            Colors::clip_hi, std::max(0.f, wv.clip * 2.f - 1.f));
         const float* hist = R.right ? wv.hist_r : wv.hist_l;
 
         for (int i = 0; i < kPts; ++i) {
@@ -190,7 +209,7 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
             const float hv = hsum / (float)hcnt;
             pts[i] = v * (0.28f + 0.72f * hv);
         }
-        glow(pts, kPts, amp, R.col, R.alpha * vis, R.th);
+        glow(pts, kPts, amp, col, R.alpha * vis * wv.vis, R.th);
     }
     dl->PopClipRect();
 }

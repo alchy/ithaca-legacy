@@ -77,6 +77,13 @@ struct PanelState {
         // znamena drzet modulaci trvale na dorazu (vypadalo to jako clipping).
         float norm_rms  = 0.f;            // pro obalku
         float norm_peak = 0.f;            // pro posuvnou historii
+        // Viditelnost cele vizualizace. Kdyz se nehraje, pozvolna vyhasne —
+        // vcetne nosne vlny — aby pri prochazeni menu nerusila. Rizeno
+        // ABSOLUTNIM prahem, ne normalizovanou urovni: auto-rozsah v tichu
+        // zesili sum a vizualizace by nikdy nezhasla.
+        float vis = 0.f;
+        // Blizkost clippingu 0..1 (od -9 dB do 0 dB). Barvi vlnu do cervena.
+        float clip = 0.f;
         // Posuvna historie hlasitosti (0..1, NE znamenkova spicka): kazdy frame
         // vstoupi zleva jedna nova hodnota a starsi se odsouvaji doprava — vlna
         // tim PLYNE, protoze se prehrava. Pri 60 fps trva pruchod sirkou ~2 s.
