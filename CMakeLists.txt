@@ -203,6 +203,7 @@ if(TARGET imgui AND TARGET glfw)
         app/gui/embedded_fonts.cpp
         app/gui/log_subscriber.cpp
         app/gui/screen.cpp
+        app/gui/splash.cpp
         app/gui/page_play.cpp
         app/gui/page_bank.cpp
         app/gui/page_params.cpp

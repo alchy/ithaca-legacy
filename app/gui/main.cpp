@@ -5,6 +5,7 @@
 // (screen.cpp kresli panel, sem patri jen debounce a overlay) → uloz → shutdown.
 #include "app_context.h"
 #include "pages.h"
+#include "splash.h"
 #include "master_page.h"
 #include "resonance_page.h"
 #include "dsp_state.h"
@@ -341,7 +342,11 @@ int main(int argc, char* argv[]) {
 
         const float W = (float)ctx.state.window.w;
         const float H = (float)ctx.state.window.h;
+
+        // Panel se kresli vzdy — splash se pres nej jen prolne, takze na konci
+        // animace uz je pod nim hotovy panel a neni videt zadny skok.
         renderScreen(ctx, pages, kPages);
+        const bool splash = renderSplash(ctx, W, H);
 
         // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci) —
         // panely meni stage primo, takze bez tohoto by je saveState nevidel.
@@ -351,7 +356,10 @@ int main(int argc, char* argv[]) {
         // Async bank reload: completion (GUI vlakno) + modalni overlay.
         ctx.pollReloadCompletion();
         const bool license_bad = ctx.bankLicenseInvalid();
-        {
+        if (!splash) {
+            // Behem uvodni obrazovky se modal nekresli — prvni load uz je
+            // videt na ni samotne a dva prekryvajici se progresy by byly zmatek.
+            //
             // Prodleva + prolnuti. Licence se ukaze hned (je to chyba, ktera
             // ceka na potvrzeni), prubeh nacitani az kdyz opravdu trva —
             // jinak by kratky load jen problikl pres cely panel.

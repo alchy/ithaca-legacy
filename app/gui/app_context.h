@@ -117,6 +117,11 @@ struct PanelState {
     float overlay_a = 0.f;
     float overlay_t = 0.f;
 
+    // Uvodni obrazovka: cas od startu, prolnuti pri odchodu, a jestli uz dobehla.
+    float splash_t    = 0.f;
+    float splash_fade = 0.f;
+    bool  splash_done = false;
+
     // -- LOG --
     bool log_unseen = false;     // kontrolka sviti, dokud se stranka neotevre
 
@@ -166,6 +171,11 @@ struct AppContext {
     void pollReloadCompletion();
     const ithaca::BankLoadProgress& loadProgress() const { return load_progress_; }
     bool bankLicenseInvalid() const { return bank_license_invalid_; }
+
+    // Povedlo se otevrit audio device? Drive se vysledek jen zalogoval a zahodil;
+    // uvodni obrazovka ho ukazuje jako krok initu, takze si ho musime pamatovat.
+    bool audioOk() const { return audio_ok_; }
+    bool audio_ok_ = false;
     void clearBankLicenseInvalid() { bank_license_invalid_ = false; }
 
     std::thread              reload_thread_;

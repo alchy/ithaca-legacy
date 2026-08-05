@@ -76,7 +76,8 @@ bool AppContext::initFromState(const GuiState& s) {
     // Audio device start. AudioCallback je free funkce + userdata (Engine*).
     // Musi byt AZ po engine.init() (voice pool / stream / ringy uz priprazene).
     audio = std::make_unique<ithaca::AudioDevice>();
-    if (!audio->start(&audioCallback, &engine, cfg.sample_rate, cfg.block_size)) {
+    audio_ok_ = audio->start(&audioCallback, &engine, cfg.sample_rate, cfg.block_size);
+    if (!audio_ok_) {
         log::Logger::default_().log("gui", log::Severity::Warning,
             "Cannot open audio device");
         // Bez audio device GUI stale funguje (uzivatel uvidi engine metriky a
