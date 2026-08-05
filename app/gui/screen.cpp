@@ -39,11 +39,11 @@ void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
     const bool clip = ctx.engine.masterPeakL() >= 0.999f ||
                       ctx.engine.masterPeakR() >= 0.999f;
     float x = pos.x;
-    wdg::lamp(dl, ImVec2(x, pos.y), "UNDERRUN", ur, Colors::error);
+    wdg::lamp(dl, ImVec2(x, pos.y), "UNDERRUN", ur ? 1.f : 0.f, Colors::warn);
     x += wdg::lampW("UNDERRUN");
-    wdg::lamp(dl, ImVec2(x, pos.y), "CLIP", clip, Colors::error);
+    wdg::lamp(dl, ImVec2(x, pos.y), "CLIP", clip ? 1.f : 0.f, Colors::warn);
     x += wdg::lampW("CLIP");
-    wdg::lamp(dl, ImVec2(x, pos.y), "LOG", ctx.panels.log_unseen, Colors::warn);
+    wdg::lamp(dl, ImVec2(x, pos.y), "LOG", ctx.panels.log_unseen ? 1.f : 0.f, Colors::warn);
     (void)w;
 }
 

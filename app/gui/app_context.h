@@ -107,6 +107,10 @@ struct PanelState {
     // pozadi pak vezme stred plochy.
     float scope_center_y = 0.f;
 
+    // Vyhlazene rozsviceni MIDI lamp 0..1. Engine dava jen ano/ne s oknem
+    // 120 ms; bez vyhlazeni by lampa cvakala. Casova konstanta ~200 ms.
+    float lamp_note = 0.f, lamp_off = 0.f;
+
     // -- LOG --
     bool log_unseen = false;     // kontrolka sviti, dokud se stranka neotevre
 

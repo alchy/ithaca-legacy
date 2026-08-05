@@ -161,15 +161,6 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     const float ly = r.hi.y - stat_h;
     const float sy = ly + 26.f;
 
-    // MIDI vstup: kratke bliknuti na note-on / note-off. Ukazuje, ze DO nas
-    // neco chodi — coz je jina informace nez ze neco hraje.
-    {
-        float x = r.hi.x - wdg::lampW("NOTE") - wdg::lampW("OFF");
-        wdg::lamp(dl, ImVec2(x, ly), "NOTE", ctx.engine.noteOnRecent(120.f), Colors::ink);
-        x += wdg::lampW("NOTE");
-        wdg::lamp(dl, ImVec2(x, ly), "OFF", ctx.engine.noteOffRecent(120.f), Colors::dim);
-    }
-
     char v[16], rs[16], pk[16], ds[16], su[16];
     std::snprintf(v,  sizeof(v),  "%d", (int)holdMax(ps.h_voices,
                   (float)ctx.engine.activeVoices(), now_s));
@@ -181,7 +172,14 @@ void pagePlay(AppContext& ctx, const Rect& r) {
                   holdMax(ps.h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
     std::snprintf(su, sizeof(su), "%d", (int)ctx.engine.pedalCC());
 
-    const float col = r.w() / 5.f;
+    // Sest sloupcu: pet cisel + dvojice MIDI lamp jako sesty. Lampy se
+    // rozsvecuji a hasnou plynule (~200 ms), aby necvakaly — vyhlazeni je
+    // vazane na cas, ne na snimek, takze vypada stejne pri jakemkoli fps.
+    const float k = 1.f - std::exp(-dt / 0.20f);
+    ps.lamp_note += ((ctx.engine.noteOnRecent(120.f)  ? 1.f : 0.f) - ps.lamp_note) * k;
+    ps.lamp_off  += ((ctx.engine.noteOffRecent(120.f) ? 1.f : 0.f) - ps.lamp_off)  * k;
+
+    const float col = r.w() / 6.f;
     statNum(dl, ImVec2(r.lo.x,             sy), "VOICES",  v);
     statNum(dl, ImVec2(r.lo.x + col,       sy), "RESO",    rs);
     statNum(dl, ImVec2(r.lo.x + col * 2.f, sy), "PEAK dB", pk);
@@ -190,6 +188,15 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     // Pedal uz nema vlastni bar — jeho INDIKACE je pata stuha v pozadi
     // (viz screen.cpp). Tady zustava jen cislo, protoze udaj se ma cist presne.
     statNum(dl, ImVec2(r.lo.x + col * 4.f, sy), "SUSTAIN", su);
+
+    // MIDI vstup pod sebou v sestem sloupci. Ukazuje, ze do nas neco CHODI —
+    // coz je jina informace nez ze neco hraje.
+    {
+        const float px = wdg::fontPx(Fonts::small);
+        const float nx = r.lo.x + col * 5.f;
+        wdg::lamp(dl, ImVec2(nx, sy),               "NOTE", ps.lamp_note, Colors::ink);
+        wdg::lamp(dl, ImVec2(nx, sy + px + 12.f),   "OFF",  ps.lamp_off,  Colors::dim);
+    }
 }
 
 } // namespace ithaca::gui

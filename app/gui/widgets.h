@@ -53,13 +53,15 @@ inline ImVec2 invField(ImDrawList* dl, ImVec2 pos, ImFont* f, const char* txt,
 }
 
 // -- Kontrolka --------------------------------------------------------------
-// Tmava, dokud stav nenastane. Zhasla kontrolka musi byt videt, aby bylo
-// poznat, ze existuje — proto se kresli i zhasla, jen nejtlumeneji.
-inline void lamp(ImDrawList* dl, ImVec2 pos, const char* label, bool on,
+// Bere INTENZITU 0..1, ne ano/ne: nahle prepnuti cvaka, plynuly nabeh
+// a dozniv se cte klidneji. Zhasla kontrolka musi byt videt, aby bylo poznat,
+// ze existuje — proto se kresli i zhasla, jen nejtlumeneji.
+inline void lamp(ImDrawList* dl, ImVec2 pos, const char* label, float intensity,
                  ImU32 on_col = Colors::warn) {
     const float px = fontPx(Fonts::small);
     const float r  = 4.f;
-    const ImU32 c  = on ? on_col : Colors::dimmer;
+    const ImU32 c  = Colors::lerp(Colors::dimmer, on_col,
+                                  std::clamp(intensity, 0.f, 1.f));
     dl->AddCircleFilled(ImVec2(pos.x + r, pos.y + px * 0.5f), r, c, 12);
     dl->AddText(Fonts::small, px, ImVec2(pos.x + r * 2.f + 6.f, pos.y), c, label);
 }
