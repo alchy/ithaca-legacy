@@ -223,10 +223,17 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
             const int hn = PanelState::Wave::kHist;
             const int c = (int)(u * (hn - 1));
             float hsum = 0.f; int hcnt = 0;
-            for (int d = -3; d <= 3; ++d) {          // prostorove vyhlazeni
-                const int k = (wv.head - (c + d) + hn * 3) % hn;
+            // Prostorove vyhlazeni. Okno se MUSI orezat na rozsah historie:
+            // pri modulu pres kruhovy buffer by na levem okraji sahlo "pred
+            // nejnovejsi vzorek" a pretecklo na konec kruhu, kde lezi data
+            // stara dve vteriny — amplituda tam skocila a vlna se tvrde zlomila.
+            for (int d = -3; d <= 3; ++d) {
+                const int cd = c + d;
+                if (cd < 0 || cd >= hn) continue;
+                const int k = (wv.head - cd + hn * 3) % hn;
                 hsum += hist[k]; ++hcnt;
             }
+            if (hcnt == 0) hcnt = 1;
             const float hv = hsum / (float)hcnt;
             pts[i] = v * (0.28f + 0.72f * hv);
         }
