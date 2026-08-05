@@ -132,6 +132,14 @@ void pageBank(AppContext& ctx, const Rect& r) {
                     Colors::dim, up);
     }
 
+    // -- Rozpocet spodku ----------------------------------------------------
+    // RELOAD dostava CELY radek u spodni hrany: je to jedina akce stranky,
+    // a jako uzke tlacitko v rohu se na dotyku hleda hur nez pas pres celou
+    // sirku. Nad nim fakta o nactene bance, nad nimi teprve seznam.
+    const float btn_y  = r.hi.y - L::Dims::touch;
+    const float fy     = btn_y - px_s - 16.f;
+    const float sep_y  = fy - 10.f;
+
     // -- Seznam ------------------------------------------------------------
     const float list_top = r.lo.y + px_s + 14.f;
     const float row = L::Dims::row_h;
@@ -142,7 +150,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
         dl->AddText(Fonts::ui, px_u, ImVec2(r.lo.x, y), Colors::dimmer,
                     "no bank in this folder");
     }
-    for (int i = 0; i < n && y + row <= r.hi.y - 96.f; ++i, y += row + 4.f) {
+    for (int i = 0; i < n && y + row <= sep_y - L::Dims::gap; ++i, y += row + 4.f) {
         const auto& e = ps.banks[(size_t)i];
         const bool loaded = (e.dir == ctx.state.bank_path);
 
@@ -167,8 +175,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
     }
 
     // -- Fakta o NACTENE bance --------------------------------------------
-    const float fy = r.hi.y - 84.f;
-    dl->AddLine(ImVec2(r.lo.x, fy - 10.f), ImVec2(r.hi.x, fy - 10.f), Colors::line);
+    dl->AddLine(ImVec2(r.lo.x, sep_y), ImVec2(r.hi.x, sep_y), Colors::line);
 
     const char* type = "\xE2\x80\x94";
     switch (ctx.engine.bankType()) {
@@ -189,13 +196,17 @@ void pageBank(AppContext& ctx, const Rect& r) {
                   ctx.engine.recordedNotes(), ctx.engine.loadedSamples());
     dl->AddText(Fonts::small, px_s, ImVec2(x, fy), Colors::dim, facts);
 
-    if (ctx.bank_truncated_)
-        dl->AddText(Fonts::small, px_s, ImVec2(r.lo.x, fy + px_s + 8.f),
-                    Colors::warn, "INCOMPLETE - bank exceeded RAM budget");
+    // Varovani na tentyz radek vpravo — pod nim uz je akcni pas.
+    if (ctx.bank_truncated_) {
+        const char* w = "INCOMPLETE - bank exceeded RAM budget";
+        dl->AddText(Fonts::small, px_s,
+                    ImVec2(r.hi.x - wdg::textW(Fonts::small, px_s, w), fy),
+                    Colors::warn, w);
+    }
 
-    // RELOAD vpravo dole.
-    ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 160.f, fy + 4.f));
-    if (wdg::button("##reload", "RELOAD") && !ctx.state.bank_path.empty())
+    // RELOAD pres celou sirku.
+    ImGui::SetCursorScreenPos(ImVec2(r.lo.x, btn_y));
+    if (wdg::button("##reload", "RELOAD", r.w()) && !ctx.state.bank_path.empty())
         ctx.requestBankReload(ctx.state.bank_path);
 }
 

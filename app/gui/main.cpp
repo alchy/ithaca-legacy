@@ -37,13 +37,15 @@ static void glfwErrorCb(int err, const char* desc) {
 
 static void printUsage(const char* argv0) {
     std::fprintf(stderr,
-        "Pouziti: %s [--bank-dir <path>] [--log-level <lvl>] [--help]\n"
-        "  --bank-dir <path>  adresar s bankami (dropdown bude scanovat odtud);\n"
-        "                     persistovano v state.json, staci zadat jednou.\n"
+        "Pouziti: %s [--bank-dir <path>] [--log-level <lvl>] [--fullscreen] [--help]\n"
+        "  --bank-dir <path>  adresar, od ktereho zacina prochazeni bank na strance\n"
+        "                     BANK; persistovano v state.json, staci zadat jednou.\n"
         "  --log-level <lvl>  debug | info | warn | error | fatal (default info);\n"
         "                     persistovano v state.json, menitelne i za behu v UI.\n"
-        "  --fullscreen       bez dekoraci pres celou obrazovku (rezim panelu);\n"
-        "                     na zabudovanem displeji nema byt videt titulek okna.\n"
+        "  --fullscreen       rezim panelu: okno bez dekoraci pres celou obrazovku.\n"
+        "                     Na displeji zabudovanem v nastroji nema byt videt\n"
+        "                     titulek okna. Vyzaduje bezici display server (X11/\n"
+        "                     Wayland) — z hole konzole okno nevznikne.\n"
         "  --help, -h         tato napoveda\n", argv0);
 }
 

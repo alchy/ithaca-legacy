@@ -43,7 +43,10 @@ void ensureBankList(AppContext& ctx);
 
 void pagePlay (AppContext& ctx, const Rect& r);
 void pageBank (AppContext& ctx, const Rect& r);
-void pageSys  (AppContext& ctx, const Rect& r);
+// pageSys dostava POLE vsech stranek parametru: SAVE AS DEFAULT / RESET
+// PARAMS pracuji genericky se vsemi (MASTER, RESONANCE i DSP stage).
+void pageSys  (AppContext& ctx, const Rect& r,
+               ithaca::dsp::IParamPage** pages, int n_pages);
 void pageLog  (AppContext& ctx, const Rect& r);
 
 // Genericky renderer libovolne IParamPage — slouzi strankam TONE, RESO

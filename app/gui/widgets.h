@@ -108,7 +108,8 @@ inline void waveLine(ImDrawList* dl, float x0, float w, float base_y,
 // Vraci true, kdyz se hodnota v tomhle framu zmenila.
 inline bool paramSlider(const char* id, const char* label, float* v,
                         float lo, float hi, const char* fmt,
-                        bool enabled = true) {
+                        bool enabled = true, float trk_h = 0.f) {
+    if (trk_h <= 0.f) trk_h = L::Dims::param_trk;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float  w = ImGui::GetContentRegionAvail().x;
@@ -119,16 +120,9 @@ inline bool paramSlider(const char* id, const char* label, float* v,
     const ImU32 val_c = enabled ? Colors::ink   : Colors::dimmer;
     const ImU32 fil_c = enabled ? Colors::fill  : Colors::trough;
 
-    // Popisek vlevo, hodnota vpravo, na spolecne uctare.
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), fmt, *v);
-    dl->AddText(Fonts::small, lab_px, ImVec2(o.x, o.y + 4.f), lab_c, label);
-    dl->AddText(Fonts::ui, val_px,
-                ImVec2(o.x + w - textW(Fonts::ui, val_px, buf), o.y), val_c, buf);
-
     // Track.
-    const float ty = o.y + L::Dims::param_lab;
-    const float th = L::Dims::param_trk;
+    const float ty = o.y;
+    const float th = trk_h;
     dl->AddRectFilled(ImVec2(o.x, ty), ImVec2(o.x + w, ty + th), Colors::trough);
     dl->AddRect(ImVec2(o.x, ty), ImVec2(o.x + w, ty + th), Colors::line);
 
@@ -141,8 +135,34 @@ inline bool paramSlider(const char* id, const char* label, float* v,
     dl->AddRectFilled(ImVec2(gx - 3.f, ty - 2.f), ImVec2(gx + 3.f, ty + th + 2.f),
                       enabled ? Colors::ink : Colors::dimmer);
 
+    // Popisek a hodnota DOVNITR pasu. Usetri to 24 px na kazdem parametru
+    // (na strance DSP jsou ctyri) a pas pak vypada jako tah faderu, ne jako
+    // formularove pole s popiskem nad nim.
+    //
+    // Text lezi castecne na vyplni a castecne na korytu, takze jedna barva
+    // vzdy nekde splyne (svetly popisek na svetle vyplni zmizel). Kresli se
+    // proto DVAKRAT, orezany na hrane vyplne: nad vyplni inverzne, nad korytem
+    // normalne. Az po zarazce, aby ji text prekryl a ne naopak.
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), fmt, *v);
+    auto splitText = [&](ImFont* f, float px, ImVec2 pos, ImU32 c_over, ImU32 c_out,
+                         const char* txt) {
+        dl->PushClipRect(ImVec2(o.x, ty), ImVec2(gx, ty + th), true);
+        dl->AddText(f, px, pos, c_over, txt);
+        dl->PopClipRect();
+        dl->PushClipRect(ImVec2(gx, ty), ImVec2(o.x + w, ty + th), true);
+        dl->AddText(f, px, pos, c_out, txt);
+        dl->PopClipRect();
+    };
+    const ImU32 over_c = enabled ? Colors::inv_fg : Colors::dimmer;
+    splitText(Fonts::small, lab_px,
+              ImVec2(o.x + 14.f, ty + (th - lab_px) * 0.5f), over_c, lab_c, label);
+    splitText(Fonts::ui, val_px,
+              ImVec2(o.x + w - textW(Fonts::ui, val_px, buf) - 14.f,
+                     ty + (th - val_px) * 0.5f), over_c, val_c, buf);
+
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y));
-    ImGui::InvisibleButton(id, ImVec2(w, L::Dims::param_lab + th));
+    ImGui::InvisibleButton(id, ImVec2(w, th));
 
     bool changed = false;
     if (enabled && ImGui::IsItemActive()) {
@@ -161,12 +181,20 @@ inline bool paramSlider(const char* id, const char* label, float* v,
 // -- Akcni tlacitko ---------------------------------------------------------
 // Pro akce (RELOAD, RESCAN, RESET). Prepinac by k nim vykreslil stav ON/OFF,
 // coz u akce nedava smysl — nic se nezapina.
-inline bool button(const char* id, const char* label) {
+//
+// `fixed_w > 0` = tlacitko dostane presne tuhle sirku (roztazeny radek). Bez
+// nej se sirka meri z popisku, coz je v mrizce nezadouci: sousedni tlacitka by
+// koncila jinde.
+inline bool button(const char* id, const char* label, float fixed_w = 0.f) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float px = fontPx(Fonts::small);
-    const float w  = textW(Fonts::small, px, label) + 44.f;
+    const float tw = textW(Fonts::small, px, label);
+    const float w  = (fixed_w > 0.f) ? fixed_w : (tw + 44.f);
     const float h  = L::Dims::touch * 0.62f;
+    // Pri mereni z popisku zustava text vlevo (tak to vypada v liste),
+    // pri pevne sirce se centruje — jinak by v siroke bunce plaval u kraje.
+    const float tx = (fixed_w > 0.f) ? (o.x + (w - tw) * 0.5f) : (o.x + 22.f);
 
     ImGui::SetCursorScreenPos(o);
     const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, L::Dims::touch));
@@ -174,22 +202,25 @@ inline bool button(const char* id, const char* label) {
 
     if (down) {
         dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Colors::inv_bg);
-        dl->AddText(Fonts::small, px, ImVec2(o.x + 22.f, o.y + (h - px) * 0.5f),
+        dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
                     Colors::inv_fg, label);
     } else {
         dl->AddRect(o, ImVec2(o.x + w, o.y + h), Colors::line);
-        dl->AddText(Fonts::small, px, ImVec2(o.x + 22.f, o.y + (h - px) * 0.5f),
+        dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
                     Colors::ink, label);
     }
     return clicked;
 }
 
 // -- ON/OFF prepinac --------------------------------------------------------
-inline bool toggle(const char* id, const char* label, bool on) {
+// `fixed_w` viz button(). Popisek zustava vlevo a stav vpravo i v roztazene
+// bunce — to je cteni "co / jak", ktere se centrovanim rozpadne.
+inline bool toggle(const char* id, const char* label, bool on, float fixed_w = 0.f) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float px = fontPx(Fonts::small);
-    const float w  = textW(Fonts::small, px, label) + 60.f;
+    const float w  = (fixed_w > 0.f) ? fixed_w
+                                     : (textW(Fonts::small, px, label) + 60.f);
     const float h  = L::Dims::touch * 0.62f;   // opticky mensi, zona plna (nize)
 
     if (on) {
@@ -213,35 +244,93 @@ inline bool toggle(const char* id, const char* label, bool on) {
     return clicked;
 }
 
+// -- Pole v roztazenem radku ------------------------------------------------
+// Jedna bunka radku rozdeleneho pres layout::splitRow: ramecek nebo inverzni
+// vypln + text NA STREDU. Text se orezava na bunku — jmena IR jsou cesty
+// k souboru a ta se do bunky nevejdou.
+inline void cell(ImDrawList* dl, ImVec2 p, ImVec2 q, const char* txt, bool on,
+                 ImFont* f = nullptr) {
+    if (!f) f = Fonts::small;
+    const float px = fontPx(f);
+    if (on) dl->AddRectFilled(p, q, Colors::inv_bg);
+    else    dl->AddRect(p, q, Colors::line);
+    const float tw = textW(f, px, txt);
+    dl->PushClipRect(ImVec2(p.x + 4.f, p.y), ImVec2(q.x - 4.f, q.y), true);
+    dl->AddText(f, px,
+                ImVec2(p.x + (q.x - p.x - tw) * 0.5f,
+                       p.y + (q.y - p.y - px) * 0.5f),
+                on ? Colors::inv_fg : Colors::dim, txt);
+    dl->PopClipRect();
+}
+
+// -- Radek voleb ------------------------------------------------------------
+// Volby jako pole vedle sebe, ROZTAZENE na celou zadanou sirku. Na dotyku lepsi
+// nez rozbalovaci seznam: jedno klepnuti misto dvou a vzdy je videt cela
+// nabidka. Vraci index, na ktery se kliklo (jinak -1).
+//
+// Sirka bunky se NEODVIJI od delky textu — jinak by radky pod sebou koncily
+// jinde a kazdy cil by byl jinak velky.
+// `hit_h` = vyska dotykove zony (0 = auto). Zona je vyssi nez vykreslena bunka,
+// takze ji volajici musi omezit roztecí radku — jinak by zony sousednich radku
+// zasahovaly do sebe a klepnuti by padalo do spatneho.
+inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items,
+                   int n, int cur, float h = 48.f, float hit_h = 0.f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const L::Row row = L::splitRow(pos, w, h, n);
+    if (hit_h <= 0.f)
+        hit_h = (row.rows > 1) ? (h + row.gap) : L::Dims::touch;
+    hit_h = std::max(hit_h, h);
+    int hit = -1;
+
+    for (int i = 0; i < n; ++i) {
+        const ImVec2 p = row.at(i), q = row.end(i);
+        const bool on = (i == cur);
+        cell(dl, p, q, items[i], on);
+
+        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y - (hit_h - h) * 0.5f));
+        char bid[48]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
+        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, hit_h)) && !on) hit = i;
+    }
+    return hit;
+}
+
+// Vyska, kterou takovy radek zabere (kvuli zalomeni ji volajici nezna dopredu).
+inline float chipRowHeight(float w, int n, float h = 48.f) {
+    return L::splitRow(ImVec2(0, 0), w, h, n).height();
+}
+
 // -- Radek zalozek ----------------------------------------------------------
 // Zvyraznena zalozka je zaroven nadpis stranky, proto stranky nemaji vlastni
 // hlavicku. Vraci true pri zmene.
+// `square` = dlazdice se kresli jako CTVEREC o strane h, vycentrovany v bunce,
+// ale dotykova zona zustava cela bunka. Ctverec pres celou sirku bunky by pri
+// sedmi zalozkach mel 175 px na vysku a stranka DSP by se uz nevesla; takhle
+// je videt ctverec, prst ma k dispozici vic.
 inline bool tabBar(const char* id, const char* const* labels, int n, int& sel,
-                   float h = L::Dims::tab_h) {
+                   float h, bool square = false) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float  total = ImGui::GetContentRegionAvail().x;
-    const float  gap = 3.f;
-    const float  w = (total - gap * (n - 1)) / (float)n;
-    const float  px = fontPx(Fonts::small);
+    const L::Row row = L::splitRow(o, total, h, n, L::Dims::tab_gap);
     bool changed = false;
 
     for (int i = 0; i < n; ++i) {
-        const ImVec2 p(o.x + i * (w + gap), o.y);
-        const ImVec2 q(p.x + w, p.y + h);
+        const ImVec2 p = row.at(i);
         const bool on = (i == sel);
-        if (on) dl->AddRectFilled(p, q, Colors::inv_bg);
-        else    dl->AddRect(p, q, Colors::line);
-        const float tw = textW(Fonts::small, px, labels[i]);
-        dl->AddText(Fonts::small, px,
-                    ImVec2(p.x + (w - tw) * 0.5f, p.y + (h - px) * 0.5f),
-                    on ? Colors::inv_fg : Colors::dim, labels[i]);
+        if (square) {
+            const float s  = std::min(h, row.cell);
+            const float mx = p.x + row.cell * 0.5f;
+            cell(dl, ImVec2(mx - s * 0.5f, p.y), ImVec2(mx + s * 0.5f, p.y + s),
+                 labels[i], on);
+        } else {
+            cell(dl, p, row.end(i), labels[i], on);
+        }
 
         ImGui::SetCursorScreenPos(p);
         char bid[32]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
-        if (ImGui::InvisibleButton(bid, ImVec2(w, h)) && !on) { sel = i; changed = true; }
+        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, h)) && !on) { sel = i; changed = true; }
     }
-    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + h));
+    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + row.height()));
     ImGui::Dummy(ImVec2(total, 0.f));
     return changed;
 }

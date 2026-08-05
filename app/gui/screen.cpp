@@ -273,7 +273,10 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
 
     // Rozvrzeni se pocita PRED kreslenim, protoze pozadi potrebuje vedet,
     // kde konci lista a kde zacinaji kontrolky.
-    const float top    = lcd_lo.y + pad + L::Dims::tab_h + L::Dims::gap;
+    // Zalozky jsou ctverce o strane rovne SIRCE bunky (viz squareTabH), takze
+    // vyska radku se pocita az tady, kdyz je znama sirka displeje.
+    const float tab_h  = L::squareTabH(cw, PAGE_COUNT, lcd_hi.y - lcd_lo.y);
+    const float top    = lcd_lo.y + pad + tab_h + L::Dims::gap;
     const float foot_y = lcd_hi.y - pad - L::Dims::foot_h;
     const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, foot_y - L::Dims::gap) };
 
@@ -311,9 +314,9 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
     ImGui::PushItemWidth(cw);
     {
         // tabBar cte GetContentRegionAvail().x; docasne zuzime pres child.
-        ImGui::BeginChild("##tabhost", ImVec2(cw, L::Dims::tab_h), false,
+        ImGui::BeginChild("##tabhost", ImVec2(cw, tab_h), false,
                           ImGuiWindowFlags_NoScrollbar);
-        wdg::tabBar("tab", kTabs, PAGE_COUNT, page);
+        wdg::tabBar("tab", kTabs, PAGE_COUNT, page, tab_h, true);
         ImGui::EndChild();
     }
     ImGui::PopItemWidth();
@@ -332,7 +335,7 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
         case PAGE_TONE: if (n_pages > 0) pageParams(ctx, body, *pages[0]); break;
         case PAGE_RESO: if (n_pages > 1) pageParams(ctx, body, *pages[1]); break;
         case PAGE_DSP:  if (n_pages > 2) pageDsp(ctx, body, pages + 2, n_pages - 2); break;
-        case PAGE_SYS:  pageSys(ctx, body); break;
+        case PAGE_SYS:  pageSys(ctx, body, pages, n_pages); break;
         case PAGE_LOG:  pageLog(ctx, body); break;
         default: break;
     }

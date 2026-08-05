@@ -167,7 +167,7 @@ TEST_CASE("Migrace v4 -> v5: ploche DSP klice se prevedou na genericke") {
     }
     auto l = loadState(p);
     REQUIRE(l.has_value());
-    CHECK(l->schema_version == 5);          // po nacteni se uklada jako v5
+    CHECK(l->schema_version == 6);          // po nacteni se uklada jako v6
     CHECK(l->dsp.at("CONVOLVER").enabled == true);
     CHECK(l->dsp.at("CONVOLVER").choice == 2);
     CHECK(l->dsp.at("CONVOLVER").params.at("mix") == doctest::Approx(0.4f));
@@ -384,4 +384,71 @@ TEST_CASE("UTF-8 v ceste projde beze zmeny (bez escapovani)") {
     REQUIRE(l.has_value());
     CHECK(l->bank_path == s.bank_path);
     std::filesystem::remove(p);
+}
+
+// -- Uzivatelske defaulty (sekce "defaults", v6) -----------------------------
+
+TEST_CASE("Defaults: round-trip cele sekce vcetne volice a enabled") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_defaults_rt.json";
+
+    GuiState s;
+    // Snapshot pokryva i stranky, ktere zadna DSP stage nejsou.
+    s.defaults["MASTER"]    = {true, -1, {{"master_db", -3.5f}, {"release_ms", 320.f}}};
+    s.defaults["RESONANCE"] = {false, -1, {{"reso_gain_db", -8.f}}};
+    s.defaults["CONVOLVER"] = {true, 1, {{"mix", 0.42f}}};
+    // Zivy stav se lisi od defaultu — obe sekce musi prezit nezavisle.
+    s.dsp["CONVOLVER"]      = {false, 0, {{"mix", 0.9f}}};
+
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+
+    CHECK(l->defaults.at("MASTER").params.at("master_db") == doctest::Approx(-3.5f));
+    CHECK(l->defaults.at("MASTER").params.at("release_ms") == doctest::Approx(320.f));
+    CHECK(l->defaults.at("RESONANCE").enabled == false);
+    CHECK(l->defaults.at("CONVOLVER").choice == 1);
+    CHECK(l->defaults.at("CONVOLVER").params.at("mix") == doctest::Approx(0.42f));
+    // Klicove: "dsp." a "defaults." se nesmi michat.
+    CHECK(l->dsp.at("CONVOLVER").choice == 0);
+    CHECK(l->dsp.at("CONVOLVER").enabled == false);
+    CHECK(l->dsp.at("CONVOLVER").params.at("mix") == doctest::Approx(0.9f));
+    CHECK(l->defaults.size() == 3);
+
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Defaults: v5 soubor je bez nich a nacte se prazdny (ne chyba)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v5_nodefaults.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 5,\n  \"bank_path\": \"/x\",\n"
+             "  \"dsp.AGC.enabled\": true,\n  \"dsp.AGC.target_rms\": 0.2\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->defaults.empty());             // zadne uzivatelske → RESET jede tovarne
+    CHECK(l->dsp.at("AGC").params.at("target_rms") == doctest::Approx(0.2f));
+    CHECK(l->schema_version == 6);
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Defaults: prazdna mapa nenechá v JSONu visici carku") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_defaults_empty.json";
+    GuiState s;                              // zadne dsp, zadne defaults
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());                  // parsovatelne = carka nevisi
+    CHECK(l->defaults.empty());
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Defaults se ucastni porovnani pro persistence debounce") {
+    using namespace ithaca::gui;
+    GuiState a, b;
+    CHECK(a == b);
+    b.defaults["MASTER"] = {true, -1, {{"master_db", -1.f}}};
+    CHECK_FALSE(a == b);                     // jinak by se snapshot neulozil
 }

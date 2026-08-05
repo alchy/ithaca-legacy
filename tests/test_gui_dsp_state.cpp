@@ -133,3 +133,90 @@ TEST_CASE("resetToDefaults funguje pro kazdou stage chainu") {
             CHECK(st.get(j) == doctest::Approx(st.param(j).def));
     }
 }
+
+// -- Snapshot pole stranek (SAVE AS DEFAULT / RESET PARAMS na SYS) -----------
+// Tohle je mechanismus, ktery uzivatelske defaulty poriduje i vraci. Musi jet
+// pres IParamPage, ne pres DspStage — jinak by nepokryl MASTER a RESONANCE.
+
+namespace {
+
+// Minimalni stranka mimo DSP retezec: presne ten pripad, kvuli kteremu
+// snapshotPages nesmi byt vazany na DspChain.
+struct FakePage : ithaca::dsp::IParamPage {
+    float a = 1.f, b = 2.f;
+    bool  on = false;
+    int   choice = -1;
+    const char* name() const override { return "FAKE"; }
+    int paramCount() const override { return 2; }
+    const ithaca::dsp::Param& param(int i) const override { return kP[i]; }
+    float get(int i) const override { return i == 0 ? a : b; }
+    void  set(int i, float v) override { (i == 0 ? a : b) = v; }
+    bool  hasEnable() const override { return true; }
+    bool  enabled() const override { return on; }
+    void  setEnabled(bool v) override { on = v; }
+    bool  meter(float&, const char*&) const override { return false; }
+    int   choiceCount() const override { return 3; }
+    const char* choiceName(int) const override { return "X"; }
+    int   currentChoice() const override { return choice; }
+    void  selectChoice(int i) override { choice = i; }
+    static constexpr ithaca::dsp::Param kP[2] = {
+        {"alpha", "ALPHA", 0.f, 10.f, 1.f, "%.1f", false},
+        {"beta",  "BETA",  0.f, 10.f, 2.f, "%.1f", false},
+    };
+};
+
+} // namespace
+
+TEST_CASE("snapshotPages/applyPagesState projdou i strankou mimo DspChain") {
+    FakePage fp;
+    fp.a = 7.5f; fp.b = 3.25f; fp.on = true; fp.choice = 2;
+    ithaca::dsp::IParamPage* pages[] = { &fp };
+
+    std::map<std::string, DspStageState> snap;
+    snapshotPages(snap, pages, 1);
+
+    REQUIRE(snap.count("FAKE") == 1);
+    CHECK(snap.at("FAKE").params.at("alpha") == doctest::Approx(7.5f));
+    CHECK(snap.at("FAKE").params.at("beta")  == doctest::Approx(3.25f));
+    CHECK(snap.at("FAKE").enabled == true);
+    CHECK(snap.at("FAKE").choice == 2);
+
+    // Rozhaz vsechno a vrat ze snapshotu.
+    fp.a = 0.f; fp.b = 0.f; fp.on = false; fp.choice = 0;
+    applyPagesState(snap, pages, 1);
+
+    CHECK(fp.a == doctest::Approx(7.5f));
+    CHECK(fp.b == doctest::Approx(3.25f));
+    CHECK(fp.on == true);
+    CHECK(fp.choice == 2);
+}
+
+TEST_CASE("applyPagesState ignoruje stranku, ktera ve snapshotu neni") {
+    FakePage fp;  fp.a = 5.f;
+    ithaca::dsp::IParamPage* pages[] = { &fp };
+
+    std::map<std::string, DspStageState> snap;
+    snap["JINA_STRANKA"] = {true, -1, {{"alpha", 99.f}}};
+    applyPagesState(snap, pages, 1);
+
+    CHECK(fp.a == doctest::Approx(5.f));   // nedotcena
+}
+
+TEST_CASE("Snapshot cele GUI sady pokryje DSP retezec i stranky mimo nej") {
+    DspChain ch;  ch.prepare(48000.f, 512);
+    FakePage fp;
+    ithaca::dsp::IParamPage* pages[] = {
+        &fp, &ch.stage(0), &ch.stage(1), &ch.stage(2), &ch.stage(3),
+    };
+
+    std::map<std::string, DspStageState> snap;
+    snapshotPages(snap, pages, 5);
+    CHECK(snap.size() == 5);
+    CHECK(snap.count("FAKE") == 1);
+    CHECK(snap.count("AGC") == 1);
+
+    // Zmena po snapshotu se musi dat vratit.
+    ch.stage(1).set(0, 0.9f);
+    applyPagesState(snap, pages, 5);
+    CHECK(ch.stage(1).get(0) != doctest::Approx(0.9f));
+}
