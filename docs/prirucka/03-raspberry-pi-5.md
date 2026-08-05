@@ -416,11 +416,28 @@ uvidíš:
 ./build/ithaca-gui --bank-dir /cesta/k/bankám --log-level info
 ```
 
-Otevře se okno a v indikačním pruhu uvidíš dlaždice VOICES / RESONANCE /
-MAIN RINGS / RESO RINGS / DSP LOAD. Hraj.
+Na zabudovaném panelu přidej `--fullscreen` — okno pak nemá dekorace a zabere
+celou plochu:
 
-**DSP LOAD** by měl při pravidelné zátěži (akord + sustain) zůstat stabilně
-**pod 60 %**. Pokud kolísá nad 100 % → underrun a audio vypadává.
+```bash
+./build/ithaca-gui --fullscreen --bank-dir /cesta/k/bankám
+```
+
+> GLFW potřebuje běžící display server. Z holé konzole bez X11/Wayland se okno
+> nevytvoří; přes SSH je nutné `DISPLAY=:0`.
+
+Panel se otevře na stránce **PLAY**: uprostřed vybraná banka, pod ní řádek
+`VOICES · RESO · PEAK dB · DSP · SUSTAIN` a dvojice MIDI kontrolek. Hraj.
+
+**DSP** (procento zátěže DSP řetězce) by měl při pravidelné zátěži
+(akord + sustain) zůstat stabilně **pod 60 %**. Pokud kolísá nad 100 % →
+underrun a audio vypadává; rozsvítí se kontrolka `UNDERRUN` v patičce.
+
+Stav streamovacích ringů (`MAIN` / `RESO`) najdeš na stránce **SYS** — podle
+nich se ladí `MAX RESONANCE`. Úroveň logu jde přepnout za běhu na **SYS**
+i přímo na **LOG**.
+
+Podrobný popis panelu je v [H-gui](../reference/H-gui.md).
 
 ### Test latence
 
@@ -525,10 +542,10 @@ tasky tam smí být taky, ale audio vlákno tam má přednost.
 
 ### Audio vypadává při hraní
 
-- Sleduj dlaždici `DSP LOAD` (GUI) nebo `dspLoadPeak()` (CLI log).
+- Sleduj sloupec `DSP` na stránce PLAY (GUI) nebo `dspLoadPeak()` (CLI log).
 - > 100 %: zvyš `--block-size` z 256 na 512 (lepší tolerance, vyšší latence).
-- `MAIN RINGS` / `RESO RINGS` červené = stream underrun → banka je na pomalém
-  úložišti (SD karta?), migruj na NVMe.
+- Kontrolka `UNDERRUN` v patičce (a `MAIN` / `RESO` na stránce SYS) = stream
+  underrun → banka je na pomalém úložišti (SD karta?), migruj na NVMe.
 - Pokles napětí pod zátěží: `vcgencmd get_throttled` — nenulová hodnota =
   napájecí problém, použij oficiální 27W PSU.
 

@@ -39,7 +39,8 @@ namespace Dims {
     inline constexpr float tab_gap   = 3.f;
     inline constexpr float subtab_h= 56.f;    // druhy radek (jen DSP) — mensi, ale nad prst
     inline constexpr float lamp_h  = 26.f;    // radek kontrolek nad spodnim okrajem
-    inline constexpr float foot_h  = 34.f;    // stitek + SR/buffer dole
+    // Vyska paticky se NEDRZI konstanty: je to presne vyska radku textu, aby
+    // paticka mela od spodni hrany stejne odsazeni jako zalozky od horni.
 
     // Seznam (vytah v PLAY, banky, log).
     inline constexpr float row_h      = 60.f;   // radek seznamu

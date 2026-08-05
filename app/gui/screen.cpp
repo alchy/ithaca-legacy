@@ -277,7 +277,12 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
     // vyska radku se pocita az tady, kdyz je znama sirka displeje.
     const float tab_h  = L::squareTabH(cw, PAGE_COUNT, lcd_hi.y - lcd_lo.y);
     const float top    = lcd_lo.y + pad + tab_h + L::Dims::gap;
-    const float foot_y = lcd_hi.y - pad - L::Dims::foot_h;
+    // Paticka sedi u SPODNI hrany se stejnym odsazenim, jake ma pas zalozek
+    // od horni (`pad`). Drive mela vlastni pasmo `foot_h` a text se kreslil
+    // u jeho horniho okraje, takze pod nim zbyvalo 20 px navic a paticka
+    // opticky plavala nad spodkem displeje.
+    const float foot_h = wdg::fontPx(Fonts::small);
+    const float foot_y = lcd_hi.y - pad - foot_h;
     const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, foot_y - L::Dims::gap) };
 
     ctx.panels.lcd_center_y = (lcd_lo.y + lcd_hi.y) * 0.5f;

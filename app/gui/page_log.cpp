@@ -10,7 +10,9 @@
 #include "widgets.h"
 #include "theme.h"
 #include "layout.h"
+#include "util/log.h"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace ithaca::gui {
@@ -18,6 +20,22 @@ namespace ithaca::gui {
 namespace L = ithaca::gui::layout;
 using theme::Colors;
 using theme::Fonts;
+
+float logLevelRow(AppContext& ctx, ImVec2 pos, float w, float cell_h, float hit_h) {
+    static const char* kLv[] = { "debug","info","warn","error","fatal","off" };
+    int cur = 1;
+    for (int i = 0; i < IM_ARRAYSIZE(kLv); ++i)
+        if (ctx.state.log_level == kLv[i]) { cur = i; break; }
+
+    const int hit = wdg::chipRow("##lvl", pos, w, kLv, IM_ARRAYSIZE(kLv), cur,
+                                 cell_h, hit_h);
+    if (hit >= 0) {
+        ctx.state.log_level = kLv[hit];
+        log::Logger::default_().setMinSeverity(
+            log::severity_from_string(ctx.state.log_level.c_str(), log::Severity::Info));
+    }
+    return wdg::chipRowHeight(w, IM_ARRAYSIZE(kLv), cell_h);
+}
 
 void pageLog(AppContext& ctx, const Rect& r) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -27,8 +45,17 @@ void pageLog(AppContext& ctx, const Rect& r) {
     const float px = wdg::fontPx(Fonts::small);
     const float row = px + 8.f;
 
+    // Volba urovne u SPODNI hrany, vypis nad ni: nejnovejsi radky tak lezi
+    // hned nad ovladanim, kterym se s nimi hybe.
+    const float cell_h = 48.f;
+    const float sel_y  = r.hi.y - L::Dims::touch;
+    logLevelRow(ctx, ImVec2(r.lo.x, sel_y + (L::Dims::touch - cell_h) * 0.5f),
+                r.w(), cell_h, L::Dims::touch);
+
+    const float list_h = sel_y - L::Dims::gap - r.lo.y;
+
     // Kolik radku se vejde; zobrazujeme konec (nejnovejsi dole).
-    const int fits = (int)((r.h() - 4.f) / row);
+    const int fits = (int)((list_h - 4.f) / row);
     const int from = (n > fits) ? n - fits : 0;
 
     float y = r.lo.y;

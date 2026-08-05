@@ -41,6 +41,12 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
 // vychozi stranka, takze cekat na navstevu BANKu nejde.
 void ensureBankList(AppContext& ctx);
 
+// Uroven logu jako radek voleb. Sdileji ji stranky SYS i LOG: na SYS proto,
+// ze je to nastaveni, na LOG proto, ze potreba ji zmenit vznika prave ve
+// chvili, kdy vypis ctes. Jedna definice, aby se nabidka ani chovani
+// nerozesly. Vraci vysku, kterou radek zabral.
+float logLevelRow(AppContext& ctx, ImVec2 pos, float w, float cell_h, float hit_h);
+
 void pagePlay (AppContext& ctx, const Rect& r);
 void pageBank (AppContext& ctx, const Rect& r);
 // pageSys dostava POLE vsech stranek parametru: SAVE AS DEFAULT / RESET

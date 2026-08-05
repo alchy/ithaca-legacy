@@ -50,7 +50,7 @@ compile-time konstanty (typicky `static const Param kParams[]` ve třídě stage
 | `id` | `const char*` | Stabilní klíč pro persistenci (JSON), např. `"threshold_db"` |
 | `label` | `const char*` | Popisek v UI, velká písmena, např. `"THRESHOLD"` |
 | `min`, `max`, `def` | `float` | Rozsah a výchozí hodnota; `set()` klampuje do `[min,max]` |
-| `fmt` | `const char*` | Printf formát pro `DecoSlider`, např. `"%.1f dB"` |
+| `fmt` | `const char*` | Printf formát pro `wdg::paramSlider`, např. `"%.1f dB"` |
 | `readonly` | `bool` | Pokud `true`, GUI slider nezobrazí editaci (zatím nevyužito) |
 
 #### `struct IParamPage`
@@ -285,11 +285,12 @@ Na rozdíl od AGC používá `decay_coeff` (exponenciální klouzavý průměr),
 po rezonanci. `DspChain` je přímý člen `Engine` (`dsp_`); přístup pro GUI přes
 `Engine::dspChain()` → `DspChain::stage(i)`.
 
-**GUI — parametrický panel** (`app/gui/panel_params.cpp`, `panel_config.cpp`,
-`main.cpp`): `renderParamPage(ctx, page)` přijímá `IParamPage&`; GUI předává
+**GUI — parametrický panel** (`app/gui/page_params.cpp`, `screen.cpp`,
+`main.cpp`): `pageParams(ctx, rect, page)` přijímá `IParamPage&`; GUI předává
 reference na stage jako `IParamPage*` (pole `pages[6]` v `main.cpp`: MASTER,
-RESONANCE, CONVOLVER, AGC, ENHANCER, LIMITER). `renderConfigPanel` zobrazuje
-LED enable toggle — volá `setEnabled()`. Hodnoty se načítají/ukládají přes
+RESONANCE, CONVOLVER, AGC, ENHANCER, LIMITER — pořadí, na které spoléhá
+dispatch stránek i tovární RESET). Hlavička stránky zobrazuje ON/OFF
+přepínač — volá `setEnabled()`. Hodnoty se načítají/ukládají přes
 `get()`/`set()` — atomické, bez zámku, bezpečné přes vlákna.
 
 **Multithreading — atomické parametry**: Všechny user-facing parametry

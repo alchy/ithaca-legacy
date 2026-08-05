@@ -119,8 +119,8 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 | `bank_loading_` | `atomic<bool>` | GUI vlákno / `reloadBank` (`store release`) → audio vlákno (`load acquire`) | release/acquire | „Graceful pause" guard pro bank reload; při `true` audio vrátí ticho |
 | `last_note_on_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOn`) → GUI vlákno (`noteOnRecent`) | relaxed/relaxed | Blikání NOTE indikátoru; 64b write je atomické na x86/arm64 |
 | `last_note_off_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOff`) → GUI vlákno (`noteOffRecent`) | relaxed/relaxed | Blikání OFF indikátoru |
-| `dsp_load_peak_` | `atomic<float>` | audio vlákno (processBlock, peak-hold s decay ~0.5 s) → GUI vlákno (`dspLoadPeak`) | relaxed/relaxed | DSP LOAD dlaždice: čas renderu / perioda bloku |
-| `last_overload_us_` | `atomic<uint64_t>` | audio vlákno (load ≥ 1.0) → GUI vlákno (`overloadRecent`) | relaxed/relaxed | Červené blikání DSP LOAD při minutí deadline |
+| `dsp_load_peak_` | `atomic<float>` | audio vlákno (processBlock, peak-hold s decay ~0.5 s) → GUI vlákno (`dspLoadPeak`) | relaxed/relaxed | Sloupec `DSP` na stránce PLAY: čas renderu / perioda bloku |
+| `last_overload_us_` | `atomic<uint64_t>` | audio vlákno (load ≥ 1.0) → GUI vlákno (`overloadRecent`) | relaxed/relaxed | Indikace přetížení při minutí deadline |
 | `block_epoch_` | `atomic<uint64_t>` | audio vlákno (tik na začátku každého `processBlock`) → non-RT (`waitForAudioQuiesce`, `blockEpoch()`) | seq_cst/seq_cst | **Block-epoch handshake** pro reload/recache: epoch+2 = in-flight blok doběhl a další blok viděl aktuální flagy |
 | `recache_target_` | `atomic<float>` | GUI vlákno (`rebuildResonanceCache`) → recache vlákno | release/acquire | Cílové layer dB pro bg rebuild bez torn readu `cfg_` |
 
