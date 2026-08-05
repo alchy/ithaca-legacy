@@ -10,6 +10,7 @@
 #include "dsp_state.h"
 #include "persistence.h"
 #include "theme.h"
+#include "widgets.h"
 #include "layout.h"
 
 #include "imgui.h"
@@ -18,6 +19,8 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cmath>
+#include <filesystem>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -61,80 +64,114 @@ struct Debouncer {
     }
 };
 
-// Fullscreen modalni overlay pres celou plochu: pohlti vsechen vstup (topmost
-// + SetNextWindowFocus). Kresli se ve dvou rezimech — prubeh nacitani banky,
-// nebo hlaseni o neplatne licenci, ktere drzi dokud uzivatel neklikne.
+// Modalni overlay pres celou plochu. Kresli se ve dvou rezimech: prubeh
+// nacitani banky, nebo hlaseni o neplatne licenci (to drzi dokud uzivatel
+// neklikne).
+//
+// DULEZITE — proc se prolina a proc ma zpozdeni: pakovana banka se nacte
+// za necelou vterinu a overlay pak jen problikl pres cely panel. Nastroj
+// takhle blikat nema. Proto se overlay vubec neobjevi u loadu kratsich nez
+// ~350 ms a nabiha i mizi prolnutim.
 void drawLoadingOverlay(ithaca::gui::AppContext& ctx, float W, float H,
-                        bool license_bad) {
+                        bool license_bad, float alpha) {
     using namespace ithaca::gui;
+    namespace L = ithaca::gui::layout;
+    using theme::Colors;
+    using theme::Fonts;
+    if (alpha <= 0.004f) return;
+
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({W, H});
     ImGui::SetNextWindowFocus();
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0x0a, 0x23, 0x59, 235));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
     ImGui::Begin("##loading", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoScrollbar);
 
-    const std::string bank_name =
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const auto A = [&](ImU32 c, float m = 1.f) {
+        return (c & 0x00FFFFFF)
+             | ((ImU32)(((c >> 24) & 0xFF) * alpha * m) << 24);
+    };
+
+    // Zatemneni panelu, ne prekryti — pod nim je porad videt, co se deje.
+    dl->AddRectFilled({0, 0}, {W, H}, A(IM_COL32(0x06, 0x16, 0x3c, 225)));
+
+    const float bw = 560.f;
+    const float bx = (W - bw) * 0.5f;
+    float y = H * 0.38f;
+    const float px_u = wdg::fontPx(Fonts::ui);
+    const float px_s = wdg::fontPx(Fonts::small);
+
+    const std::string bank =
         std::filesystem::path(ctx.state.bank_path).filename().string();
-    const float cw = 420.f;
-    ImGui::SetCursorPos({(W - cw) * 0.5f, H * 0.40f});
-    ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::ink));
-    ImGui::TextUnformatted(bank_name.c_str());
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0, 8});
 
     if (license_bad) {
-        // Licencovana banka selhala (license/MAC) — anglicky text bez progressu
-        // a RAM info; overlay drzi dokud uzivatel nepotvrdi klikem.
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::error));
-        ImGui::TextUnformatted("Soundbank is corrupted or license file is invalid.");
-        ImGui::TextUnformatted("Sampler is unable to load the bank.");
+        wdg::invField(dl, ImVec2(bx, y), Fonts::small, "LICENSE", 10.f, 0.f,
+                      A(Colors::inv_bg), A(Colors::inv_fg));
+        y += px_s * 1.45f + 16.f;
+        dl->AddText(Fonts::ui, px_u, ImVec2(bx, y), A(Colors::ink), bank.c_str());
+        y += px_u + 14.f;
+        dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dim),
+                    "Soundbank is corrupted or license file is invalid.");
+        y += px_s + 6.f;
+        dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dim),
+                    "Sampler is unable to load the bank.");
+        y += px_s + 22.f;
+        ImGui::SetCursorScreenPos(ImVec2(bx, y));
+        if (wdg::button("##lic_ok", "CONTINUE")) ctx.clearBankLicenseInvalid();
+        ImGui::End();
         ImGui::PopStyleColor();
-        ImGui::Dummy({0, 12});
-        if (ImGui::Button("Click to continue", ImVec2(cw, 0)))
-            ctx.clearBankLicenseInvalid();
-    } else {
-        const auto& p = ctx.loadProgress();
-        const int    phase  = p.phase.load(std::memory_order_relaxed);
-        const int    done   = p.done.load(std::memory_order_relaxed);
-        const int    total  = p.total.load(std::memory_order_relaxed);
-        const size_t mb     = p.bytes_loaded.load(std::memory_order_relaxed) / (1024 * 1024);
-        const size_t bud_mb = p.budget_bytes.load(std::memory_order_relaxed) / (1024 * 1024);
-        const bool   trunc  = p.truncated.load(std::memory_order_relaxed);
-        const float  frac   = ithaca::bankLoadFraction(phase, done, total);
-
-        char line[96];
-        if (phase == 2)
-            std::snprintf(line, sizeof(line), "Building resonance cache (%d/%d)", done, total);
-        else if (phase == 1)
-            std::snprintf(line, sizeof(line), "Loading samples (%d/%d)", done, total);
-        else
-            std::snprintf(line, sizeof(line), "Scanning bank...");
-
-        char memline[96];
-        if (bud_mb > 0)
-            std::snprintf(memline, sizeof(memline), "RAM: %zu / %zu MB (budget)", mb, bud_mb);
-        else
-            std::snprintf(memline, sizeof(memline), "RAM: %zu MB", mb);
-
-        ImGui::ProgressBar(frac, ImVec2(cw, 14));
-        ImGui::Dummy({0, 4});
-        ImGui::TextUnformatted(line);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::dim));
-        ImGui::TextUnformatted(memline);
-        ImGui::PopStyleColor();
-        if (trunc) {
-            ImGui::Dummy({0, 6});
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::Colors::v(theme::Colors::error));
-            ImGui::TextUnformatted(
-                "Bank exceeded RAM budget - loaded INCOMPLETE (see LOG)");
-            ImGui::PopStyleColor();
-        }
+        return;
     }
-    ImGui::EndGroup();
+
+    const auto& p = ctx.loadProgress();
+    const int    phase  = p.phase.load(std::memory_order_relaxed);
+    const int    done   = p.done.load(std::memory_order_relaxed);
+    const int    total  = p.total.load(std::memory_order_relaxed);
+    const size_t mb     = p.bytes_loaded.load(std::memory_order_relaxed) / (1024 * 1024);
+    const size_t bud_mb = p.budget_bytes.load(std::memory_order_relaxed) / (1024 * 1024);
+    const bool   trunc  = p.truncated.load(std::memory_order_relaxed);
+    const float  frac   = ithaca::bankLoadFraction(phase, done, total);
+
+    wdg::invField(dl, ImVec2(bx, y), Fonts::small, "LOADING", 10.f, 0.f,
+                  A(Colors::inv_bg), A(Colors::inv_fg));
+    y += px_s * 1.45f + 16.f;
+    dl->AddText(Fonts::ui, px_u, ImVec2(bx, y), A(Colors::ink), bank.c_str());
+    y += px_u + 16.f;
+
+    // Progres jako retez bloku — znakovy displej nema plynuly pruh.
+    constexpr int kSeg = 40;
+    const float seg_w = bw / (float)kSeg;
+    const int lit = (int)(frac * kSeg + 0.5f);
+    for (int i = 0; i < kSeg; ++i) {
+        const ImVec2 a(bx + i * seg_w + 1.f, y);
+        const ImVec2 b(bx + (i + 1) * seg_w - 1.f, y + 16.f);
+        if (i < lit) dl->AddRectFilled(a, b, A(Colors::inv_bg));
+        else         dl->AddRect(a, b, A(Colors::line));
+    }
+    y += 16.f + 12.f;
+
+    char line[96];
+    if (phase == 2)      std::snprintf(line, sizeof(line), "BUILDING RESONANCE CACHE  %d/%d", done, total);
+    else if (phase == 1) std::snprintf(line, sizeof(line), "LOADING SAMPLES  %d/%d", done, total);
+    else                 std::snprintf(line, sizeof(line), "SCANNING BANK");
+    dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dim), line);
+    y += px_s + 6.f;
+
+    char memline[96];
+    if (bud_mb > 0) std::snprintf(memline, sizeof(memline), "RAM  %zu / %zu MB", mb, bud_mb);
+    else            std::snprintf(memline, sizeof(memline), "RAM  %zu MB", mb);
+    dl->AddText(Fonts::small, px_s, ImVec2(bx, y), A(Colors::dimmer), memline);
+
+    if (trunc) {
+        y += px_s + 12.f;
+        wdg::invField(dl, ImVec2(bx, y), Fonts::small,
+                      "INCOMPLETE - EXCEEDED RAM BUDGET", 10.f, 0.f,
+                      A(Colors::inv_bg), A(Colors::inv_fg));
+    }
+
     ImGui::End();
     ImGui::PopStyleColor();
 }
@@ -314,8 +351,19 @@ int main(int argc, char* argv[]) {
         // Async bank reload: completion (GUI vlakno) + modalni overlay.
         ctx.pollReloadCompletion();
         const bool license_bad = ctx.bankLicenseInvalid();
-        if (ctx.reloadInProgress() || license_bad)
-            drawLoadingOverlay(ctx, W, H, license_bad);
+        {
+            // Prodleva + prolnuti. Licence se ukaze hned (je to chyba, ktera
+            // ceka na potvrzeni), prubeh nacitani az kdyz opravdu trva —
+            // jinak by kratky load jen problikl pres cely panel.
+            auto& ps = ctx.panels;
+            const float dt = ImGui::GetIO().DeltaTime;
+            const bool busy = ctx.reloadInProgress();
+            ps.overlay_t = busy ? (ps.overlay_t + dt) : 0.f;
+            const bool show = license_bad || (busy && ps.overlay_t > 0.35f);
+            const float k = 1.f - std::exp(-dt / 0.12f);
+            ps.overlay_a += ((show ? 1.f : 0.f) - ps.overlay_a) * k;
+            drawLoadingOverlay(ctx, W, H, license_bad, ps.overlay_a);
+        }
 
         // Persistence debounce. Porovnava se CELY GuiState (operator== =
         // default) — drive tu byl rucni retezec 30 poli, ktery vynechaval

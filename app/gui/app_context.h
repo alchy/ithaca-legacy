@@ -111,6 +111,12 @@ struct PanelState {
     // 120 ms; bez vyhlazeni by lampa cvakala. Casova konstanta ~200 ms.
     float lamp_note = 0.f, lamp_off = 0.f;
 
+    // Prolnuti modalniho overlaye 0..1 + jak dlouho uz load bezi.
+    // Kratke loady overlay VUBEC neukaze — jinak pri prepnuti banky panel
+    // znatelne problikne, coz nastroj delat nema.
+    float overlay_a = 0.f;
+    float overlay_t = 0.f;
+
     // -- LOG --
     bool log_unseen = false;     // kontrolka sviti, dokud se stranka neotevre
 
