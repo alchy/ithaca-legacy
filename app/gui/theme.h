@@ -16,7 +16,7 @@ namespace ithaca::gui::theme {
 struct Colors {
     // Displej
     static constexpr ImU32 lcd       = IM_COL32(0x0e, 0x2f, 0x7a, 255); // podsvicene pole
-    static constexpr ImU32 bezel     = IM_COL32(0x17, 0x18, 0x1a, 255); // ramecek = mrtva zona
+    static constexpr ImU32 bezel     = IM_COL32(0x00, 0x00, 0x00, 255); // ramecek = mrtva zona
     // Text (odstupnovany jas jedne barvy)
     static constexpr ImU32 ink       = IM_COL32(0xea, 0xf2, 0xff, 255); // plny jas
     static constexpr ImU32 dim       = IM_COL32(0xa8, 0xc0, 0xe8, 255); // tlumeny
