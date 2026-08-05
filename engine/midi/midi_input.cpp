@@ -96,8 +96,8 @@ void MidiInput::callback(double ts,
     const uint8_t data1  = (*msg)[1];
     const uint8_t data2  = (msg->size() > 2) ? (*msg)[2] : 0;
     const uint8_t type   = status & 0xF0;
-    // Jeden atomic load per event (GUI muze kanal menit za behu portu).
-    const int     chan   = self->channel_.load(std::memory_order_relaxed);
+    // Jeden atomic load per event (GUI muze masku menit za behu portu).
+    const uint16_t mask  = self->mask_.load(std::memory_order_relaxed);
 
     // DIAG: log kazdou prichozi MIDI udalost JESTE PRED channel filtrem — at
     // vidime, jestli nota vubec dorazi z hardwaru a na jakem kanale (ts = RtMidi
@@ -107,10 +107,10 @@ void MidiInput::callback(double ts,
             "RX %s midi=%d vel=%d ch=%d dt=%.4f%s",
             type == 0x90 ? "NoteOn " : "NoteOff", (int)data1, (int)data2,
             (int)(status & 0x0F), ts,
-            channelAccepts(chan, status) ? "" : " [FILTERED-OUT]");
+            maskAccepts(mask, status) ? "" : " [FILTERED-OUT]");
     }
 
-    if (!channelAccepts(chan, status)) return;
+    if (!maskAccepts(mask, status)) return;
 
     const int ch = (int)(status & 0x0F);
     switch (type) {

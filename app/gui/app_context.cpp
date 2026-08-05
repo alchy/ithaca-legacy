@@ -93,7 +93,7 @@ bool AppContext::initFromState(const GuiState& s) {
             if (ports[i].find(state.midi_port_name) != std::string::npos) {
                 // Kanal nastavit PRED open — callback muze bezet hned po
                 // otevreni portu a filtroval by podle stareho kanalu.
-                midi.setChannel(state.midi_channel);
+                midi.setChannelMask(state.midi_channel_mask);
                 if (midi.open(engine, (int)i)) {
                     state.midi_port_name = ports[i];   // ulozit presnou jmenovku
                     opened = true;

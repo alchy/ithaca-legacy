@@ -427,15 +427,19 @@ celou plochu:
 > nevytvoří; přes SSH je nutné `DISPLAY=:0`.
 
 Panel se otevře na stránce **PLAY**: uprostřed vybraná banka, pod ní řádek
-`VOICES · RESO · PEAK dB · DSP · SUSTAIN` a dvojice MIDI kontrolek. Hraj.
+`VOICES · RESO · RING · RING RESO · PEAK dB · DSP · SUSTAIN` a dvojice MIDI
+kontrolek. Hraj.
 
 **DSP** (procento zátěže DSP řetězce) by měl při pravidelné zátěži
 (akord + sustain) zůstat stabilně **pod 60 %**. Pokud kolísá nad 100 % →
 underrun a audio vypadává; rozsvítí se kontrolka `UNDERRUN` v patičce.
 
-Stav streamovacích ringů (`MAIN` / `RESO`) najdeš na stránce **SYS** — podle
-nich se ladí `MAX RESONANCE`. Úroveň logu jde přepnout za běhu na **SYS**
-i přímo na **LOG**.
+Sloupce `RING` a `RING RESO` jsou obsazenost streamovacích ringů — podle nich
+se ladí `MAX RESONANCE`. Úroveň logu jde přepnout za běhu na stránce **LOG**.
+
+MIDI kanály se na **SYS** zapínají jednotlivě (šestnáct polí ve dvou řádcích);
+všechny zapnuté = OMNI. Když zhasneš všechny, nepřijde žádné MIDI — panel to
+hlásí jako `NONE - MIDI MUTED`.
 
 Podrobný popis panelu je v [H-gui](../reference/H-gui.md).
 
@@ -544,8 +548,8 @@ tasky tam smí být taky, ale audio vlákno tam má přednost.
 
 - Sleduj sloupec `DSP` na stránce PLAY (GUI) nebo `dspLoadPeak()` (CLI log).
 - > 100 %: zvyš `--block-size` z 256 na 512 (lepší tolerance, vyšší latence).
-- Kontrolka `UNDERRUN` v patičce (a `MAIN` / `RESO` na stránce SYS) = stream
-  underrun → banka je na pomalém úložišti (SD karta?), migruj na NVMe.
+- Kontrolka `UNDERRUN` v patičce (a sloupce `RING` / `RING RESO` na PLAY) =
+  stream underrun → banka je na pomalém úložišti (SD karta?), migruj na NVMe.
 - Pokles napětí pod zátěží: `vcgencmd get_throttled` — nenulová hodnota =
   napájecí problém, použij oficiální 27W PSU.
 

@@ -21,7 +21,7 @@ TEST_CASE("Persistence round-trip") {
     s.max_resonance_voices = 16;
     s.window = {200, 300, 800, 600};
     s.log_level = "debug";
-    s.midi_channel = 4;   // 0-based; -1 = OMNI
+    s.midi_channel_mask = 0x0011;   // kanaly 1 a 5
 
     REQUIRE(saveState(p, s));
     auto loaded = loadState(p);
@@ -38,7 +38,7 @@ TEST_CASE("Persistence round-trip") {
     CHECK(loaded->window.w == 800);
     CHECK(loaded->window.h == 600);
     CHECK(loaded->log_level == "debug");
-    CHECK(loaded->midi_channel == 4);
+    CHECK(loaded->midi_channel_mask == 0x0011);
 
     std::filesystem::remove(p);
 }
@@ -167,7 +167,7 @@ TEST_CASE("Migrace v4 -> v5: ploche DSP klice se prevedou na genericke") {
     }
     auto l = loadState(p);
     REQUIRE(l.has_value());
-    CHECK(l->schema_version == 6);          // po nacteni se uklada jako v6
+    CHECK(l->schema_version == 7);          // po nacteni se uklada jako v7
     CHECK(l->dsp.at("CONVOLVER").enabled == true);
     CHECK(l->dsp.at("CONVOLVER").choice == 2);
     CHECK(l->dsp.at("CONVOLVER").params.at("mix") == doctest::Approx(0.4f));
@@ -303,7 +303,7 @@ TEST_CASE("window geometrie se sanitizuje (0x0 z minimalizovaneho okna nezabije 
     REQUIRE(st.has_value());
     CHECK(st->window.w >= 320);
     CHECK(st->window.h >= 240);
-    CHECK(st->midi_channel == -1);   // mimo rozsah → OMNI
+    CHECK(st->midi_channel_mask == 0xFFFF);   // mimo rozsah → vsechny kanaly
     std::filesystem::remove(p);
 }
 
@@ -430,7 +430,7 @@ TEST_CASE("Defaults: v5 soubor je bez nich a nacte se prazdny (ne chyba)") {
     REQUIRE(l.has_value());
     CHECK(l->defaults.empty());             // zadne uzivatelske → RESET jede tovarne
     CHECK(l->dsp.at("AGC").params.at("target_rms") == doctest::Approx(0.2f));
-    CHECK(l->schema_version == 6);
+    CHECK(l->schema_version == 7);
     std::filesystem::remove(p);
 }
 
@@ -451,4 +451,61 @@ TEST_CASE("Defaults se ucastni porovnani pro persistence debounce") {
     CHECK(a == b);
     b.defaults["MASTER"] = {true, -1, {{"master_db", -1.f}}};
     CHECK_FALSE(a == b);                     // jinak by se snapshot neulozil
+}
+
+// -- Maska MIDI kanalu (v7) --------------------------------------------------
+// Drive to byl jediny index (-1 = OMNI). Maska umi i podmnozinu kanalu a OMNI
+// z ni vyplyva (vsechny bity), takze to neni zvlastni rezim.
+
+TEST_CASE("Migrace v6 -> v7: midi_channel se prevede na masku") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v6_chan.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 6,\n  \"midi_channel\": 3\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->midi_channel_mask == (1u << 3));   // jen kanal 4
+    CHECK(l->schema_version == 7);
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Migrace v6 -> v7: OMNI (-1) se prevede na vsechny kanaly") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v6_omni.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 6,\n  \"midi_channel\": -1\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->midi_channel_mask == 0xFFFF);
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Maska prezije round-trip vcetne prazdne (zadny kanal)") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_chan_mask.json";
+    GuiState s;
+    s.midi_channel_mask = 0;            // vsechny zhasnute = zadne MIDI
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->midi_channel_mask == 0);   // NESMI se "opravit" na OMNI
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Novy klic ma prednost pred starym") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_chan_both.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 7,\n  \"midi_channel\": 3,\n"
+             "  \"midi_channel_mask\": 5\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->midi_channel_mask == 5);   // kanaly 1 a 3, ne odvozeny z indexu
+    std::filesystem::remove(p);
 }

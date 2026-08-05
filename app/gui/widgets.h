@@ -17,6 +17,7 @@
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
@@ -271,10 +272,15 @@ inline void cell(ImDrawList* dl, ImVec2 p, ImVec2 q, const char* txt, bool on,
 // Sirka bunky se NEODVIJI od delky textu — jinak by radky pod sebou koncily
 // jinde a kazdy cil by byl jinak velky.
 // `hit_h` = vyska dotykove zony (0 = auto). Zona je vyssi nez vykreslena bunka,
-// takze ji volajici musi omezit roztecí radku — jinak by zony sousednich radku
+// takze ji volajici musi omezit rozteci radku — jinak by zony sousednich radku
 // zasahovaly do sebe a klepnuti by padalo do spatneho.
-inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items,
-                   int n, int cur, float h = 48.f, float hit_h = 0.f) {
+//
+// `is_on(i)` rozhoduje, ktera bunka je zvyraznena. Predikat misto indexu proto,
+// ze radek slouzi jak vyberu jedne polozky (port, buffer), tak prepinani
+// nezavislych bitu (maska MIDI kanalu).
+template <class OnFn>
+int chipRowIf(const char* id, ImVec2 pos, float w, const char* const* items,
+              int n, OnFn is_on, float h = 48.f, float hit_h = 0.f) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const L::Row row = L::splitRow(pos, w, h, n);
     if (hit_h <= 0.f)
@@ -284,14 +290,31 @@ inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items
 
     for (int i = 0; i < n; ++i) {
         const ImVec2 p = row.at(i), q = row.end(i);
-        const bool on = (i == cur);
-        cell(dl, p, q, items[i], on);
+        cell(dl, p, q, items[i], is_on(i));
 
         ImGui::SetCursorScreenPos(ImVec2(p.x, p.y - (hit_h - h) * 0.5f));
         char bid[48]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
-        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, hit_h)) && !on) hit = i;
+        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, hit_h))) hit = i;
     }
     return hit;
+}
+
+// Vyber JEDNE polozky. Klepnuti na uz vybranou nic nedela (neni co menit).
+inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items,
+                   int n, int cur, float h = 48.f, float hit_h = 0.f) {
+    const int hit = chipRowIf(id, pos, w, items, n,
+                              [cur](int i) { return i == cur; }, h, hit_h);
+    return (hit == cur) ? -1 : hit;
+}
+
+// Prepinani NEZAVISLYCH bitu masky. Klepnuti na rozsvicenou ji zhasne
+// a naopak; sousedni bity zustavaji, jak byly.
+inline int chipRowMask(const char* id, ImVec2 pos, float w,
+                       const char* const* items, int n, uint32_t mask,
+                       int bit0 = 0, float h = 48.f, float hit_h = 0.f) {
+    return chipRowIf(id, pos, w, items, n,
+                     [mask, bit0](int i) { return ((mask >> (bit0 + i)) & 1u) != 0u; },
+                     h, hit_h);
 }
 
 // Vyska, kterou takovy radek zabere (kvuli zalomeni ji volajici nezna dopredu).

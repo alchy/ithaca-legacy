@@ -34,15 +34,30 @@ public:
     // Statika: vypsat dostupne MIDI vstupni porty (pro --midi-list).
     static std::vector<std::string> listPorts();
 
-    // Channel filtr: -1 = OMNI (vse), 0..15 = jen ten MIDI kanal (0-based).
-    // Atomic: zapisuje GUI (combo CH i za otevreneho portu), cte RtMidi
-    // callback thread — plain int byl formalni data race.
-    void setChannel(int ch) {
-        channel_.store((ch < 0 || ch > 15) ? -1 : ch, std::memory_order_relaxed);
+    // Channel filtr je MASKA 16 kanalu: bit i = kanal i+1 propousti.
+    // OMNI neni zvlastni rezim, je to proste maska se vsemi bity (0xFFFF) —
+    // uzivatel si ji na panelu naklika zapnutim vsech kanalu. Diky tomu je
+    // stav jednoznacny a jde nastavit i libovolna podmnozina kanalu, coz
+    // jediny int (-1 = OMNI) neumel.
+    //
+    // Atomic: zapisuje GUI (i za otevreneho portu), cte RtMidi callback
+    // thread — plain hodnota by byla formalni data race.
+    void setChannelMask(uint16_t mask) {
+        mask_.store(mask, std::memory_order_relaxed);
     }
-    int  channel() const { return channel_.load(std::memory_order_relaxed); }
-    // Cista testovatelna logika: prijmout zpravu se status bytem `status`
-    // pri zvolenem `channel` (-1 OMNI)? Channel = status & 0x0F.
+    uint16_t channelMask() const { return mask_.load(std::memory_order_relaxed); }
+
+    // Pohodli pro CLI a starsi volajici: -1 = OMNI, 0..15 = jediny kanal.
+    void setChannel(int ch) {
+        setChannelMask((ch < 0 || ch > 15) ? 0xFFFFu : (uint16_t)(1u << ch));
+    }
+
+    // Ciste testovatelne: prijmout zpravu se status bytem `status`?
+    // Kanal = status & 0x0F. Prazdna maska nepropusti nic — to je legitimni
+    // volba uzivatele (vsechny kanaly zhasnute), ne chyba.
+    static bool maskAccepts(uint16_t mask, uint8_t status) {
+        return ((mask >> (status & 0x0F)) & 1u) != 0u;
+    }
     static bool channelAccepts(int channel, uint8_t status) {
         if (channel < 0) return true;
         return (int)(status & 0x0F) == channel;
@@ -67,7 +82,7 @@ private:
     RtMidiIn*   midi_   = nullptr;
     Engine*     engine_ = nullptr;
     std::string port_name_;
-    std::atomic<int> channel_{-1};  // OMNI default
+    std::atomic<uint16_t> mask_{0xFFFFu};  // OMNI = vsechny kanaly
 };
 
 } // namespace ithaca

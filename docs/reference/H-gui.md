@@ -44,7 +44,7 @@ Písma jsou **zabudovaná v binárce** — za běhu se nečte žádný asset, je
 | `app_context.{h,cpp}` | Vlastník engine/audio/MIDI + `PanelState` |
 | `dsp_state.h` | Snapshot/obnova `IParamPage` — most `DspChain` ↔ `GuiState` |
 | `state_binding.h` | Most `GuiState` ↔ `Engine` |
-| `persistence.{h,cpp}` | `state.json`, schema v6 |
+| `persistence.{h,cpp}` | `state.json`, schema v7 |
 | `embedded_fonts.cpp` | Zabudovaná písma |
 | `log_subscriber.{h,cpp}` | Kruhový buffer log eventů |
 
@@ -81,19 +81,27 @@ Zvýrazněná záložka **je zároveň nadpis stránky**, takže stránky nemaj�
 
 Záložky jsou **čtverce o straně rovné šířce buňky** (~172 px na panelu 1280×720) — přepínání stránek je hlavní mechanismus ovládání, takže dostává největší plochu na panelu. Výška se počítá až za běhu (`layout::squareTabH`) ze šířky displeje, ne z konstanty; strop je `tab_h_max` a čtvrtina výšky, aby v širokém okně na PC nesnědly obrazovku.
 
-Pod obsahem je **patička**: štítek `ITHACA LEGACY` vlevo, kontrolky `UNDERRUN · CLIP · LOG` uprostřed, audio režim vpravo. Kontrolky měly dřív vlastní pás, který ukrajoval 36 px výšky na každé stránce — na 7" panelu citelně.
+Pod obsahem je **patička**: štítek `ITHACA LEGACY [USER]` / `[FACTORY]` vlevo, kontrolky `UNDERRUN · CLIP · LOG` uprostřed, audio režim vpravo. Značka za štítkem říká, ze které sady vychází `RESET PARAMS` — údaj, který chceš vidět, aniž bys kvůli němu lezl na SYS, a štítek je jinak mrtvé místo. Kontrolky měly dřív vlastní pás, který ukrajoval 36 px výšky na každé stránce — na 7" panelu citelně.
 
 Patička sedí u spodní hrany se **stejným odsazením, jaké má pás záložek od horní**. Dřív měla vlastní pásmo pevné výšky a text se kreslil u jeho horního okraje, takže pod ním zbývalo 20 px navíc a patička opticky plavala nad spodkem displeje.
 
 ### Stránky
 
-**PLAY** — stav i prohlížeč bank zároveň. Výtah: vybraná banka uprostřed inverzním polem, sousedi tlumeně. Sedí na **svislém středu displeje**, ne na středu vlastní plochy (ta je nesymetrická). Dole šest sloupců na společné účaři: `VOICES · RESO · PEAK dB · DSP · SUSTAIN` + dvojice MIDI lamp.
+**PLAY** — stav i prohlížeč bank zároveň. Výtah: vybraná banka uprostřed inverzním polem, sousedi tlumeně. Sedí na **svislém středu displeje**, ne na středu vlastní plochy (ta je nesymetrická).
+
+Dole osm sloupců na společné účaři: `VOICES · RESO · RING · RING RESO · PEAK dB · DSP · SUSTAIN` + dvojice MIDI lamp. Stav streamovacích ringů je tady, ne na SYS: odečítá se **při hraní** (podle něj se pozná, že banka nestíhá z disku), a SYS je stránka na nastavování, kam se za hraní neleze. Popisky jsou zkrácené — na osm sloupců není místo na `MAIN RINGS`.
+
+Čísla se překreslují **čtyřikrát za vteřinu**, ne každý snímek: při 60 fps se hodnota mění rychleji, než ji stihneš přečíst. `VOICES`, `RING`, `PEAK dB` a `DSP` drží maximum za okno (u špičky je zajímavá právě ona), `SUSTAIN` poslední hodnotu — max-hold by po puštění pedálu ještě chvíli ukazoval 127.
 
 **BANK** — procházení adresářů. Na panelu není klávesnice, takže cestu nelze napsat; bez `bank_search_dir` se prochází od adresáře startu. Zobrazují se jen adresáře, které vypadají jako banka — rozpoznání je **levná sonda** (existuje uvnitř `m###/` nebo `.ithaca`?), ne plný sken: procházení musí být okamžité. **RELOAD dostává celý řádek** u spodní hrany: je to jediná akce stránky a úzké tlačítko v rohu se prstem hledá hůř než pás přes celou šířku.
 
 **TONE / RESO / DSP** — jedou přes `pageParams`, generický renderer `IParamPage`. DSP má druhý řádek záložek pro čtyři stage a jeho ON/OFF přepínač i volič IR stojí v **jednom roztaženém řádku**.
 
-**SYS** — MIDI port a kanál, audio buffer, úroveň logu, stav ringů, uživatelské defaulty. Vše, co se nastaví jednou; proto je tu i RESET, na PLAY by se dal trefit omylem. Rozteč řádků se počítá z **dostupné** výšky (`SysMetrics`), ne z konstant — kolik na SYS zbyde, závisí na výšce záložek, a ta na šířce displeje.
+**SYS** — MIDI port, MIDI kanály, audio buffer, uživatelské defaulty. Vše, co se nastaví jednou; proto je tu i RESET, na PLAY by se dal trefit omylem. Rozteč řádků se počítá z **dostupné** výšky (`SysMetrics`), ne z konstant — kolik na SYS zbyde, závisí na výšce záložek, a ta na šířce displeje.
+
+Úroveň logu ani stav ringů tu **záměrně nejsou**: log patří na stránku LOG, kde potřeba ho přepnout vzniká, a ringy se odečítají za hraní, takže patří na PLAY. Uvolněná výška padne vhod kanálům.
+
+**MIDI kanály jsou maska, ne výběr jednoho.** Šestnáct polí ve **dvou řádcích po osmi**; klepnutí rozsvítí, další klepnutí zhasne, sousedi zůstanou. OMNI není položka nabídky — je to prostě stav, kdy svítí všech šestnáct. Dvě věci tím získáme: jde nastavit libovolná **podmnožina** kanálů (třeba jen 1 a 3), což jediný volič neuměl, a na užším panelu nabídka nepřetéká do `BUFFER` pod ní. Vpravo od popisku svítí `ALL (OMNI)` / `n OF 16` / `NONE - MIDI MUTED` — prázdná maska je legitimní volba, ale bez té cedule by vypadala jako porouchané MIDI.
 
 **LOG** — severita jasem a inverzí, ne barvou. Dole **volba úrovně logu**: potřeba ji změnit vzniká právě ve chvíli, kdy výpis čteš. Je to tatáž funkce (`logLevelRow`), jakou používá SYS — jedna definice, aby se nabídka ani chování nerozešly.
 
@@ -219,7 +227,7 @@ std::map<std::string, DspStageState> dsp;
 
 - **SAVE AS DEFAULT** pořídí snapshot **všech** stránek parametrů (MASTER, RESONANCE i celý DSP řetězec) do sekce `defaults` v `state.json`.
 - **RESET PARAMS** ho obnoví. Když žádný uložený není, jede tovární cesta jako dřív.
-- Na stránce svítí `PARAM DEFAULTS: USER` / `FACTORY`, aby bylo poznat, co se stane.
+- Ve štítku v patičce svítí `[USER]` / `[FACTORY]`, aby bylo poznat, co `RESET PARAMS` udělá.
 
 Vlastní snapshot smí vrátit i DSP řetězec a `RESONANCE LAYER`, kterých se tovární reset záměrně nedotýká: smazat celý řetězec jedním klepnutím by překvapilo, ale vrátit se k tomu, co sis sám uložil, není destruktivní.
 
@@ -233,7 +241,7 @@ Snapshot je klíčovaný jménem stránky a `Param::id`, takže nová stage nebo
 
 ---
 
-## Persistence (schema v6)
+## Persistence (schema v7)
 
 Dvě generické sekce stejného tvaru `<prefix><STRÁNKA>.<Param::id>`:
 
@@ -246,7 +254,7 @@ Dvě generické sekce stejného tvaru `<prefix><STRÁNKA>.<Param::id>`:
 
 Escape je plný včetně `\uXXXX` a surrogate párů; control znaky < 0x20 se zapisují escapované. Čárka se píše **před** každý řádek, takže prázdná mapa nenechá visící čárku.
 
-Přijímá schema **3–6**. Migrace v3/v4 → v5 mapuje staré ploché klíče (včetně ještě staršího `bbe_*` → ENHANCER); v5 → v6 je čistě aditivní — starý soubor prostě sekci `defaults` nemá a `RESET` jede továrně.
+Přijímá schema **3–7**. Migrace v3/v4 → v5 mapuje staré ploché klíče (včetně ještě staršího `bbe_*` → ENHANCER); v5 → v6 je čistě aditivní (starý soubor prostě sekci `defaults` nemá a `RESET` jede továrně); v6 → v7 odvodí `midi_channel_mask` ze starého `midi_channel` (−1 → 0xFFFF, *n* → 1<<*n*), takže se nastavení kanálu neztratí.
 
 Persistence debounce porovnává **celý** `GuiState` (`operator== = default`); geometrie okna je z porovnání vyřazena, protože se mění při každém posunu.
 
@@ -273,7 +281,7 @@ Dvě pasti, které to má ošetřené: geometrie okna se v režimu panelu **nepe
 | **Engine** | `engineConfigFromState` → `init`; `applyStateToEngine`; async `reloadBank`; `scopeSnapshot` (kruhový buffer 1024 vzorků výstupu za DSP řetězcem, bez zámku — roztržení snímku je na pozadí neviditelné, zámek v audio cestě by byl horší); diagnostika (`activeVoices`, `masterPeakL/R`, `pedalCC`, `dspLoadPeak`, ringy, underruny) |
 | **DSP Chain** | `dsp_state.h` obousměrně přes `Param::id`; `IParamPage::resetToDefaults()` |
 | **Audio** | `audio->start(...)`, `setAudioBlockSize` (stop → `setBlockSize` → start) |
-| **MIDI** | `listPorts()` cachovaně, otevírání **podle jména**, ne indexu |
+| **MIDI** | `listPorts()` cachovaně, otevírání **podle jména**, ne indexu; `setChannelMask()` (bit i = kanál i+1, 0xFFFF = OMNI) |
 | **Loader** | `BankLoadProgress` atomiky, viz [F-loader](F-loader.md) |
 | **Logger** | Subscriber → `LogRingBuffer`; background flush RT ringu po 10 ms |
 

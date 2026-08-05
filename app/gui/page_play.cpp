@@ -30,8 +30,9 @@ namespace {
 
 // Jak casto se cisla vubec prekresluji. Pri 60 fps se hodnota meni rychleji,
 // nez ji stihnes precist — a nic z toho, co tady stoji, nepotrebuje rozliseni
-// jednoho snimku. Dvakrat za vterinu je tempo, ktere se da sledovat.
-constexpr float kHoldWin = 0.5f;
+// jednoho snimku. Ctyrikrat za vterinu je porad citelne a uz to na hru
+// reaguje dost zive.
+constexpr float kHoldWin = 0.25f;
 
 // Drzi MAXIMUM za okno. Spravne pro veliciny, u kterych je zajimava spicka:
 // pocet hlasu, zatez DSP, peak metr.
@@ -177,15 +178,18 @@ void pagePlay(AppContext& ctx, const Rect& r) {
                 ImVec2(reel_r.hi.x, mid_y + row * 0.5f), Colors::line);
 
     // -- Stav --------------------------------------------------------------
-    // Pet stejnych sloupcu na spolecne uctare: VOICES RESO PEAK DSP SUSTAIN.
-    // Lampy MIDI vstupu jdou nad ne, aby nerozhazely zarovnani radky.
+    // Osm stejnych sloupcu na spolecne uctare. Stav streamovacich ringu je
+    // tady, ne na SYS: odecita se PRI HRANI (podle nej se pozna, ze banka
+    // nestiha z disku), a SYS je stranka na nastavovani, kam se za hrani
+    // neleze. Popisky jsou zkracene — na osm sloupcu uz neni misto na
+    // "MAIN RINGS", vyznam je v dokumentaci.
     // Radek se kotvi u SPODNI hrany plochy, ne pevnym odsazenim od zacatku
     // pasma: drzi se tak dole u paticky misto aby plaval uprostred volneho
     // mista pod vytahem.
     const float sy = r.hi.y - 16.f - wdg::fontPx(Fonts::num)
                              - wdg::fontPx(Fonts::small) - 4.f;
 
-    char v[16], rs[16], pk[16], ds[16], su[16];
+    char v[16], rs[16], pk[16], ds[16], su[16], rg[24], rgr[24];
     std::snprintf(v,  sizeof(v),  "%d", (int)holdMax(ps.h_voices,
                   (float)ctx.engine.activeVoices(), now_s));
     std::snprintf(rs, sizeof(rs), "%d", (int)holdMax(ps.h_reso,
@@ -199,6 +203,12 @@ void pagePlay(AppContext& ctx, const Rect& r) {
                   holdMax(ps.h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
     std::snprintf(su, sizeof(su), "%d",
                   (int)holdLast(ps.h_sustain, (float)ctx.engine.pedalCC(), now_s));
+    std::snprintf(rg,  sizeof(rg),  "%d/%d",
+                  (int)holdMax(ps.h_main_rings, (float)ctx.engine.mainRingsUsed(), now_s),
+                  ctx.engine.mainRingsTotal());
+    std::snprintf(rgr, sizeof(rgr), "%d/%d",
+                  (int)holdMax(ps.h_reso_rings, (float)ctx.engine.resonanceRingsUsed(), now_s),
+                  ctx.engine.resonanceRingsTotal());
 
     // Sest sloupcu: pet cisel + dvojice MIDI lamp jako sesty. Lampy se
     // rozsvecuji a hasnou plynule (~200 ms), aby necvakaly — vyhlazeni je
@@ -207,21 +217,23 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     ps.lamp_note += ((ctx.engine.noteOnRecent(120.f)  ? 1.f : 0.f) - ps.lamp_note) * k;
     ps.lamp_off  += ((ctx.engine.noteOffRecent(120.f) ? 1.f : 0.f) - ps.lamp_off)  * k;
 
-    const float col = r.w() / 6.f;
-    statNum(dl, ImVec2(r.lo.x,             sy), "VOICES",  v);
-    statNum(dl, ImVec2(r.lo.x + col,       sy), "RESO",    rs);
-    statNum(dl, ImVec2(r.lo.x + col * 2.f, sy), "PEAK dB", pk);
-    statNum(dl, ImVec2(r.lo.x + col * 3.f, sy), "DSP",     ds,
+    const float col = r.w() / 8.f;
+    statNum(dl, ImVec2(r.lo.x,             sy), "VOICES",   v);
+    statNum(dl, ImVec2(r.lo.x + col,       sy), "RESO",     rs);
+    statNum(dl, ImVec2(r.lo.x + col * 2.f, sy), "RING",     rg);
+    statNum(dl, ImVec2(r.lo.x + col * 3.f, sy), "RING RESO", rgr);
+    statNum(dl, ImVec2(r.lo.x + col * 4.f, sy), "PEAK dB",  pk);
+    statNum(dl, ImVec2(r.lo.x + col * 5.f, sy), "DSP",      ds,
             ctx.engine.overloadRecent(4000.f) ? Colors::warn : Colors::ink);
     // Pedal uz nema vlastni bar — jeho INDIKACE je pata stuha v pozadi
     // (viz screen.cpp). Tady zustava jen cislo, protoze udaj se ma cist presne.
-    statNum(dl, ImVec2(r.lo.x + col * 4.f, sy), "SUSTAIN", su);
+    statNum(dl, ImVec2(r.lo.x + col * 6.f, sy), "SUSTAIN",  su);
 
-    // MIDI vstup pod sebou v sestem sloupci. Ukazuje, ze do nas neco CHODI —
+    // MIDI vstup pod sebou v poslednim sloupci. Ukazuje, ze do nas neco CHODI —
     // coz je jina informace nez ze neco hraje.
     {
         const float px = wdg::fontPx(Fonts::small);
-        const float nx = r.lo.x + col * 5.f;
+        const float nx = r.lo.x + col * 7.f;
         wdg::lamp(dl, ImVec2(nx, sy),               "NOTE", ps.lamp_note, Colors::ink);
         wdg::lamp(dl, ImVec2(nx, sy + px + 12.f),   "OFF",  ps.lamp_off,  Colors::dim);
     }

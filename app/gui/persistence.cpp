@@ -197,7 +197,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         std::string sv = raw("schema_version");
         if (sv.empty()) return std::nullopt;
         s.schema_version = std::stoi(sv);
-        if (s.schema_version < 3 || s.schema_version > 6) return std::nullopt;
+        if (s.schema_version < 3 || s.schema_version > 7) return std::nullopt;
         s.bank_search_dir       = raw("bank_search_dir");
         s.bank_path             = raw("bank_path");
         s.midi_port_name        = raw("midi_port_name");
@@ -220,8 +220,19 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
             if (v.empty()) return dv;
             try { return std::stoi(v); } catch (...) { return dv; }
         };
-        s.midi_channel = readI("midi_channel", -1);
-        if (s.midi_channel < -1 || s.midi_channel > 15) s.midi_channel = -1;
+        // v7: maska kanalu. Starsi soubory maji jediny index `midi_channel`
+        // (-1 = OMNI) — odvodime z nej masku, at se nastaveni neztrati.
+        {
+            const int m = readI("midi_channel_mask", -1);
+            if (m >= 0) {
+                s.midi_channel_mask = (uint16_t)(m & 0xFFFF);
+            } else {
+                int legacy = readI("midi_channel", -1);
+                if (legacy < -1 || legacy > 15) legacy = -1;
+                s.midi_channel_mask = (legacy < 0) ? 0xFFFFu
+                                                   : (uint16_t)(1u << legacy);
+            }
+        }
         s.master_gain_db        = readF("master_gain_db", s.master_gain_db);
         s.release_ms            = readF("release_ms", s.release_ms);
         s.excite_decay_ms       = readF("excite_decay_ms", s.excite_decay_ms);
@@ -309,7 +320,7 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
                 { try { s.dsp["CONVOLVER"].choice = std::stoi(c); } catch (...) {} }
         }
 
-        s.schema_version = 6;   // po nacteni vzdy ulozime jako v6
+        s.schema_version = 7;   // po nacteni vzdy ulozime jako v7
     } catch (...) {
         return std::nullopt;
     }
@@ -331,7 +342,7 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"bank_path\": \""        << jsonEscape(s.bank_path)      << "\",\n";
         f << "  \"midi_port_name\": \""   << jsonEscape(s.midi_port_name) << "\",\n";
         f << "  \"log_level\": \""       << jsonEscape(s.log_level)      << "\",\n";
-        f << "  \"midi_channel\": " << s.midi_channel << ",\n";
+        f << "  \"midi_channel_mask\": " << (unsigned)s.midi_channel_mask << ",\n";
         f << "  \"master_gain_db\": "     << s.master_gain_db             << ",\n";
         f << "  \"resonance_enabled\": "  << (s.resonance_enabled ? "true" : "false") << ",\n";
         f << "  \"resonance_gain_db\": "  << s.resonance_gain_db  << ",\n";

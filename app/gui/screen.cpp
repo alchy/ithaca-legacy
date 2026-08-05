@@ -56,7 +56,17 @@ void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
 // ze tohle JE celni panel nastroje — ne aplikace, ktera se jmenuje v titulku okna.
 void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
     const float px = wdg::fontPx(Fonts::small);
+    // Stitek nese i to, ze ktere sady parametru vychazi RESET PARAMS. Je to
+    // udaj, ktery clovek chce videt, aniz by kvuli nemu lezl na SYS — a stitek
+    // je jinak mrtve misto.
     dl->AddText(Fonts::small, px, pos, Colors::dimmer, "ITHACA LEGACY");
+    {
+        const float x = pos.x + wdg::textW(Fonts::small, px, "ITHACA LEGACY") + 10.f;
+        const bool user = !ctx.state.defaults.empty();
+        const char* tag = user ? "[USER]" : "[FACTORY]";
+        dl->AddText(Fonts::small, px, ImVec2(x, pos.y),
+                    user ? Colors::dim : Colors::dimmer, tag);
+    }
 
     char buf[48];
     const int sr = ctx.engine.sampleRate();

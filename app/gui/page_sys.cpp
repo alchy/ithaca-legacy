@@ -1,7 +1,12 @@
-// app/gui/page_sys.cpp — SYS: MIDI, audio, uroven logu, uzivatelske defaulty.
+// app/gui/page_sys.cpp — SYS: MIDI port, MIDI kanaly, audio buffer, defaulty.
 //
 // Vsechno, co se nastavuje jednou a pak uz se toho clovek nedotkne. Proto je
 // tady i RESET — na PLAY by se dal trefit omylem uprostred hrani.
+//
+// Co tu ZAMERNE neni:
+//   - uroven logu sedi na strance LOG, kde potreba ji zmenit vlastne vznika
+//   - stav ringu a stav defaultu se odecitaji za hrani, takze patri na PLAY
+// Uvolnena vyska padne vhod MIDI kanalum, ktere jsou po dvou radkach.
 //
 // Cela stranka je sazena na ROZTAZENE RADKY (layout::splitRow): kazda volba
 // dostane stejne sirokou bunku bez ohledu na delku popisku. Radky pak konci
@@ -17,6 +22,8 @@
 #include "midi/midi_input.h"
 #include "util/log.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -29,37 +36,40 @@ using theme::Fonts;
 
 namespace {
 
+// Kanaly se sazi na DVE radky po osmi. Na jedne by pri uzsim panelu byly bunky
+// uzsi nez cokoli jineho na strance a radek by pretekal do BUFFERu pod nim.
+constexpr int kChanRows   = 2;
+constexpr int kChanPerRow = 8;
+
 void label(ImDrawList* dl, ImVec2 p, const char* t) {
     dl->AddText(Fonts::small, wdg::fontPx(Fonts::small), p, Colors::dimmer, t);
 }
 
 // Rozvrzeni stranky. Pocita se z DOSTUPNE vysky, ne z konstant: vyska zalozek
 // se odviji od sirky displeje (ctvercove dlazdice), takze kolik na SYS zbyde
-// neni dopredu dane. Bez tohohle by se pri sirsim panelu spodni tlacitka
-// prekryla s poslednim radkem voleb.
+// neni dopredu dane. Bez tohohle by spodni tlacitka prekryla posledni radek.
 struct SysMetrics {
     float cell_h;      // vykreslena vyska volby
     float hit_h;       // dotykova zona volby (vyssi, omezena rozteci radku)
-    float pitch;       // vyska celeho bloku "popisek + volby"
-    float rings_y;     // uctara radku s odectenymi hodnotami
+    float unit;        // rozteC jedne radky voleb
+    float lab_h;       // popisek nad blokem
     float btn_y;       // horni hrana radku tlacitek
 };
 
 SysMetrics sysMetrics(const Rect& r) {
-    const float px    = wdg::fontPx(Fonts::small);
-    const float np    = wdg::fontPx(Fonts::ui);
-    const float btn_h = L::Dims::touch;
-    const float rings_h = px + np + 6.f;
-
     SysMetrics m{};
-    m.btn_y   = r.hi.y - btn_h;
-    m.rings_y = m.btn_y - L::Dims::gap - rings_h;
+    m.btn_y = r.hi.y - L::Dims::touch;
+    m.lab_h = wdg::fontPx(Fonts::small) + 6.f;
 
-    constexpr int kRows = 4;                       // MIDI IN, CHANNEL, BUFFER, LOG
-    m.pitch  = (m.rings_y - L::Dims::gap - r.lo.y) / (float)kRows;
-    m.cell_h = std::clamp(m.pitch - px - 6.f - L::Dims::gap_s, 40.f, 56.f);
-    // Zony se nesmi dotknout sousedniho bloku, jinak klepnuti padne jinam.
-    m.hit_h  = std::min(L::Dims::touch, m.pitch - 2.f);
+    // Tri bloky (MIDI IN, CHANNEL, BUFFER), z toho CHANNEL ma dve radky voleb.
+    constexpr int kBlocks   = 3;
+    constexpr int kChipRows = 1 + kChanRows + 1;
+    const float avail = m.btn_y - L::Dims::gap - r.lo.y;
+    m.unit = (avail - (float)kBlocks * m.lab_h
+                    - (float)kBlocks * L::Dims::gap_s) / (float)kChipRows;
+    m.cell_h = std::clamp(m.unit - L::Dims::gap_s, 36.f, 56.f);
+    // Zona se nesmi dotknout sousedni radky, jinak klepnuti padne jinam.
+    m.hit_h  = std::min(L::Dims::touch, m.unit - 2.f);
     return m;
 }
 
@@ -71,12 +81,11 @@ int settingRow(const char* id, const Rect& r, const SysMetrics& m, float& y,
                const char* lab, const char* const* items, int n, int cur,
                float reserve_w = 0.f) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float px = wdg::fontPx(Fonts::small);
     label(dl, ImVec2(r.lo.x, y), lab);
-    const float w = r.w() - reserve_w;
-    const int hit = wdg::chipRow(id, ImVec2(r.lo.x, y + px + 6.f), w, items, n, cur,
+    const int hit = wdg::chipRow(id, ImVec2(r.lo.x, y + m.lab_h),
+                                 r.w() - reserve_w, items, n, cur,
                                  m.cell_h, m.hit_h);
-    y += m.pitch;
+    y += m.lab_h + m.unit + L::Dims::gap_s;
     return hit;
 }
 
@@ -107,7 +116,7 @@ void pageSys(AppContext& ctx, const Rect& r,
             if (ps.midi_ports[i] == ctx.state.midi_port_name) { cur = (int)i + 1; break; }
 
         const float rescan_w = 150.f;
-        const float row_y = y + px_s + 6.f;   // stejna uctara jako volby vedle
+        const float row_y = y + m.lab_h;   // stejna uctara jako volby vedle
         const int hit = settingRow("##midi", r, m, y, "MIDI IN",
                                    items.data(), (int)items.size(), cur,
                                    rescan_w + L::Dims::gap_s);
@@ -126,7 +135,7 @@ void pageSys(AppContext& ctx, const Rect& r,
             for (size_t k = 0; k < live.size(); ++k) if (live[k] == want) { idx = (int)k; break; }
             if (idx >= 0) {
                 ctx.midi.close();
-                ctx.midi.setChannel(ctx.state.midi_channel);   // pred open
+                ctx.midi.setChannelMask(ctx.state.midi_channel_mask);   // pred open
                 if (ctx.midi.open(ctx.engine, idx)) ctx.state.midi_port_name = want;
             } else {
                 log::Logger::default_().log("gui", log::Severity::Warning,
@@ -136,16 +145,47 @@ void pageSys(AppContext& ctx, const Rect& r,
         }
     }
 
-    // -- MIDI kanal --------------------------------------------------------
+    // -- MIDI kanaly: dve radky po osmi, nezavisle prepinatelne -------------
+    // OMNI uz neni polozka nabidky — je to proste stav, kdy sviti vsech
+    // sestnact, a uzivatel si ho naklika. Dve veci tim ziskame: jde nastavit
+    // libovolna PODMNOZINA kanalu (treba jen 1 a 3), coz jediny volic neumel,
+    // a nabidka se vejde i na uzsi panel, kde drive pretekala do BUFFERu.
     {
-        static const char* kCh[] = { "OMNI","1","2","3","4","5","6","7","8",
-                                     "9","10","11","12","13","14","15","16" };
-        const int cur = ctx.state.midi_channel < 0 ? 0 : ctx.state.midi_channel + 1;
-        const int hit = settingRow("##ch", r, m, y, "CHANNEL", kCh, IM_ARRAYSIZE(kCh), cur);
-        if (hit >= 0) {
-            ctx.state.midi_channel = (hit == 0) ? -1 : hit - 1;
-            ctx.midi.setChannel(ctx.state.midi_channel);
+        static const char* kCh[16] = { "1","2","3","4","5","6","7","8",
+                                       "9","10","11","12","13","14","15","16" };
+        label(dl, ImVec2(r.lo.x, y), "CHANNEL");
+
+        const uint16_t mask = ctx.state.midi_channel_mask;
+        int on = 0;
+        for (int i = 0; i < 16; ++i) on += (mask >> i) & 1u;
+
+        // Stav masky vpravo od popisku. Bez nej by nebylo poznat, ze vsech
+        // sestnact znamena OMNI — a hlavne ze zadny znamena ticho, coz je
+        // legitimni, ale snadno omylem nastavitelny stav.
+        char note[32];
+        ImU32 note_c = Colors::dim;
+        if (on == 16)     std::snprintf(note, sizeof(note), "ALL (OMNI)");
+        else if (on == 0) { std::snprintf(note, sizeof(note), "NONE - MIDI MUTED");
+                            note_c = Colors::clip_lo; }
+        else              std::snprintf(note, sizeof(note), "%d OF 16", on);
+        dl->AddText(Fonts::small, px_s,
+                    ImVec2(r.hi.x - wdg::textW(Fonts::small, px_s, note), y),
+                    note_c, note);
+
+        int hit = -1;
+        for (int rw = 0; rw < kChanRows; ++rw) {
+            char id[16]; std::snprintf(id, sizeof(id), "##ch%d", rw);
+            const int h = wdg::chipRowMask(id,
+                ImVec2(r.lo.x, y + m.lab_h + (float)rw * m.unit), r.w(),
+                kCh + rw * kChanPerRow, kChanPerRow, mask, rw * kChanPerRow,
+                m.cell_h, m.hit_h);
+            if (h >= 0) hit = rw * kChanPerRow + h;
         }
+        if (hit >= 0) {
+            ctx.state.midi_channel_mask = (uint16_t)(mask ^ (1u << hit));
+            ctx.midi.setChannelMask(ctx.state.midi_channel_mask);
+        }
+        y += m.lab_h + (float)kChanRows * m.unit + L::Dims::gap_s;
     }
 
     // -- Audio buffer ------------------------------------------------------
@@ -159,53 +199,14 @@ void pageSys(AppContext& ctx, const Rect& r,
         if (hit >= 0) ctx.setAudioBlockSize(kVal[hit]);
     }
 
-    // -- Uroven logu -------------------------------------------------------
-    {
-        static const char* kLv[] = { "debug","info","warn","error","fatal","off" };
-        int cur = 1;
-        for (int i = 0; i < IM_ARRAYSIZE(kLv); ++i)
-            if (ctx.state.log_level == kLv[i]) { cur = i; break; }
-        const int hit = settingRow("##lv", r, m, y, "LOG", kLv, IM_ARRAYSIZE(kLv), cur);
-        if (hit >= 0) {
-            ctx.state.log_level = kLv[hit];
-            log::Logger::default_().setMinSeverity(
-                log::severity_from_string(ctx.state.log_level.c_str(), log::Severity::Info));
-        }
-    }
-
-    // -- Odectene hodnoty: ringy vlevo, stav defaultu vpravo ----------------
-    // Jeden radek pro obe: jsou to udaje ke cteni, ne ovladani, takze si
-    // nezaslouzi kazdy vlastni pas. Ringy patri sem, ne na PLAY — podle nich
-    // se ladi MAX RESONANCE, coz je nastavovaci cinnost, ne vykon.
-    const bool have_def = !ctx.state.defaults.empty();
-    {
-        const float ry = m.rings_y;
-        char rb[64];
-        std::snprintf(rb, sizeof(rb), "MAIN %d/%d    RESO %d/%d",
-                      ctx.engine.mainRingsUsed(), ctx.engine.mainRingsTotal(),
-                      ctx.engine.resonanceRingsUsed(), ctx.engine.resonanceRingsTotal());
-        label(dl, ImVec2(r.lo.x, ry), "RINGS");
-        dl->AddText(Fonts::ui, wdg::fontPx(Fonts::ui), ImVec2(r.lo.x, ry + px_s + 6.f),
-                    Colors::dim, rb);
-
-        const char* lab_r = "PARAM DEFAULTS";
-        const char* val_r = have_def ? "USER" : "FACTORY";
-        dl->AddText(Fonts::small, px_s,
-                    ImVec2(r.hi.x - wdg::textW(Fonts::small, px_s, lab_r), ry),
-                    Colors::dimmer, lab_r);
-        const float np = wdg::fontPx(Fonts::ui);
-        dl->AddText(Fonts::ui, np,
-                    ImVec2(r.hi.x - wdg::textW(Fonts::ui, np, val_r), ry + px_s + 6.f),
-                    have_def ? Colors::ink : Colors::dim, val_r);
-    }
-
     // -- Uzivatelske defaulty ----------------------------------------------
     // SAVE AS DEFAULT ulozi VSECHNY stranky parametru (MASTER, RESONANCE
     // i cely DSP retezec) do state.json jako sekci "defaults". RESET PARAMS
     // pak vraci prave na ne — na to, co si uzivatel oznacil za spravne
     // naladeni, ne na tovarni Param::def, ktery o jeho bance nic nevi.
+    // Ktera z obou variant plati, sviti ve stitku v paticce.
     {
-        const bool have = have_def;
+        const bool have = !ctx.state.defaults.empty();
         const L::Row row = L::splitRow(ImVec2(r.lo.x, m.btn_y), r.w(),
                                        L::Dims::touch, 2);
 

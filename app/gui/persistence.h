@@ -28,7 +28,7 @@ struct WindowGeom {
 };
 
 struct GuiState {
-    int         schema_version    = 6;
+    int         schema_version    = 7;
     // Adresar, ve kterem se hleda banky (dropdown ho scanu). Pri prazdnem
     // bank_path je tohle jediny zdroj kandidatu — bez ne by uzivatel nemel
     // jak vybrat banku z GUI. Settable pres --bank-dir CLI flag nebo
@@ -37,7 +37,11 @@ struct GuiState {
     std::string bank_path;
     std::string midi_port_name;
     std::string log_level         = "info";   // debug|info|warn|error|fatal
-    int         midi_channel      = -1;   // -1 = OMNI, 0..15 = MIDI kanal (0-based)
+    // Maska prijimanych MIDI kanalu: bit i = kanal i+1. 0xFFFF = vsechny
+    // (drive OMNI). Maska misto jednoho indexu proto, ze na panelu jde zapnout
+    // libovolna podmnozina — OMNI uz neni zvlastni polozka nabidky, uzivatel
+    // si ho naklika zapnutim vsech kanalu.
+    uint16_t    midi_channel_mask = 0xFFFFu;
     float       master_gain_db      = 0.f;
     bool        resonance_enabled  = true;
     float       resonance_gain_db  = -12.f;
