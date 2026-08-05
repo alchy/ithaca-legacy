@@ -3,8 +3,6 @@
 // zlato=zivy akcent), fonty (Cormorant), apply_theme/load_fonts. Header-only,
 // vzor prevzat z icr2 player/gui/theme.h.
 #include "imgui.h"
-#include <fstream>
-#include <string>
 
 namespace ithaca::gui::theme {
 
@@ -28,39 +26,25 @@ struct Colors {
     }
 };
 
-// Najdi asset relativne k CWD (vzor icr2 util::find_asset_path). Vraci prazdne
-// kdyz nenalezeno → load_fonts spadne na default ImGui font.
-inline std::string find_asset_path(const std::string& rel) {
-    auto exists = [](const std::string& p) {
-        std::ifstream f(p); return f.good();
-    };
-    if (exists(rel)) return rel;
-    static const char* prefixes[] = {
-        "./third-party/", "./", "../third-party/",
-    };
-    for (const char* pre : prefixes) {
-        std::string c = std::string(pre) + rel;
-        if (exists(c)) return c;
-    }
-    return {};
-}
-
 // -- Fonty (Cormorant @ vice velikosti) ----------------------------------
+// Font je ZABUDOVANY v binarce (viz embedded_font.cpp + CMake pravidlo
+// cormorant_font). ithaca-gui tedy za behu nepotrebuje zadny asset — staci mu
+// vlastni state.json. Data jsou komprimovana ImGui nastrojem
+// binary_to_compressed_c; AddFontFromMemoryCompressedTTF si je rozbali do
+// vlastniho bufferu, takze o vlastnictvi pameti se nemusime starat.
+const unsigned int* cormorantCompressedData();
+unsigned int        cormorantCompressedSize();
+
 struct Fonts {
     static inline ImFont* body    = nullptr; // 18px
     static inline ImFont* eyebrow = nullptr; // 11px, +1.5 tracking
-    static inline ImFont* value   = nullptr; // 26px stat cisla
+    static inline ImFont* value   = nullptr; // 34px stat cisla
     static inline ImFont* brand   = nullptr; // 20px logo, +6 tracking
 };
 
-inline void load_fonts(const std::string& ttf_path, float scale = 1.f) {
+inline void load_fonts(float scale = 1.f) {
     if (Fonts::body) return;
     ImGuiIO& io = ImGui::GetIO();
-    if (ttf_path.empty()) {
-        Fonts::body = io.Fonts->AddFontDefault();
-        Fonts::eyebrow = Fonts::value = Fonts::brand = Fonts::body;
-        return;
-    }
     static const ImWchar ranges[] = {
         0x0020, 0x00FF, // Latin + Latin-1 (CZ + bösendorf ö)
         0x0100, 0x017F, // Latin Extended-A
@@ -79,14 +63,18 @@ inline void load_fonts(const std::string& ttf_path, float scale = 1.f) {
     const float sc = (scale > 0.f) ? scale : 1.f;
     // Letterspacing: ImGui 1.91 ma GlyphExtraSpacing (ImVec2, jen X osa).
     // (Novejsi ImGui to prejmenovalo na GlyphExtraAdvanceX — my mame 1.91.)
-    cfg.GlyphExtraSpacing.x = 0.f;
-    Fonts::body = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 18.f * sc, &cfg, ranges);
-    cfg.GlyphExtraSpacing.x = 1.5f * sc;   // prostrkane eyebrow popisky
-    Fonts::eyebrow = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 11.f * sc, &cfg, ranges);
-    cfg.GlyphExtraSpacing.x = 0.f;
-    Fonts::value = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 34.f * sc, &cfg, ranges);
-    cfg.GlyphExtraSpacing.x = 6.f * sc;    // prostrkane logo ITHACA
-    Fonts::brand = io.Fonts->AddFontFromFileTTF(ttf_path.c_str(), 20.f * sc, &cfg, ranges);
+    // Vsechny ctyri velikosti jedou z TEHOZ zabudovaneho blobu.
+    const unsigned int* data = cormorantCompressedData();
+    const unsigned int  size = cormorantCompressedSize();
+    auto add = [&](float px, float tracking) {
+        cfg.GlyphExtraSpacing.x = tracking * sc;
+        return io.Fonts->AddFontFromMemoryCompressedTTF(data, (int)size, px * sc,
+                                                        &cfg, ranges);
+    };
+    Fonts::body    = add(18.f, 0.f);
+    Fonts::eyebrow = add(11.f, 1.5f);   // prostrkane eyebrow popisky
+    Fonts::value   = add(34.f, 0.f);
+    Fonts::brand   = add(20.f, 6.f);    // prostrkane logo ITHACA
 
     if (!Fonts::body) { // load failed → default
         Fonts::body = io.Fonts->AddFontDefault();

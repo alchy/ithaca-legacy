@@ -34,6 +34,12 @@ struct IParamPage {
     virtual int          currentChoice() const { return -1; }
     virtual void         selectChoice(int /*i*/) {}
     virtual const char*  choiceLabel() const { return ""; }
+    // Vrati vsechny parametry na Param::def. Virtualni, aby stranka mohla
+    // vyjmout parametr, jehoz vychozi hodnota se odvozuje az za behu
+    // (ResonancePage: RESONANCE LAYER je vazany na rozsah nactene banky).
+    virtual void resetToDefaults() {
+        for (int i = 0; i < paramCount(); ++i) set(i, param(i).def);
+    }
 };
 
 // Audio-thread stage = param page + DSP. set()/setEnabled() z GUI threadu,

@@ -5,6 +5,7 @@
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
+#include "layout.h"
 #include "imgui.h"
 #include <cmath>
 #include <cstdio>
@@ -17,9 +18,9 @@ float dbTo01(float db) { float t=(db+60.f)/60.f; return t<0?0:(t>1?1:t); }
 
 // Sample-and-hold: drzi max za posledni okno (default 400 ms) a vraci ji,
 // prekreslena hodnota se meni jen jednou za okno. Bez toho ciselne indikatory
-// pri 60 fps necitelne blikaji. Stav drzi volajici (static instance na tile).
-struct Hold { float shown = 0.f, winmax = 0.f, t0 = 0.f; };
-float holdMax(Hold& s, float cur, float now_s, float win = 0.4f) {
+// pri 60 fps necitelne blikaji. Stav zije v ctx.panels (drive static v teto
+// funkci), takze je videt zvenci a neni to skryty globalni stav.
+float holdMax(PanelState::Hold& s, float cur, float now_s, float win = 0.4f) {
     if (cur > s.winmax) s.winmax = cur;
     if (now_s - s.t0 >= win) { s.shown = s.winmax; s.winmax = 0.f; s.t0 = now_s; }
     return s.shown;
@@ -29,7 +30,7 @@ float holdMax(Hold& s, float cur, float now_s, float win = 0.4f) {
 void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     using theme::Colors;
     const float H = ImGui::GetContentRegionAvail().y;  // = strip_h z shellu
-    const float pad = 14.f;
+    const float pad = layout::Dims::pad_inset;
 
     // --- col1: MIDI lampy + SUSTAIN ---
     ImGui::BeginChild("##ind_midi", {col1_w, H}, false);
@@ -71,17 +72,17 @@ void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     // aby cisla pri 60 fps necitelne neblikalа. Lampy (event blik) a PEAK bary
     // (spojity level metr s decay) zustavaji beze zmeny. now_s spolecny pro okno.
     const float now_s = (float)ImGui::GetTime();
-    static Hold h_v, h_r, h_mu, h_gu, h_load;
-    const int v_max  = (int)holdMax(h_v,  (float)ctx.engine.activeVoices(),    now_s);
-    const int r_max  = (int)holdMax(h_r,  (float)ctx.engine.resonanceVoices(), now_s);
-    const int mu_max = (int)holdMax(h_mu, (float)ctx.engine.mainRingsUsed(),   now_s);
-    const int gu_max = (int)holdMax(h_gu, (float)ctx.engine.resonanceRingsUsed(), now_s);
+    auto& ps = ctx.panels;
+    const int v_max  = (int)holdMax(ps.h_voices,     (float)ctx.engine.activeVoices(),    now_s);
+    const int r_max  = (int)holdMax(ps.h_reso,       (float)ctx.engine.resonanceVoices(), now_s);
+    const int mu_max = (int)holdMax(ps.h_main_rings, (float)ctx.engine.mainRingsUsed(),   now_s);
+    const int gu_max = (int)holdMax(ps.h_reso_rings, (float)ctx.engine.resonanceRingsUsed(), now_s);
     std::snprintf(vbuf, sizeof(vbuf), "%d", v_max);
     std::snprintf(rbuf, sizeof(rbuf), "%d", r_max);
     std::snprintf(mbuf, sizeof(mbuf), "%d/%d", mu_max, ctx.engine.mainRingsTotal());
     std::snprintf(gbuf, sizeof(gbuf), "%d/%d", gu_max, ctx.engine.resonanceRingsTotal());
     std::snprintf(dbuf, sizeof(dbuf), "%.0f%%",
-                  holdMax(h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
+                  holdMax(ps.h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
     float fifth = center_w / 5.f;
     ImGui::BeginChild("##t_v", {fifth, H}, false);
         ImGui::Dummy({0,8}); wdg::StatTile("VOICES", vbuf, Colors::gold, 0.f, pad);

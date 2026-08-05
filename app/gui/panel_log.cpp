@@ -8,13 +8,12 @@
 #include "app_context.h"
 #include "theme.h"
 #include "imgui.h"
-#include <array>
 
 namespace ithaca::gui {
 
 void renderLogPanel(AppContext& ctx) {
     using theme::Colors;
-    static std::array<log::LogEntry, 50> tmp;
+    auto& tmp = ctx.panels.log_scratch;   // predalokovany scratch (viz PanelState)
     const int n = ctx.log_buf.snapshot(tmp.data(), (int)tmp.size());
     if (ImGui::BeginChild("##loglist", {0,0}, false, ImGuiWindowFlags_HorizontalScrollbar)) {
         for (int i = 0; i < n; ++i) {

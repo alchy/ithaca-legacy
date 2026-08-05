@@ -56,6 +56,15 @@ public:
         ctx_.engine.setResonanceEnabled(on);
     }
     bool meter(float&, const char*&) const override { return false; }
+
+    // RESET (topbar): index 0 = RESONANCE LAYER se ZAMERNE preskakuje —
+    // jeho rozsah i rozumna vychozi hodnota se odvozuji az z nactene banky
+    // (heuristika "1/3 rozsahu banky" v pollReloadCompletion). Reset na
+    // staticky def by ji zahodil a zbytecne spustil prestavbu RAM cache.
+    void resetToDefaults() override {
+        for (int i = 1; i < paramCount(); ++i) set(i, param(i).def);
+        setEnabled(true);   // rezonance je defaultne zapnuta
+    }
 private:
     AppContext& ctx_;
     mutable ithaca::dsp::Param layer_param_ =

@@ -8,7 +8,9 @@
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
+#include <string>
 
 namespace ithaca::gui {
 
@@ -31,55 +33,146 @@ std::filesystem::path platformConfigDir() {
     return std::filesystem::current_path();
 }
 
-// Escape JSON stringu (jen \", \\, \n).
+// Escape JSON stringu. Krome uvozovek a zpetneho lomitka musi odejit VSECHNY
+// control znaky < 0x20 — syrovy tabulator v hodnote je nevalidni JSON.
+// UTF-8 (diakritika v cestach) prochazi beze zmeny; escapovat ho neni treba.
 std::string jsonEscape(const std::string& s) {
-    std::string o; o.reserve(s.size() + 4);
-    for (char c : s) {
+    std::string o; o.reserve(s.size() + 8);
+    for (unsigned char c : s) {
         switch (c) {
             case '"':  o += "\\\""; break;
             case '\\': o += "\\\\"; break;
             case '\n': o += "\\n";  break;
-            default:   o += c;
+            case '\r': o += "\\r";  break;
+            case '\t': o += "\\t";  break;
+            case '\b': o += "\\b";  break;
+            case '\f': o += "\\f";  break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
+                    o += buf;
+                } else {
+                    o += (char)c;
+                }
         }
     }
     return o;
 }
 
-// Primitivni vyhledani hodnoty pro klic v flat JSONu. Vraci raw string
-// hodnoty (bez quotes a escape resolve pro stringy provedeny).
-// Pri chybe vraci prazdny string.
-std::string findValue(const std::string& json, const std::string& key) {
-    const std::string needle = "\"" + key + "\"";
-    size_t k = json.find(needle);
-    if (k == std::string::npos) return {};
-    size_t c = json.find(':', k);
-    if (c == std::string::npos) return {};
-    ++c;
-    while (c < json.size() && std::isspace((unsigned char)json[c])) ++c;
-    if (c >= json.size()) return {};
-    // String value
-    if (json[c] == '"') {
-        size_t e = c + 1;
-        std::string v;
-        while (e < json.size() && json[e] != '"') {
-            if (json[e] == '\\' && e + 1 < json.size()) {
-                char nxt = json[e + 1];
-                if (nxt == 'n') v += '\n';
-                else v += nxt;
-                e += 2;
-            } else {
-                v += json[e++];
-            }
-        }
-        return v;
+// Prida code point jako UTF-8.
+void appendUtf8(std::string& out, unsigned int cp) {
+    if (cp < 0x80) {
+        out += (char)cp;
+    } else if (cp < 0x800) {
+        out += (char)(0xC0 | (cp >> 6));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += (char)(0xE0 | (cp >> 12));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else {
+        out += (char)(0xF0 | (cp >> 18));
+        out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
     }
-    // Numeric value (do , nebo } nebo whitespace)
-    size_t e = c;
-    while (e < json.size() && json[e] != ',' && json[e] != '}' && json[e] != '\n')
-        ++e;
-    std::string v = json.substr(c, e - c);
-    while (!v.empty() && std::isspace((unsigned char)v.back())) v.pop_back();
-    return v;
+}
+
+// Precte 4 hexa cifry na pozici i (nepohybuje s i). false = nevalidni.
+bool readHex4(const std::string& j, size_t i, unsigned int& out) {
+    if (i + 4 > j.size()) return false;
+    unsigned int v = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        const char c = j[i + k];
+        v <<= 4;
+        if      (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+        else return false;
+    }
+    out = v;
+    return true;
+}
+
+// Rozbali escape sekvenci zacinajici na j[i] == '\\'. Posune i za ni.
+// Drive se dekodovalo jen \n, \\ a obecne \x -> x, takze \t koncil jako 't'
+// a \uXXXX jako 'uXXXX'.
+void decodeEscape(const std::string& j, size_t& i, std::string& val) {
+    const char nxt = j[i + 1];
+    i += 2;
+    switch (nxt) {
+        case 'n':  val += '\n'; break;
+        case 'r':  val += '\r'; break;
+        case 't':  val += '\t'; break;
+        case 'b':  val += '\b'; break;
+        case 'f':  val += '\f'; break;
+        case '"':  val += '"';  break;
+        case '\\': val += '\\'; break;
+        case '/':  val += '/';  break;
+        case 'u': {
+            unsigned int cp = 0;
+            if (!readHex4(j, i, cp)) { val += 'u'; break; }   // nevalidni → literal
+            i += 4;
+            // Surrogate par: high D800–DBFF + low DC00–DFFF → jeden code point.
+            if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < j.size()
+                && j[i] == '\\' && j[i + 1] == 'u') {
+                unsigned int lo = 0;
+                if (readHex4(j, i + 2, lo) && lo >= 0xDC00 && lo <= 0xDFFF) {
+                    cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                    i += 6;
+                }
+            }
+            appendUtf8(val, cp);
+            break;
+        }
+        default: val += nxt; break;   // neznamy escape → literalni znak
+    }
+}
+
+// Rozparsuje cely flat JSON na mapu klic -> raw hodnota (u stringu s vyresenymi
+// escapy, u cisel jako text). Jeden pruchod misto ~40 opakovanych find() volani
+// a hlavne: umi VYJMENOVAT klice, coz je potreba pro genericke "dsp.*" (jejich
+// jmena persistence dopredu nezna — pochazi z Param::id jednotlivych stage).
+std::map<std::string, std::string> parseFlatJson(const std::string& j) {
+    std::map<std::string, std::string> out;
+    size_t i = 0;
+    while (i < j.size()) {
+        // Hledej zacatek klice; '}' ukoncuje objekt (nesting nepodporujeme).
+        while (i < j.size() && j[i] != '"') {
+            if (j[i] == '}') return out;
+            ++i;
+        }
+        if (i >= j.size()) break;
+        ++i;
+        std::string key;
+        while (i < j.size() && j[i] != '"') {
+            if (j[i] == '\\' && i + 1 < j.size()) { key += j[i + 1]; i += 2; }
+            else                                    key += j[i++];
+        }
+        if (i < j.size()) ++i;                       // za uzaviraci "
+        while (i < j.size() && std::isspace((unsigned char)j[i])) ++i;
+        if (i >= j.size() || j[i] != ':') continue;  // nebyl to klic, hledej dal
+        ++i;
+        while (i < j.size() && std::isspace((unsigned char)j[i])) ++i;
+
+        std::string val;
+        if (i < j.size() && j[i] == '"') {           // string hodnota
+            ++i;
+            while (i < j.size() && j[i] != '"') {
+                if (j[i] == '\\' && i + 1 < j.size()) decodeEscape(j, i, val);
+                else                                  val += j[i++];
+            }
+            if (i < j.size()) ++i;
+        } else {                                     // cislo / bool
+            while (i < j.size() && j[i] != ',' && j[i] != '}' && j[i] != '\n')
+                val += j[i++];
+            while (!val.empty() && std::isspace((unsigned char)val.back()))
+                val.pop_back();
+        }
+        out[key] = val;
+    }
+    return out;
 }
 
 } // namespace
@@ -96,29 +189,34 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
 
     GuiState s;
     try {
-        std::string sv = findValue(json, "schema_version");
+        const auto kv = parseFlatJson(json);
+        auto raw = [&](const std::string& k) -> std::string {
+            auto it = kv.find(k);
+            return (it == kv.end()) ? std::string{} : it->second;
+        };
+        std::string sv = raw("schema_version");
         if (sv.empty()) return std::nullopt;
         s.schema_version = std::stoi(sv);
-        if (s.schema_version != 3 && s.schema_version != 4) return std::nullopt;
-        s.bank_search_dir       = findValue(json, "bank_search_dir");
-        s.bank_path             = findValue(json, "bank_path");
-        s.midi_port_name        = findValue(json, "midi_port_name");
-        s.log_level             = findValue(json, "log_level");
+        if (s.schema_version < 3 || s.schema_version > 5) return std::nullopt;
+        s.bank_search_dir       = raw("bank_search_dir");
+        s.bank_path             = raw("bank_path");
+        s.midi_port_name        = raw("midi_port_name");
+        s.log_level             = raw("log_level");
         if (s.log_level.empty()) s.log_level = "info";
         // Defenzivni ctecky: chybejici NEBO poskozeny klic → default ze
         // struktury. Drive stof("")/stof("abc") → vyjimka → cely stav zahozen
         // vc. bank_path a MIDI (jeden vadny klic smazal nesouvisejici pole).
         auto readF = [&](const char* k, float dv){
-            std::string v = findValue(json, k);
+            std::string v = raw(k);
             if (v.empty()) return dv;
             try { return std::stof(v); } catch (...) { return dv; }
         };
         auto readB = [&](const char* k, bool dv){
-            std::string v = findValue(json, k);
+            std::string v = raw(k);
             return v.empty() ? dv : (v == "true" || v == "1");
         };
         auto readI = [&](const char* k, int dv){
-            std::string v = findValue(json, k);
+            std::string v = raw(k);
             if (v.empty()) return dv;
             try { return std::stoi(v); } catch (...) { return dv; }
         };
@@ -128,33 +226,15 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.release_ms            = readF("release_ms", s.release_ms);
         s.excite_decay_ms       = readF("excite_decay_ms", s.excite_decay_ms);
         s.max_resonance_voices  = readI("max_resonance_voices", s.max_resonance_voices);
-        s.window_x = readI("window_x", s.window_x);
-        s.window_y = readI("window_y", s.window_y);
-        s.window_w = readI("window_w", s.window_w);
-        s.window_h = readI("window_h", s.window_h);
+        s.window.x = readI("window_x", s.window.x);
+        s.window.y = readI("window_y", s.window.y);
+        s.window.w = readI("window_w", s.window.w);
+        s.window.h = readI("window_h", s.window.h);
         // Sanitizace geometrie: minimalizovane okno (Windows) uklada 0x0 a
         // glfwCreateWindow(0,0) pri pristim startu selze → app nejde spustit.
-        if (s.window_w < 320) s.window_w = 1280;
-        if (s.window_h < 240) s.window_h = 720;
-        s.agc_enabled          = readB("agc_enabled", s.agc_enabled);
-        s.agc_target           = readF("agc_target", s.agc_target);
-        s.agc_release_ms       = readF("agc_release_ms", s.agc_release_ms);
-        s.agc_floor            = readF("agc_floor", s.agc_floor);
-        // Enhancer (ex-BBE): cti enhancer_*, fallback na stare bbe_* (migrace).
-        s.enhancer_enabled = readB("enhancer_enabled", readB("bbe_enabled", s.enhancer_enabled));
-        s.enhancer_process = readF("enhancer_process", readF("bbe_definition", s.enhancer_process));
-        s.enhancer_contour = readF("enhancer_contour", readF("bbe_bass", s.enhancer_contour));
-        s.enhancer_mid     = readF("enhancer_mid", s.enhancer_mid);
-        s.limiter_enabled      = readB("limiter_enabled", s.limiter_enabled);
-        s.limiter_threshold_db = readF("limiter_threshold_db", s.limiter_threshold_db);
-        s.limiter_release_ms   = readF("limiter_release_ms", s.limiter_release_ms);
+        if (s.window.w < 320) s.window.w = 1280;
+        if (s.window.h < 240) s.window.h = 720;
         s.config_page          = readI("config_page", s.config_page);
-        s.convolver_enabled = readB("convolver_enabled", s.convolver_enabled);
-        s.convolver_mix     = readF("convolver_mix", s.convolver_mix);
-        s.convolver_choice  = readI("convolver_choice", s.convolver_choice);
-        s.convolver_decay = readF("convolver_decay", s.convolver_decay);
-        s.convolver_tone  = readF("convolver_tone",  s.convolver_tone);
-        s.convolver_size  = readF("convolver_size",  s.convolver_size);
         s.resonance_enabled  = readB("resonance_enabled", s.resonance_enabled);
         s.resonance_gain_db  = readF("resonance_gain_db", s.resonance_gain_db);
         s.resonance_layer_db = readF("resonance_layer_db", s.resonance_layer_db);
@@ -163,7 +243,67 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.cache_budget_mb     = readI("cache_budget_mb", s.cache_budget_mb);
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
-        s.schema_version = 4;   // po nacteni vzdy ulozime jako v4
+
+        // -- DSP chain: genericke klice "dsp.<STAGE>.<Param::id>" (v5+) --------
+        // Persistence jmena parametru nezna — proste vezme vse pod prefixem
+        // "dsp." a naleje do mapy. Novy parametr ve stage tedy projde bez
+        // jakekoli zmeny tady.
+        for (const auto& [k, v] : kv) {
+            if (k.rfind("dsp.", 0) != 0) continue;
+            const size_t dot = k.find('.', 4);
+            if (dot == std::string::npos) continue;
+            const std::string stage = k.substr(4, dot - 4);
+            const std::string field = k.substr(dot + 1);
+            if (stage.empty() || field.empty()) continue;
+            auto& st = s.dsp[stage];
+            if      (field == "enabled") st.enabled = (v == "true" || v == "1");
+            else if (field == "choice")  { try { st.choice = std::stoi(v); } catch (...) {} }
+            else                         { try { st.params[field] = std::stof(v); } catch (...) {} }
+        }
+
+        // -- Migrace v3/v4 -> v5: ploche DSP klice na genericke ----------------
+        // Klice odpovidaji Param::id v jednotlivych stage (agc.cpp, enhancer.cpp,
+        // limiter.cpp, convolver.cpp). `legacy` pokryva jeste starsi bbe_* nazvy
+        // z v3 (Enhancer se drive jmenoval BBE).
+        if (s.schema_version < 5) {
+            struct MigF { const char* stage; const char* id; const char* key; const char* legacy; };
+            static const MigF kMigF[] = {
+                {"CONVOLVER", "mix",          "convolver_mix",        nullptr},
+                {"CONVOLVER", "decay",        "convolver_decay",      nullptr},
+                {"CONVOLVER", "tone",         "convolver_tone",       nullptr},
+                {"CONVOLVER", "size",         "convolver_size",       nullptr},
+                {"AGC",       "target_rms",   "agc_target",           nullptr},
+                {"AGC",       "release_ms",   "agc_release_ms",       nullptr},
+                {"AGC",       "gain_floor",   "agc_floor",            nullptr},
+                {"ENHANCER",  "process",      "enhancer_process",     "bbe_definition"},
+                {"ENHANCER",  "contour",      "enhancer_contour",     "bbe_bass"},
+                {"ENHANCER",  "mid",          "enhancer_mid",         nullptr},
+                {"LIMITER",   "threshold_db", "limiter_threshold_db", nullptr},
+                {"LIMITER",   "release_ms",   "limiter_release_ms",   nullptr},
+            };
+            for (const auto& m : kMigF) {
+                std::string v = raw(m.key);
+                if (v.empty() && m.legacy) v = raw(m.legacy);
+                if (v.empty()) continue;
+                try { s.dsp[m.stage].params[m.id] = std::stof(v); } catch (...) {}
+            }
+            struct MigB { const char* stage; const char* key; const char* legacy; };
+            static const MigB kMigB[] = {
+                {"CONVOLVER", "convolver_enabled", nullptr},
+                {"AGC",       "agc_enabled",       nullptr},
+                {"ENHANCER",  "enhancer_enabled",  "bbe_enabled"},
+                {"LIMITER",   "limiter_enabled",   nullptr},
+            };
+            for (const auto& m : kMigB) {
+                std::string v = raw(m.key);
+                if (v.empty() && m.legacy) v = raw(m.legacy);
+                if (!v.empty()) s.dsp[m.stage].enabled = (v == "true" || v == "1");
+            }
+            if (std::string c = raw("convolver_choice"); !c.empty())
+                { try { s.dsp["CONVOLVER"].choice = std::stoi(c); } catch (...) {} }
+        }
+
+        s.schema_version = 5;   // po nacteni vzdy ulozime jako v5
     } catch (...) {
         return std::nullopt;
     }
@@ -196,31 +336,23 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"resonance_window_ms\": " << s.resonance_window_ms       << ",\n";
         f << "  \"preload_ms\": "          << s.preload_ms                << ",\n";
         f << "  \"cache_budget_mb\": "     << s.cache_budget_mb           << ",\n";
-        f << "  \"window_x\": " << s.window_x << ",\n";
-        f << "  \"window_y\": " << s.window_y << ",\n";
-        f << "  \"window_w\": " << s.window_w << ",\n";
-        f << "  \"window_h\": " << s.window_h << ",\n";
-        f << "  \"agc_enabled\": "        << (s.agc_enabled ? "true" : "false") << ",\n";
-        f << "  \"agc_target\": "         << s.agc_target          << ",\n";
-        f << "  \"agc_release_ms\": "     << s.agc_release_ms       << ",\n";
-        f << "  \"agc_floor\": "          << s.agc_floor            << ",\n";
-        f << "  \"enhancer_enabled\": "   << (s.enhancer_enabled ? "true" : "false") << ",\n";
-        f << "  \"enhancer_process\": "   << s.enhancer_process     << ",\n";
-        f << "  \"enhancer_contour\": "   << s.enhancer_contour     << ",\n";
-        f << "  \"enhancer_mid\": "       << s.enhancer_mid         << ",\n";
-        f << "  \"limiter_enabled\": "    << (s.limiter_enabled ? "true" : "false") << ",\n";
-        f << "  \"limiter_threshold_db\": " << s.limiter_threshold_db << ",\n";
-        f << "  \"limiter_release_ms\": " << s.limiter_release_ms   << ",\n";
+        f << "  \"window_x\": " << s.window.x << ",\n";
+        f << "  \"window_y\": " << s.window.y << ",\n";
+        f << "  \"window_w\": " << s.window.w << ",\n";
+        f << "  \"window_h\": " << s.window.h << ",\n";
         f << "  \"config_page\": "        << s.config_page          << ",\n";
-        f << "  \"convolver_enabled\": " << (s.convolver_enabled ? "true":"false") << ",\n";
-        f << "  \"convolver_mix\": "     << s.convolver_mix     << ",\n";
-        f << "  \"convolver_choice\": "  << s.convolver_choice  << ",\n";
-        f << "  \"convolver_decay\": " << s.convolver_decay << ",\n";
-        f << "  \"convolver_tone\": "  << s.convolver_tone  << ",\n";
-        f << "  \"convolver_size\": "  << s.convolver_size  << ",\n";
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
-        f << "  \"audio_sample_rate\": "  << s.audio_sample_rate    << "\n";
-        f << "}\n";
+        f << "  \"audio_sample_rate\": "  << s.audio_sample_rate;
+        // DSP chain genericky: "dsp.<STAGE>.<Param::id>". Carka se pise PRED
+        // kazdy radek (ne za), takze prazdna mapa nenecha visici carku.
+        for (const auto& [stage, st] : s.dsp) {
+            f << ",\n  \"dsp." << stage << ".enabled\": " << (st.enabled ? "true" : "false");
+            if (st.choice >= 0)
+                f << ",\n  \"dsp." << stage << ".choice\": " << st.choice;
+            for (const auto& [id, v] : st.params)
+                f << ",\n  \"dsp." << stage << "." << id << "\": " << v;
+        }
+        f << "\n}\n";
         f.flush();
         if (!f.good()) {
             // Plny disk / IO chyba: NIKDY neprepisuj dobry config torzem —

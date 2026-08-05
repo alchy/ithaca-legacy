@@ -5,6 +5,7 @@
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
+#include "layout.h"
 #include "imgui.h"
 #include <cstdio>
 #include <filesystem>
@@ -29,7 +30,7 @@ std::vector<std::string> scanBanks(const std::string& search_root) {
 
 void renderBankPanel(AppContext& ctx) {
     using theme::Colors;
-    const float pad = 14.f;
+    const float pad = layout::Dims::pad_inset;
     ImGui::Dummy({0, 4});
     ImGui::Indent(pad);
 
@@ -37,21 +38,31 @@ void renderBankPanel(AppContext& ctx) {
     wdg::Eyebrow("BANK", Colors::silver2);
     ImGui::Dummy({0, 6});
 
-    // Scan kandidatu (cache dle search_root).
-    static std::vector<std::string> cands;
-    static std::string last_root;
+    // Scan kandidatu. Cache zije v ctx.panels (drive function-local static).
+    auto& ps = ctx.panels;
     std::string root = !ctx.state.bank_search_dir.empty()
         ? ctx.state.bank_search_dir
         : (ctx.state.bank_path.empty() ? std::string("")
            : std::filesystem::path(ctx.state.bank_path).parent_path().string());
-    if (root != last_root) { cands = scanBanks(root); last_root = root; }
+    if (!ps.bank_cands_valid || root != ps.bank_cands_root) {
+        ps.bank_cands = scanBanks(root);
+        ps.bank_cands_root = root;
+        ps.bank_cands_valid = true;
+    }
 
     // Bank dropdown
     std::string curr = ctx.state.bank_path.empty() ? std::string("(none)")
         : std::filesystem::path(ctx.state.bank_path).filename().string();
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - pad);
     if (ImGui::BeginCombo("##bank", curr.c_str())) {
-        for (const auto& b : cands) {
+        // Rescan pri OTEVRENI comba (1x per open, stejne jako MIDI dropdown).
+        // Drive se scanovalo jen pri zmene rootu, takze cerstve zkopirovana
+        // banka se v seznamu neobjevila az do restartu aplikace.
+        if (!ps.bank_combo_open) {
+            ps.bank_cands = scanBanks(root);
+            ps.bank_combo_open = true;
+        }
+        for (const auto& b : ps.bank_cands) {
             std::string label = std::filesystem::path(b).filename().string();
             bool sel = (b == ctx.state.bank_path);
             if (ImGui::Selectable(label.c_str(), sel)) {
@@ -62,6 +73,8 @@ void renderBankPanel(AppContext& ctx) {
             }
         }
         ImGui::EndCombo();
+    } else {
+        ps.bank_combo_open = false;
     }
     ImGui::Dummy({0, 8});
 
@@ -74,14 +87,14 @@ void renderBankPanel(AppContext& ctx) {
         case BankFormat::PackedIthaca:    type_label = "PACKED";  break;
         case BankFormat::Unknown:         type_label = "—";       break;
     }
-    wdg::Eyebrow("TYPE"); ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::gold));
-    ImGui::TextUnformatted(type_label);
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-    ImGui::TextUnformatted("\xC2\xB7 auto");   // · auto
-    ImGui::PopStyleColor();
+    // TYPE (eyebrow 11 px) + hodnota (body 18 px) + "· auto" na JEDNOM radku:
+    // pres SameLine by kazdy sedel na jine uctare a text by poskakoval.
+    const wdg::Span type_row[] = {
+        {"TYPE",            theme::Fonts::eyebrow, Colors::muted},
+        {type_label,        theme::Fonts::body,    Colors::gold},
+        {"\xC2\xB7 auto",   theme::Fonts::body,    Colors::muted},   // · auto
+    };
+    wdg::TextRow(type_row, IM_ARRAYSIZE(type_row));
     ImGui::Dummy({0, 8});
 
     // Fakta o bance — realna cisla z engine. Pocet velocity vrstev se neuvadi
