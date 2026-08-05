@@ -5,6 +5,7 @@
 #include "panel_topbar.h"
 #include "app_context.h"
 #include "theme.h"
+#include "layout.h"
 #include "midi/midi_input.h"
 #include "util/log.h"
 #include "imgui.h"
@@ -14,10 +15,15 @@
 
 namespace ithaca::gui {
 
+namespace L = ithaca::gui::layout;
+
 void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_reset) {
     using theme::Colors; using theme::Fonts;
 
-    // Logo ITHACA — zlate, brand font.
+    // Logo ITHACA — zlate, brand font. AlignTextToFramePadding stejne jako
+    // ostatni popisky na radku: bez nej sedi logo (brand 20 px) vys nez
+    // popisky (body 18 px) zarovnane ke combum a radek opticky poskakuje.
+    ImGui::AlignTextToFramePadding();
     if (Fonts::brand) ImGui::PushFont(Fonts::brand);
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::gold));
     ImGui::TextUnformatted("ITHACA");
@@ -39,7 +45,7 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
     ImGui::TextUnformatted("MIDI IN");
     ImGui::PopStyleColor();
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(210);   // zkraceno o 30% (z 300) — misto pro SR/BUFFER/DSP skupinu
+    ImGui::SetNextItemWidth(L::Dims::tb_midi_w);   // misto pro SR/BUFFER skupinu
     const char* cur = ctx.state.midi_port_name.empty() ? "(none)"
                     : ctx.state.midi_port_name.c_str();
     if (ImGui::BeginCombo("##midi", cur)) {
@@ -70,14 +76,14 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
     ImGui::SameLine();
     if (ImGui::Button("RESCAN##reload"))
         ports = ithaca::MidiInput::listPorts();
-    ImGui::SameLine(0, 18);
+    ImGui::SameLine(0, L::Dims::tb_gap);
 
     // CHANNEL dropdown: OMNI + 1..16. Popisek v body fontu (jako RESCAN).
     ImGui::AlignTextToFramePadding();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
     ImGui::TextUnformatted("CH");
     ImGui::PopStyleColor();
-    ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+    ImGui::SameLine(); ImGui::SetNextItemWidth(L::Dims::tb_ch_w);
     char chlbl[8];
     if (ctx.state.midi_channel < 0) std::snprintf(chlbl, sizeof(chlbl), "OMNI");
     else std::snprintf(chlbl, sizeof(chlbl), "%d", ctx.state.midi_channel + 1);
@@ -100,7 +106,7 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
     const int   sr   = ctx.engine.sampleRate();
     const float sr_f = (float)(sr > 0 ? sr : 48000);
 
-    ImGui::SameLine(0, 18);
+    ImGui::SameLine(0, L::Dims::tb_gap);
     ImGui::AlignTextToFramePadding();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
     ImGui::TextUnformatted("SR");
@@ -109,13 +115,13 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
     { char b[16]; std::snprintf(b, sizeof(b), "%g kHz", sr_f / 1000.0);
       ImGui::TextUnformatted(b); }
 
-    ImGui::SameLine(0, 18);
+    ImGui::SameLine(0, L::Dims::tb_gap);
     ImGui::AlignTextToFramePadding();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
     ImGui::TextUnformatted("BUFFER");
     ImGui::PopStyleColor();
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(72);
+    ImGui::SetNextItemWidth(L::Dims::tb_buffer_w);
     {
         static const int kBufs[] = { 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192 };
         const int cur_bs = ctx.engine.blockSize();
@@ -132,14 +138,17 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
 
     // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako
     // primarni slider.) RESET vraci vsechny VOICE/master parametry na default.
-    const float right_margin = 290.f;
+    // Prava skupina zacina na hranici CONFIG sloupce — at LOG/RESET lici
+    // se sloupcem pod nimi. Drive tu bylo hardcoded 290.f (= tataz hodnota
+    // jako col_dsp, jen nesvazana).
+    const float right_margin = L::Dims::col_dsp;
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetWindowWidth() - right_margin);
     ImGui::AlignTextToFramePadding();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
     ImGui::TextUnformatted("LOG");
     ImGui::PopStyleColor();
-    ImGui::SameLine(); ImGui::SetNextItemWidth(120);
+    ImGui::SameLine(); ImGui::SetNextItemWidth(L::Dims::tb_log_w);
     {
         static const char* kLevels[] = { "debug","info","warn","error","fatal","off" };
         constexpr int kNum = IM_ARRAYSIZE(kLevels);

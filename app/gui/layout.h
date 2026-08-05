@@ -5,20 +5,22 @@
 // jsou pojmenovane konstanty na JEDNOM miste — ladis tady, ne roztrousene po
 // panelech (to je slabina icr2, kde jsou rozmery magic numbers v kazdem .cpp).
 //
-// Scaling: g_scale (default 1.0, volitelne nastaveno z GLFW content-scale pri
-// startu). Pouzij S(px) pro skalovany rozmer. Vetsina layoutu pouziva proporce
-// ze sirky okna pro sloupce + pevne (skalovane) px pro vysky — stejny mix jako
-// icr2, jen centralizovany a laditelny.
+// DPI: rozmery se NESKALUJI. ImGui pracuje v logickych bodech a o prepocet na
+// fyzicke pixely se stara backend (io.DisplayFramebufferScale z GLFW), takze
+// nasobit rozmery content-scalem by scale aplikovalo DVAKRAT. g_scale slouzi
+// VYHRADNE k rasterizaci fontu ve fyzickem rozliseni (viz theme.h::load_fonts,
+// main.cpp nastavuje io.FontGlobalScale = 1/g_scale).
+// Drive tu zila i funkce S(px) a sada skalovanych getteru (padOuter(), colBank(),
+// ...) — nikde se nevolaly a jejich pouziti by prave to dvoji skalovani zpusobilo.
+// Odstraneny, aby nesvadely.
 
 namespace ithaca::gui::layout {
 
 // Globalni DPI scale. Nastaveno v main.cpp z glfwGetWindowContentScale().
+// Cte ho jen theme.h::load_fonts — na rozmery se NEAPLIKUJE, viz vyse.
 inline float g_scale = 1.0f;
 
-// Skalovany rozmer v px.
-inline float S(float px) { return px * g_scale; }
-
-// -- Laditelne rozmery (base px; projdou pres S() na call-site) --------------
+// -- Laditelne rozmery (logicke px) ------------------------------------------
 namespace Dims {
     // Okno (default velikost pri prvnim spusteni). HW cilovy display 1280x720.
     inline constexpr float win_w = 1280.f;
@@ -53,18 +55,18 @@ namespace Dims {
     inline constexpr float kbd_keys_h   = 56.f;  // vyska kláves (zbytek = popisek)
     inline constexpr float tick_len     = 10.f;  // grid ryska
     inline constexpr float lamp_gap     = 16.f;  // mezi MIDI lampami
-}
 
-// Skalovane gettery (zkratky pro caste pouziti).
-inline float padOuter()  { return S(Dims::pad_outer); }
-inline float padPanel()  { return S(Dims::pad_panel); }
-inline float rowGap()    { return S(Dims::row_gap); }
-inline float rowGapS()   { return S(Dims::row_gap_s); }
-inline float topbarH()   { return S(Dims::topbar_h); }
-inline float stripH()    { return S(Dims::strip_h); }
-inline float kbdH()      { return S(Dims::kbd_h); }
-inline float logH()      { return S(Dims::log_h); }
-inline float colBank()   { return S(Dims::col_bank); }
-inline float colDsp()    { return S(Dims::col_dsp); }
+    // Vnitrni odsazeni obsahu panelu od jeho leveho/praveho okraje. Mensi nez
+    // pad_panel — panely stoji tesne vedle sebe a plny padding by je opticky
+    // roztrhl. (Drive zila ta samá 14.f zvlast v panel_bank i panel_indicators.)
+    inline constexpr float pad_inset    = 14.f;
+
+    // Top bar: sirky ovladacich prvku.
+    inline constexpr float tb_midi_w    = 210.f; // MIDI IN combo
+    inline constexpr float tb_ch_w      = 90.f;  // CHANNEL combo
+    inline constexpr float tb_buffer_w  = 72.f;  // BUFFER combo
+    inline constexpr float tb_log_w     = 120.f; // LOG level combo
+    inline constexpr float tb_gap       = 18.f;  // mezera mezi skupinami
+}
 
 } // namespace ithaca::gui::layout

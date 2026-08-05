@@ -5,6 +5,7 @@
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
+#include "layout.h"
 #include "imgui.h"
 #include <cstdio>
 #include <filesystem>
@@ -29,7 +30,7 @@ std::vector<std::string> scanBanks(const std::string& search_root) {
 
 void renderBankPanel(AppContext& ctx) {
     using theme::Colors;
-    const float pad = 14.f;
+    const float pad = layout::Dims::pad_inset;
     ImGui::Dummy({0, 4});
     ImGui::Indent(pad);
 
@@ -74,14 +75,14 @@ void renderBankPanel(AppContext& ctx) {
         case BankFormat::PackedIthaca:    type_label = "PACKED";  break;
         case BankFormat::Unknown:         type_label = "—";       break;
     }
-    wdg::Eyebrow("TYPE"); ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::gold));
-    ImGui::TextUnformatted(type_label);
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
-    ImGui::TextUnformatted("\xC2\xB7 auto");   // · auto
-    ImGui::PopStyleColor();
+    // TYPE (eyebrow 11 px) + hodnota (body 18 px) + "· auto" na JEDNOM radku:
+    // pres SameLine by kazdy sedel na jine uctare a text by poskakoval.
+    const wdg::Span type_row[] = {
+        {"TYPE",            theme::Fonts::eyebrow, Colors::muted},
+        {type_label,        theme::Fonts::body,    Colors::gold},
+        {"\xC2\xB7 auto",   theme::Fonts::body,    Colors::muted},   // · auto
+    };
+    wdg::TextRow(type_row, IM_ARRAYSIZE(type_row));
     ImGui::Dummy({0, 8});
 
     // Fakta o bance — realna cisla z engine. Pocet velocity vrstev se neuvadi

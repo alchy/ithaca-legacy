@@ -22,6 +22,65 @@ inline void Eyebrow(const char* t, ImU32 col = Colors::muted) {
     if (Fonts::eyebrow) ImGui::PopFont();
 }
 
+// -- Radek michanych fontu na spolecne uctare ------------------------------
+// ImGui sklada polozky na radku podle HORNI hrany. Kdyz na jednom radku potkas
+// dve velikosti fontu (eyebrow 11 px "TYPE" + body 18 px "PACKED"), sednou si
+// na ruzne uctary a text opticky poskakuje. TextRow spocita nejvetsi ascent na
+// radku a kazdy usek posadi tak, aby vsechny stály na TEZE uctare.
+//
+// Kresli se pres ImDrawList (stejne jako DecoSlider) a misto se rezervuje
+// jednim Dummy — vyska radku je pak dana nejvyssim ascentem a nejhlubsim
+// descentem, ne nahodne poslednim useknem.
+struct Span {
+    const char* text;
+    ImFont*     font  = nullptr;          // nullptr = prave aktivni font
+    ImU32       color = Colors::silver;
+};
+
+// Vyska radku pro dany seznam useku (kdyz si volajici potrebuje predpocitat
+// misto). Vraci ascent + descent nejvetsiho useku.
+inline float TextRowHeight(const Span* spans, int n) {
+    float asc = 0.f, desc = 0.f;
+    for (int i = 0; i < n; ++i) {
+        ImFont* f = spans[i].font ? spans[i].font : ImGui::GetFont();
+        ImGui::PushFont(f);
+        const float k = ImGui::GetFontSize() / f->FontSize;   // render / raster
+        asc  = std::max(asc,   f->Ascent  * k);
+        desc = std::max(desc, -f->Descent * k);
+        ImGui::PopFont();
+    }
+    return asc + desc;
+}
+
+inline void TextRow(const Span* spans, int n, float gap = 6.f) {
+    if (n <= 0) return;
+    // 1) Spolecna uctara = nejvetsi ascent na radku.
+    float max_asc = 0.f, max_desc = 0.f;
+    for (int i = 0; i < n; ++i) {
+        ImFont* f = spans[i].font ? spans[i].font : ImGui::GetFont();
+        ImGui::PushFont(f);
+        const float k = ImGui::GetFontSize() / f->FontSize;
+        max_asc  = std::max(max_asc,   f->Ascent  * k);
+        max_desc = std::max(max_desc, -f->Descent * k);
+        ImGui::PopFont();
+    }
+    // 2) Kresli useky za sebou, kazdy posunuty o rozdil ascentu.
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    auto* dl = ImGui::GetWindowDrawList();
+    float x = o.x;
+    for (int i = 0; i < n; ++i) {
+        ImFont* f = spans[i].font ? spans[i].font : ImGui::GetFont();
+        ImGui::PushFont(f);
+        const float k   = ImGui::GetFontSize() / f->FontSize;
+        const float asc = f->Ascent * k;
+        dl->AddText(ImVec2(x, o.y + (max_asc - asc)), spans[i].color, spans[i].text);
+        x += ImGui::CalcTextSize(spans[i].text).x + gap;
+        ImGui::PopFont();
+    }
+    // 3) Rezervuj misto (bez zaverecne mezery za poslednim useknem).
+    ImGui::Dummy(ImVec2(std::max(0.f, x - o.x - gap), max_asc + max_desc));
+}
+
 // StatTile: eyebrow popisek nad velkou hodnotou. value_col rozhoduje zlato/stribro.
 // align = 0 (vlevo) / 0.5 (na stred) / 1 (vpravo) — zarovnani OBOU radku v ramci
 // bunky (sirka = GetContentRegionAvail). margin = horizontalni odsazeni od kraju

@@ -5,6 +5,7 @@
 #include "app_context.h"
 #include "theme.h"
 #include "widgets.h"
+#include "layout.h"
 #include "imgui.h"
 #include <cmath>
 #include <cstdio>
@@ -29,7 +30,7 @@ float holdMax(Hold& s, float cur, float now_s, float win = 0.4f) {
 void renderIndicatorStrip(AppContext& ctx, float col1_w, float col3_w) {
     using theme::Colors;
     const float H = ImGui::GetContentRegionAvail().y;  // = strip_h z shellu
-    const float pad = 14.f;
+    const float pad = layout::Dims::pad_inset;
 
     // --- col1: MIDI lampy + SUSTAIN ---
     ImGui::BeginChild("##ind_midi", {col1_w, H}, false);
