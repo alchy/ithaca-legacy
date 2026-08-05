@@ -111,13 +111,8 @@ void renderBankPanel(AppContext& ctx) {
         ImGui::TextUnformatted("NEUPLNA (RAM limit)");
         ImGui::PopStyleColor();
     }
-    ImGui::Dummy({0, 10});
-
-    // RELOAD
-    if (ImGui::Button("RELOAD",
-                      ImVec2(ImGui::GetContentRegionAvail().x - pad, 0))) {
-        if (!ctx.state.bank_path.empty()) ctx.requestBankReload(ctx.state.bank_path);
-    }
+    // RELOAD se presunul do horni listy vedle RESET (obe akcni tlacitka
+    // pohromade), viz panel_topbar.
 
     ImGui::Unindent(pad);
 }

@@ -2,7 +2,7 @@
 
 Oblast `app/gui/` implementuje grafické uživatelské rozhraní nástroje **ithaca-gui** nad Dear ImGui (backend GLFW + OpenGL 3.3). Celý životní cyklus aplikace je řízen funkcí `main()`: načti persistovaný `GuiState` (nebo defaults) → otevři GLFW okno (DPI scale z `glfwGetWindowContentScale`) → inicializuj ImGui s Art Deco tématem a fonty Cormorant → inicializuj `AppContext` (engine + audio + MIDI + log subscriber; **banka se načítá asynchronně** na worker threadu — okno se ukáže hned) → spusť pomocný thread pro flush RT log ringu → **render loop** (~vsync, typicky 60 Hz; per frame `renderShell()` + zrcadlení DSP + `pollReloadCompletion()` + modální overlay) → finální `saveState` → shutdown v opačném pořadí.
 
-`renderShell()` sestavuje plnoobrazovkové kořenové okno `##root` a rozděluje ho do vodorovných pásem: **top bar** (logo + MIDI dropdown + CH + SR/BUFFER + LOG level + RESET) → **indicator strip** (MIDI lampy + sustain bar + 5 diagnostických dlaždic vč. DSP LOAD + peak metr L/R) → **hlavní řada 3 sloupců** (BANK 250 px | stránka parametrů flex | CONFIG selektor 290 px) → **klaviatura 88 kláves** → **LOG strip** (pohltí zbytek výšky). Aktivní stránka uprostřed se volí přes `ctx.state.config_page` (0 = MASTER, 1 = RESONANCE, 2–5 = DSP stage CONVOLVER/AGC/ENHANCER/LIMITER): klik v CONFIG panelu přepne index, `renderParamPage` pak genericky nakreslí příslušnou `IParamPage`.
+`renderShell()` sestavuje plnoobrazovkové kořenové okno `##root` a rozděluje ho do vodorovných pásem: **top bar** (logo + MIDI dropdown + CH + SR/BUFFER + LOG level + RELOAD + RESET) → **indicator strip** (MIDI lampy + sustain bar + 5 diagnostických dlaždic vč. DSP LOAD + peak metr L/R) → **hlavní řada 3 sloupců** (BANK 250 px | stránka parametrů flex | CONFIG selektor 290 px) → **klaviatura 88 kláves** → **LOG strip** (pohltí zbytek výšky). Aktivní stránka uprostřed se volí přes `ctx.state.config_page` (0 = MASTER, 1 = RESONANCE, 2–5 = DSP stage CONVOLVER/AGC/ENHANCER/LIMITER): klik v CONFIG panelu přepne index, `renderParamPage` pak genericky nakreslí příslušnou `IParamPage`.
 
 Engine je přístupný výhradně skrze `AppContext::engine`; runtime parametry se zapisují buď přes atomické settery, nebo přes `IParamPage::set()`, přičemž přeshraniční čtení diagnostických hodnot z GUI vlákna je bezpečné díky `std::atomic` polím enginu. Stav se ukládá do `state.json` (schema **v5**) s debounce 1 s (atomicky: zápis do `.tmp` + rename).
 
@@ -24,8 +24,8 @@ Engine je přístupný výhradně skrze `AppContext::engine`; runtime parametry 
 | **`embedded_font.cpp`** | Zabudovaný Cormorant (komprimované C pole generované při buildu) | `cormorantCompressedData/Size()` |
 | `layout.h` | Jediný zdroj pravdy pro všechny rozměry GUI (logické px konstanty) | `Dims`, `g_scale` |
 | `widgets.h` | Art Deco widgety kreslené přes `ImDrawList` | `TextRow`/`Span`, `DecoSlider`, `StatTile`, `Keyboard`, `HBar`, `ToggleChip`, `Lamp`, `Eyebrow` |
-| `panel_topbar.{h,cpp}` | Top bar: logo, MIDI IN + RESCAN, CHANNEL, SR + BUFFER, LOG level, RESET | `renderTopBar()` |
-| `panel_bank.{h,cpp}` | Levý sloupec: výběr banky, TYPE badge, statistiky, badge „NEUPLNA (RAM limit)", RELOAD | `renderBankPanel()`, `scanBanks()` |
+| `panel_topbar.{h,cpp}` | Top bar: logo, MIDI IN + RESCAN, CHANNEL, SR + BUFFER, LOG level, RELOAD, RESET | `renderTopBar()` |
+| `panel_bank.{h,cpp}` | Levý sloupec: výběr banky, TYPE badge, statistiky, badge „NEUPLNA (RAM limit)" | `renderBankPanel()`, `scanBanks()` |
 | `panel_indicators.{h,cpp}` | Indicator strip: NOTE/OFF lampy, sustain bar, 5 diagnostických dlaždic, peak L/R | `renderIndicatorStrip()` |
 | `panel_keyboard.{h,cpp}` | 88kláves vizualizace aktivních a rezonujících not | `renderKeyboardPanel()` |
 | `panel_params.{h,cpp}` | Generický renderer `IParamPage` (ON/OFF toggle + volič + DecoSlidery + metr) | `renderParamPage()` |
@@ -224,7 +224,7 @@ Všechny konstanty jsou `inline constexpr float` v `ithaca::gui::layout::Dims`, 
 | `row_gap` / `row_gap_s` | 10 / 8 px |
 | `slider_h` / `slider_track` / `slider_grab` | 28 / 3 / 12 px |
 | `bar_h` / `kbd_keys_h` / `tick_len` / `lamp_gap` | 9 / 56 / 10 / 16 px |
-| `tb_midi_w` / `tb_ch_w` / `tb_buffer_w` / `tb_log_w` / `tb_gap` | 210 / 90 / 72 / 120 / 18 px — šířky prvků v top baru |
+| `tb_midi_w` / `tb_ch_w` / `tb_buffer_w` / `tb_log_w` / `tb_gap` | 210 / 90 / 72 / 120 / 18 px — šířky prvků v top baru. Šířka pravé skupiny (LOG + RELOAD + RESET) tu **záměrně není** — měří se z obsahu, viz `panel_topbar`. |
 
 ---
 
@@ -262,14 +262,17 @@ Kreslí se přes `ImDrawList` (stejně jako `DecoSlider`) a místo se rezervuje 
 
 `renderTopBar(AppContext&, IParamPage** reset_pages, int n_reset)`.
 
-Zleva doprava: **logo ITHACA** (brand font, `AlignTextToFramePadding` jako ostatní popisky na řádku) → **MIDI IN** dropdown + RESCAN → **CH** (OMNI/1–16) → **SR** (read-only) + **BUFFER** combo → **LOG level** (pravý margin = `Dims::col_dsp`, aby lícoval s CONFIG sloupcem) → **RESET**.
+Zleva doprava: **logo ITHACA** (brand font, `AlignTextToFramePadding` jako ostatní popisky na řádku) → **MIDI IN** dropdown + RESCAN → **CH** (OMNI/1–16) → **SR** (read-only) + **BUFFER** combo → pravá skupina **LOG level + RELOAD + RESET**.
+
+Šířka pravé skupiny se **měří z obsahu** (`CalcTextSize` + `FramePadding`), nedrží se v konstantě: pevná hodnota se při přidání tlačítka rozejde se skutečností a skupina začne lézt do BUFFERu vlevo — přesně to se stalo, když k RESETu přibyl RELOAD. `SetCursorPosX` je navíc clampnutý na konec levé skupiny, takže se v úzkém okně nic nepřekryje; skupina se nanejvýš přilepí hned za BUFFER.
 
 - MIDI port se otevírá **podle jména**, ne podle indexu do cachovaného seznamu: při odpojení zařízení mezi otevřením comba a klikem by index ukazoval jinam a otevřel by se cizí port. Před `open()` se volá `setChannel()` (callback může běžet hned po otevření).
+- **RELOAD** znovu načte vybranou banku (async). Byl dřív dole v BANK panelu; obě akční tlačítka jsou teď pohromadě. Bez vybrané banky je `BeginDisabled`.
 - **RESET** jede genericky přes `Param::def`: `for (i < n_reset) reset_pages[i]->resetToDefaults();`. Rozsah = MASTER + RESONANCE (`kResetPages = 2` v `main.cpp`); DSP chain se záměrně neresetuje — smazání celého řetězce jedním tlačítkem by bylo destruktivní překvapení.
 
 ### `panel_bank`
 
-Dropdown kandidátů, TYPE badge (`FIXED`/`DYNAMIC`/`EXTENDED`/`PACKED`/`—`) přes `wdg::TextRow`, statistiky, volitelný badge „NEUPLNA (RAM limit)", RELOAD. Výběr banky → `ctx.requestBankReload(b)` (async). `scanBanks(root)` vrací podadresáře; root se určuje z `state.bank_search_dir`, jinak z rodiče `state.bank_path`.
+Dropdown kandidátů, TYPE badge (`FIXED`/`DYNAMIC`/`EXTENDED`/`PACKED`/`—`) přes `wdg::TextRow`, statistiky, volitelný badge „NEUPLNA (RAM limit)". RELOAD se přesunul do top baru. Výběr banky → `ctx.requestBankReload(b)` (async). `scanBanks(root)` vrací podadresáře; root se určuje z `state.bank_search_dir`, jinak z rodiče `state.bank_path`.
 
 ### `panel_indicators`
 

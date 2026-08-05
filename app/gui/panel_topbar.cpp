@@ -9,6 +9,7 @@
 #include "midi/midi_input.h"
 #include "util/log.h"
 #include "imgui.h"
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -149,14 +150,27 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
         }
     }
 
-    // LOG level + RESET — vpravo. (MASTER se presunul do VOICE panelu jako
-    // primarni slider.) RESET vraci vsechny VOICE/master parametry na default.
-    // Prava skupina zacina na hranici CONFIG sloupce — at LOG/RESET lici
-    // se sloupcem pod nimi. Drive tu bylo hardcoded 290.f (= tataz hodnota
-    // jako col_dsp, jen nesvazana).
-    const float right_margin = L::Dims::col_dsp;
+    // Prava skupina: LOG level + RELOAD + RESET. RELOAD byl drive dole v BANK
+    // panelu; obe akcni tlacitka jsou ted vedle sebe na horni liste.
+    //
+    // Sirku skupiny MERIME z obsahu, nedrzime ji v konstante: pevna hodnota se
+    // pri pridani tlacitka rozejde se skutecnosti a skupina zacne lezt do
+    // BUFFERu vlevo (presne to se stalo, kdyz k RESETu pribyl RELOAD).
+    // Clamp na konec leve skupiny navic zajisti, ze se v uzkem okne nic
+    // nepreklopi pres sebe — skupina se nanejvys prilepi hned za BUFFER.
+    auto btnW = [](const char* t) {
+        return ImGui::CalcTextSize(t).x + ImGui::GetStyle().FramePadding.x * 2.f;
+    };
+    constexpr float kGapLogBtn = 16.f, kGapBtnBtn = 10.f;
+    const float group_w = ImGui::CalcTextSize("LOG").x
+                        + ImGui::GetStyle().ItemSpacing.x
+                        + L::Dims::tb_log_w
+                        + kGapLogBtn + btnW("RELOAD")
+                        + kGapBtnBtn + btnW("RESET");
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - right_margin);
+    const float after_left = ImGui::GetCursorPosX();   // konec leve skupiny
+    ImGui::SetCursorPosX(std::max(after_left,
+                                  ImGui::GetWindowWidth() - group_w));
     ImGui::AlignTextToFramePadding();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::v(Colors::muted));
     ImGui::TextUnformatted("LOG");
@@ -173,7 +187,17 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
                 log::severity_from_string(ctx.state.log_level.c_str(), log::Severity::Info));
         }
     }
-    ImGui::SameLine(0, 16);
+    ImGui::SameLine(0, kGapLogBtn);
+    // RELOAD: znovu nacte aktualne vybranou banku (async, prubeh kryje modalni
+    // overlay). Bez vybrane banky nema co delat → disabled, aby bylo videt proc.
+    {
+        const bool has_bank = !ctx.state.bank_path.empty();
+        ImGui::BeginDisabled(!has_bank);
+        if (ImGui::Button("RELOAD")) ctx.requestBankReload(ctx.state.bank_path);
+        ImGui::EndDisabled();
+    }
+
+    ImGui::SameLine(0, kGapBtnBtn);
     // RESET jede genericky pres Param::def. Drive tu byly defaulty vypsane
     // POTRETI (vedle GuiState defaultu a Param::def) a chybel mezi nimi
     // max_resonance_voices — ten se tedy nikdy neresetoval. set() na strance
