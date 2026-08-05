@@ -14,7 +14,7 @@
 
 namespace ithaca::gui {
 
-void renderTopBar(AppContext& ctx) {
+void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_reset) {
     using theme::Colors; using theme::Fonts;
 
     // Logo ITHACA — zlate, brand font.
@@ -152,17 +152,13 @@ void renderTopBar(AppContext& ctx) {
         }
     }
     ImGui::SameLine(0, 16);
+    // RESET jede genericky pres Param::def. Drive tu byly defaulty vypsane
+    // POTRETI (vedle GuiState defaultu a Param::def) a chybel mezi nimi
+    // max_resonance_voices — ten se tedy nikdy neresetoval. set() na strance
+    // zapisuje do ctx.state i vola prislusny engine setter, takze rucni
+    // volani setteru uz tu nejsou potreba.
     if (ImGui::Button("RESET")) {
-        ctx.state.resonance_enabled  = true;
-        ctx.state.resonance_gain_db  = -12.f;
-        ctx.state.release_ms         = 200.f;
-        ctx.state.excite_decay_ms    = 5000.f;
-        ctx.state.master_gain_db     = 0.f;
-        ctx.engine.setResonanceEnabled(true);
-        ctx.engine.setResonanceGainDb(-12.f);
-        ctx.engine.setReleaseMs(200.f);
-        ctx.engine.setExciteDecayMs(5000.f);
-        ctx.engine.setMasterGain(1.f);
+        for (int i = 0; i < n_reset; ++i) reset_pages[i]->resetToDefaults();
     }
 }
 

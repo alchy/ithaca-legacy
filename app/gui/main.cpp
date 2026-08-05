@@ -194,6 +194,9 @@ int main(int argc, char* argv[]) {
         &ctx.engine.dspChain().stage(2),   // ENHANCER
         &ctx.engine.dspChain().stage(3),   // LIMITER
     };
+    // Rozsah tlacitka RESET v topbaru: jen prvni dve stranky (MASTER +
+    // RESONANCE). DSP chain se zamerne neresetuje.
+    constexpr int kResetPages = 2;
     if (ctx.state.config_page < 0 || ctx.state.config_page > 5) ctx.state.config_page = 0;
 
     while (!glfwWindowShouldClose(w)) {
@@ -227,7 +230,9 @@ int main(int argc, char* argv[]) {
 
         const float content_w = ImGui::GetContentRegionAvail().x;  // = W - 2*PAD
 
-        ImGui::BeginChild("##topbar", {content_w, topbar_h}, false); renderTopBar(ctx); ImGui::EndChild();
+        ImGui::BeginChild("##topbar", {content_w, topbar_h}, false);
+            renderTopBar(ctx, pages, kResetPages);
+        ImGui::EndChild();
         ImGui::Dummy({0, 2.f});   // topbar↔strip tesne (zbytek mezery = item spacing)
         ImGui::BeginChild("##strip", {content_w, strip_h}, false); renderIndicatorStrip(ctx, COL1, COL3); ImGui::EndChild();
         ImGui::Dummy({0, L::Dims::row_gap});

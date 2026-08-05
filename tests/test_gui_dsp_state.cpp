@@ -103,3 +103,33 @@ TEST_CASE("apply nechá chybejici parametr na jeho soucasne hodnote") {
     CHECK(ch.stage(1).get(0) == doctest::Approx(0.2f));
     CHECK(ch.stage(1).get(1) == doctest::Approx(before));
 }
+
+// -- resetToDefaults --------------------------------------------------------
+// Podklad pro RESET tlacitko v topbaru. Drive melo defaulty hardcodovane
+// potreti (vedle GuiState defaultu a Param::def) a zapominalo na
+// max_resonance_voices.
+
+TEST_CASE("resetToDefaults vrati vsechny parametry stage na Param::def") {
+    DspChain ch;  ch.prepare(48000.f, 512);
+    auto& agc = ch.stage(1);
+    agc.set(0, 0.42f);
+    agc.set(1, 1234.f);
+    agc.set(2, 0.9f);
+
+    agc.resetToDefaults();
+
+    for (int j = 0; j < agc.paramCount(); ++j)
+        CHECK(agc.get(j) == doctest::Approx(agc.param(j).def));
+}
+
+TEST_CASE("resetToDefaults funguje pro kazdou stage chainu") {
+    DspChain ch;  ch.prepare(48000.f, 512);
+    for (int i = 0; i < ch.stageCount(); ++i) {
+        auto& st = ch.stage(i);
+        for (int j = 0; j < st.paramCount(); ++j)
+            st.set(j, st.param(j).max);      // vychyl na maximum
+        st.resetToDefaults();
+        for (int j = 0; j < st.paramCount(); ++j)
+            CHECK(st.get(j) == doctest::Approx(st.param(j).def));
+    }
+}
