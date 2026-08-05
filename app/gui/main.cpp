@@ -11,6 +11,7 @@
 #include "panel_config.h"
 #include "master_page.h"
 #include "resonance_page.h"
+#include "dsp_state.h"
 #include "panel_log.h"
 #include "persistence.h"
 #include "theme.h"
@@ -86,10 +87,10 @@ int main(int argc, char* argv[]) {
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-    GLFWwindow* w = glfwCreateWindow(st.window_w, st.window_h,
+    GLFWwindow* w = glfwCreateWindow(st.window.w, st.window.h,
                                      "ithaca-gui", nullptr, nullptr);
     if (!w) { glfwTerminate(); return 1; }
-    glfwSetWindowPos(w, st.window_x, st.window_y);
+    glfwSetWindowPos(w, st.window.x, st.window.y);
     // Off-screen clamp: pokud byl pred ulozenim pripojeny extra monitor a po
     // restartu uz neni, restorovana pozice muze byt mimo viditelne plochy.
     // Spocteme prekryv okna s kazdym pripojenym monitorem; pokud nikde neni
@@ -116,8 +117,8 @@ int main(int argc, char* argv[]) {
     };
     if (!isWindowOnAnyMonitor()) {
         glfwSetWindowPos(w, 100, 100);
-        st.window_x = 100;
-        st.window_y = 100;
+        st.window.x = 100;
+        st.window.y = 100;
     }
     glfwMakeContextCurrent(w);
     glfwSwapInterval(1); // vsync
@@ -199,8 +200,8 @@ int main(int argc, char* argv[]) {
         glfwPollEvents();
         // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
         // pocitat layout pri resize. Predtim se aktualizovalo jen pri shutdown.
-        glfwGetWindowSize(w, &ctx.state.window_w, &ctx.state.window_h);
-        glfwGetWindowPos(w, &ctx.state.window_x, &ctx.state.window_y);
+        glfwGetWindowSize(w, &ctx.state.window.w, &ctx.state.window.h);
+        glfwGetWindowPos(w, &ctx.state.window.x, &ctx.state.window.y);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -209,8 +210,8 @@ int main(int argc, char* argv[]) {
         // Layout: TOP BAR (full) → INDICATOR STRIP (full) → MAIN ROW
         // (BANK 230 | VOICE flex | DSP 280) → KEYBOARD (full) → LOG (full).
         namespace L = ithaca::gui::layout;
-        const float W = (float)ctx.state.window_w;
-        const float H = (float)ctx.state.window_h;
+        const float W = (float)ctx.state.window.w;
+        const float H = (float)ctx.state.window.h;
         const float COL1 = L::Dims::col_bank, COL3 = L::Dims::col_dsp;
         const float PAD  = L::Dims::pad_outer;
         const float topbar_h = L::Dims::topbar_h, strip_h = L::Dims::strip_h;
@@ -254,26 +255,10 @@ int main(int argc, char* argv[]) {
         ImGui::BeginChild("##config", {COL3, main_h}, false);
             renderConfigPanel(ctx, pages, 6, ctx.state.config_page);
         ImGui::EndChild();
-        // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci).
-        {
-            auto& ch = ctx.engine.dspChain();
-            auto& cv  = ch.stage(0);   // CONVOLVER
-            auto& agc = ch.stage(1);   // AGC
-            auto& enh = ch.stage(2);   // ENHANCER
-            auto& lim = ch.stage(3);   // LIMITER
-            ctx.state.convolver_enabled = cv.enabled();
-            ctx.state.convolver_mix     = cv.get(0);
-            ctx.state.convolver_choice  = cv.currentChoice();
-            ctx.state.convolver_decay = cv.get(1);
-            ctx.state.convolver_tone  = cv.get(2);
-            ctx.state.convolver_size  = cv.get(3);
-            ctx.state.agc_enabled = agc.enabled();
-            ctx.state.agc_target = agc.get(0); ctx.state.agc_release_ms = agc.get(1); ctx.state.agc_floor = agc.get(2);
-            ctx.state.enhancer_enabled = enh.enabled();
-            ctx.state.enhancer_process = enh.get(0); ctx.state.enhancer_contour = enh.get(1); ctx.state.enhancer_mid = enh.get(2);
-            ctx.state.limiter_enabled = lim.enabled();
-            ctx.state.limiter_threshold_db = lim.get(0); ctx.state.limiter_release_ms = lim.get(1);
-        }
+        // Zrcadli aktualni DSP stage hodnoty do ctx.state (pro persistenci) —
+        // panely meni stage primo, takze bez tohoto by je saveState nevidel.
+        // Genericke: nova stage/parametr se zrcadli sam, viz dsp_state.h.
+        dspStateFromChain(ctx.state, ctx.engine.dspChain());
 
         ImGui::Dummy({0, L::Dims::row_gap});
         ImGui::BeginChild("##kbd", {content_w, kbd_h}, false); renderKeyboardPanel(ctx); ImGui::EndChild();
@@ -366,37 +351,13 @@ int main(int argc, char* argv[]) {
 
         // Persistence debounce: zaznamenat zmenu, ulozi az po 1s ticha. Pri
         // tahani slideru se nezbytecne neulozi kazdy frame; jen 1s po dokonceni.
-        bool changed =
-            last_saved.bank_path           != ctx.state.bank_path ||
-            last_saved.midi_port_name      != ctx.state.midi_port_name ||
-            last_saved.master_gain_db      != ctx.state.master_gain_db ||
-            last_saved.resonance_enabled   != ctx.state.resonance_enabled ||
-            last_saved.resonance_gain_db   != ctx.state.resonance_gain_db ||
-            last_saved.resonance_layer_db  != ctx.state.resonance_layer_db ||
-            last_saved.release_ms          != ctx.state.release_ms ||
-            last_saved.excite_decay_ms     != ctx.state.excite_decay_ms ||
-            last_saved.log_level           != ctx.state.log_level ||
-            last_saved.midi_channel        != ctx.state.midi_channel ||
-            last_saved.agc_enabled         != ctx.state.agc_enabled ||
-            last_saved.agc_target          != ctx.state.agc_target ||
-            last_saved.agc_release_ms      != ctx.state.agc_release_ms ||
-            last_saved.agc_floor           != ctx.state.agc_floor ||
-            last_saved.enhancer_enabled    != ctx.state.enhancer_enabled ||
-            last_saved.enhancer_process    != ctx.state.enhancer_process ||
-            last_saved.enhancer_contour    != ctx.state.enhancer_contour ||
-            last_saved.enhancer_mid        != ctx.state.enhancer_mid ||
-            last_saved.limiter_enabled     != ctx.state.limiter_enabled ||
-            last_saved.limiter_threshold_db != ctx.state.limiter_threshold_db ||
-            last_saved.limiter_release_ms  != ctx.state.limiter_release_ms ||
-            last_saved.config_page         != ctx.state.config_page ||
-            last_saved.max_resonance_voices != ctx.state.max_resonance_voices ||
-            last_saved.audio_block_size    != ctx.state.audio_block_size ||
-            last_saved.convolver_enabled   != ctx.state.convolver_enabled ||
-            last_saved.convolver_mix       != ctx.state.convolver_mix ||
-            last_saved.convolver_choice    != ctx.state.convolver_choice ||
-            last_saved.convolver_decay != ctx.state.convolver_decay ||
-            last_saved.convolver_tone  != ctx.state.convolver_tone ||
-            last_saved.convolver_size  != ctx.state.convolver_size;
+        // Porovnava se CELY GuiState (operator== = default) — drive tu byl rucni
+        // retezec 30 poli, ktery vynechaval bank_search_dir a pri pridani pole
+        // se na nej tise zapominalo. Geometrii okna z porovnani vyradime: meni
+        // se pri kazdem posunu okna a spustila by ukladani porad dokola (uklada
+        // se stejne pri kazdem saveState vc. finalniho pred shutdownem).
+        last_saved.window = ctx.state.window;
+        const bool changed = !(ctx.state == last_saved);
         if (changed && !dirty_since) {
             dirty_since = std::chrono::steady_clock::now();
         }

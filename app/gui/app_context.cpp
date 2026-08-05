@@ -4,6 +4,7 @@
 // jako userdata, scratch L/R buffery jsou static uvnitr cb (audio thread je
 // jediny konzument). Stejny vzor jako app/cli/main.cpp::playAudioCb.
 #include "app_context.h"
+#include "dsp_state.h"
 
 #include "util/log.h"
 
@@ -76,28 +77,11 @@ bool AppContext::initFromState(const GuiState& s) {
         return false;
     }
 
-    // Aplikuj perzistovane DSP parametry na chain (poradi parametru = Param
-    // tabulky stage: AGC[target,release,floor], ENHANCER[process,contour,mid],
-    // LIMITER[threshold_db,release_ms]).
-    {
-        auto& ch = engine.dspChain();
-        auto& cv  = ch.stage(0);   // CONVOLVER
-        auto& agc = ch.stage(1);   // AGC
-        auto& enh = ch.stage(2);   // ENHANCER
-        auto& lim = ch.stage(3);   // LIMITER
-        cv.set(0, state.convolver_mix);
-        cv.set(1, state.convolver_decay);
-        cv.set(2, state.convolver_tone);
-        cv.set(3, state.convolver_size);
-        if (state.convolver_choice > 0) cv.selectChoice(state.convolver_choice);
-        cv.setEnabled(state.convolver_enabled);
-        agc.set(0, state.agc_target); agc.set(1, state.agc_release_ms); agc.set(2, state.agc_floor);
-        agc.setEnabled(state.agc_enabled);
-        enh.set(0, state.enhancer_process); enh.set(1, state.enhancer_contour); enh.set(2, state.enhancer_mid);
-        enh.setEnabled(state.enhancer_enabled);
-        lim.set(0, state.limiter_threshold_db); lim.set(1, state.limiter_release_ms);
-        lim.setEnabled(state.limiter_enabled);
-    }
+    // Aplikuj perzistovane DSP parametry na chain. Genericky pres Param::id —
+    // pridani parametru do stage nevyzaduje zadnou zmenu tady. Musi byt AZ po
+    // engine.init(), protoze ten vola dsp_.prepare() a teprve tam Convolver
+    // naplni seznam IR (choiceCount) — drive by se persistovany volic zahodil.
+    applyDspStateToChain(state, engine.dspChain());
     // Zivý strop rezonancni polyfonie (uz predano pres cfg, ale explicitne
     // volame setter aby cesta setMaxResonanceVoices byla vzdy exercisovana).
     engine.setMaxResonanceVoices(state.max_resonance_voices);

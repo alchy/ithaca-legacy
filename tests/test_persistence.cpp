@@ -19,7 +19,7 @@ TEST_CASE("Persistence round-trip") {
     s.release_ms          = 250.f;
     s.excite_decay_ms     = 4000.f;
     s.max_resonance_voices = 16;
-    s.window_x = 200; s.window_y = 300; s.window_w = 800; s.window_h = 600;
+    s.window = {200, 300, 800, 600};
     s.log_level = "debug";
     s.midi_channel = 4;   // 0-based; -1 = OMNI
 
@@ -35,30 +35,26 @@ TEST_CASE("Persistence round-trip") {
     CHECK(loaded->release_ms == doctest::Approx(s.release_ms));
     CHECK(loaded->excite_decay_ms == doctest::Approx(s.excite_decay_ms));
     CHECK(loaded->max_resonance_voices == 16);
-    CHECK(loaded->window_w == 800);
-    CHECK(loaded->window_h == 600);
+    CHECK(loaded->window.w == 800);
+    CHECK(loaded->window.h == 600);
     CHECK(loaded->log_level == "debug");
     CHECK(loaded->midi_channel == 4);
 
     std::filesystem::remove(p);
 }
 
-TEST_CASE("Persistence round-trip — DSP + engine-tuning pole (vsechna)") {
+TEST_CASE("Persistence round-trip — engine-tuning pole (vsechna)") {
     using namespace ithaca::gui;
     auto p = std::filesystem::temp_directory_path() / "ithaca_test_state_full.json";
 
     GuiState s;
     // Vsem polim dame NE-default hodnoty → kdyby nekterou save/load vynechal,
     // nactena hodnota = struct default ≠ nastavena → test selze.
+    // (DSP chain uz sem nepatri — jede genericky, viz testy nize.)
     s.bank_search_dir      = "/banks/scan/dir";
     s.resonance_window_ms  = 8000;     // default 12000
     s.preload_ms           = 300;      // default 150
     s.cache_budget_mb      = 2048;     // default 0
-    s.agc_enabled = true;  s.agc_target = 0.2f;  s.agc_release_ms = 150.f; s.agc_floor = 0.1f;
-    s.enhancer_enabled = true; s.enhancer_process = 6.f; s.enhancer_contour = 3.f; s.enhancer_mid = -2.f;
-    s.limiter_enabled = true; s.limiter_threshold_db = -3.f; s.limiter_release_ms = 100.f;
-    s.convolver_enabled = true; s.convolver_mix = 0.4f; s.convolver_choice = 1;
-    s.convolver_decay = 0.3f; s.convolver_tone = 0.7f; s.convolver_size = 0.55f;
     s.config_page = 4;
     s.audio_block_size = 128; s.audio_sample_rate = 44100;
 
@@ -70,23 +66,6 @@ TEST_CASE("Persistence round-trip — DSP + engine-tuning pole (vsechna)") {
     CHECK(l->resonance_window_ms == 8000);
     CHECK(l->preload_ms == 300);
     CHECK(l->cache_budget_mb == 2048);
-    CHECK(l->agc_enabled == true);
-    CHECK(l->agc_target == doctest::Approx(0.2f));
-    CHECK(l->agc_release_ms == doctest::Approx(150.f));
-    CHECK(l->agc_floor == doctest::Approx(0.1f));
-    CHECK(l->enhancer_enabled == true);
-    CHECK(l->enhancer_process == doctest::Approx(6.f));
-    CHECK(l->enhancer_contour == doctest::Approx(3.f));
-    CHECK(l->enhancer_mid == doctest::Approx(-2.f));
-    CHECK(l->limiter_enabled == true);
-    CHECK(l->limiter_threshold_db == doctest::Approx(-3.f));
-    CHECK(l->limiter_release_ms == doctest::Approx(100.f));
-    CHECK(l->convolver_enabled == true);
-    CHECK(l->convolver_mix == doctest::Approx(0.4f));
-    CHECK(l->convolver_choice == 1);
-    CHECK(l->convolver_decay == doctest::Approx(0.3f));
-    CHECK(l->convolver_tone == doctest::Approx(0.7f));
-    CHECK(l->convolver_size == doctest::Approx(0.55f));
     CHECK(l->config_page == 4);
     CHECK(l->audio_block_size == 128);
     CHECK(l->audio_sample_rate == 44100);
@@ -111,8 +90,136 @@ TEST_CASE("Persistence — chybejici nova pole spadnou na default (obranne cteni
     CHECK(l->resonance_window_ms == 12000);  // default
     CHECK(l->preload_ms == 150);             // default
     CHECK(l->cache_budget_mb == 0);          // default (auto)
-    CHECK(l->convolver_enabled == false);    // default
+    CHECK(l->dsp.empty());                   // zadne DSP klice → stage si drzi defaulty
     std::filesystem::remove(p);
+}
+
+// -- Genericka DSP persistence (schema v5) ----------------------------------
+// Stage stav se uklada pod klicem "dsp.<STAGE>.<Param::id>" — pridani parametru
+// do stage uz nevyzaduje zadnou zmenu v GuiState ani v persistence.
+
+TEST_CASE("DSP stage stav se persistuje genericky podle Param::id") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_dsp_generic.json";
+
+    GuiState s;
+    s.dsp["CONVOLVER"] = {true, 1, {{"mix", 0.4f}, {"decay", 0.3f},
+                                    {"tone", 0.7f}, {"size", 0.55f}}};
+    s.dsp["AGC"]       = {true, -1, {{"target_rms", 0.2f}, {"release_ms", 150.f},
+                                     {"gain_floor", 0.1f}}};
+    s.dsp["LIMITER"]   = {false, -1, {{"threshold_db", -3.f}, {"release_ms", 100.f}}};
+
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+
+    REQUIRE(l->dsp.count("CONVOLVER") == 1);
+    CHECK(l->dsp.at("CONVOLVER").enabled == true);
+    CHECK(l->dsp.at("CONVOLVER").choice == 1);
+    CHECK(l->dsp.at("CONVOLVER").params.at("mix")   == doctest::Approx(0.4f));
+    CHECK(l->dsp.at("CONVOLVER").params.at("decay") == doctest::Approx(0.3f));
+    CHECK(l->dsp.at("CONVOLVER").params.at("tone")  == doctest::Approx(0.7f));
+    CHECK(l->dsp.at("CONVOLVER").params.at("size")  == doctest::Approx(0.55f));
+
+    REQUIRE(l->dsp.count("AGC") == 1);
+    CHECK(l->dsp.at("AGC").enabled == true);
+    CHECK(l->dsp.at("AGC").params.at("target_rms") == doctest::Approx(0.2f));
+    CHECK(l->dsp.at("AGC").params.at("gain_floor") == doctest::Approx(0.1f));
+
+    REQUIRE(l->dsp.count("LIMITER") == 1);
+    CHECK(l->dsp.at("LIMITER").enabled == false);
+    CHECK(l->dsp.at("LIMITER").params.at("threshold_db") == doctest::Approx(-3.f));
+
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Genericka persistence unese NEZNAMY parametr (pridani do stage)") {
+    // Smysl cele zmeny: novy parametr ve stage projde persistenci bez zasahu
+    // do GuiState / loadState / saveState.
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_dsp_newparam.json";
+
+    GuiState s;
+    s.dsp["ENHANCER"] = {true, -1, {{"process", 6.f}, {"zcela_novy_param", 42.5f}}};
+    REQUIRE(saveState(p, s));
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->dsp.at("ENHANCER").params.at("zcela_novy_param") == doctest::Approx(42.5f));
+
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Migrace v4 -> v5: ploche DSP klice se prevedou na genericke") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v4_dsp.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 4,\n  \"bank_path\": \"/x\",\n"
+             "  \"convolver_enabled\": true,\n  \"convolver_mix\": 0.4,\n"
+             "  \"convolver_choice\": 2,\n  \"convolver_decay\": 0.3,\n"
+             "  \"convolver_tone\": 0.7,\n  \"convolver_size\": 0.55,\n"
+             "  \"agc_enabled\": true,\n  \"agc_target\": 0.2,\n"
+             "  \"agc_release_ms\": 150,\n  \"agc_floor\": 0.1,\n"
+             "  \"enhancer_enabled\": true,\n  \"enhancer_process\": 6,\n"
+             "  \"enhancer_contour\": 3,\n  \"enhancer_mid\": -2,\n"
+             "  \"limiter_enabled\": true,\n  \"limiter_threshold_db\": -3,\n"
+             "  \"limiter_release_ms\": 100\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->schema_version == 5);          // po nacteni se uklada jako v5
+    CHECK(l->dsp.at("CONVOLVER").enabled == true);
+    CHECK(l->dsp.at("CONVOLVER").choice == 2);
+    CHECK(l->dsp.at("CONVOLVER").params.at("mix") == doctest::Approx(0.4f));
+    CHECK(l->dsp.at("AGC").params.at("target_rms") == doctest::Approx(0.2f));
+    CHECK(l->dsp.at("AGC").params.at("gain_floor") == doctest::Approx(0.1f));
+    CHECK(l->dsp.at("AGC").params.at("release_ms") == doctest::Approx(150.f));
+    CHECK(l->dsp.at("ENHANCER").params.at("process") == doctest::Approx(6.f));
+    CHECK(l->dsp.at("ENHANCER").params.at("contour") == doctest::Approx(3.f));
+    CHECK(l->dsp.at("ENHANCER").params.at("mid") == doctest::Approx(-2.f));
+    CHECK(l->dsp.at("LIMITER").params.at("threshold_db") == doctest::Approx(-3.f));
+    CHECK(l->dsp.at("LIMITER").params.at("release_ms") == doctest::Approx(100.f));
+    std::filesystem::remove(p);
+}
+
+TEST_CASE("Migrace v3 bbe_* -> ENHANCER prezila prechod na genericke klice") {
+    using namespace ithaca::gui;
+    auto p = std::filesystem::temp_directory_path() / "ithaca_v3_bbe.json";
+    {
+        std::ofstream f(p);
+        f << "{\n  \"schema_version\": 3,\n  \"bbe_enabled\": true,\n"
+             "  \"bbe_definition\": 5,\n  \"bbe_bass\": 4\n}\n";
+    }
+    auto l = loadState(p);
+    REQUIRE(l.has_value());
+    CHECK(l->dsp.at("ENHANCER").enabled == true);
+    CHECK(l->dsp.at("ENHANCER").params.at("process") == doctest::Approx(5.f));
+    CHECK(l->dsp.at("ENHANCER").params.at("contour") == doctest::Approx(4.f));
+    std::filesystem::remove(p);
+}
+
+// -- Porovnani stavu (podklad pro persistence debounce v main.cpp) -----------
+
+TEST_CASE("GuiState porovnani zachyti zmenu libovolneho pole") {
+    using namespace ithaca::gui;
+    GuiState a, b;
+    CHECK(a == b);
+
+    b = a; b.dsp["AGC"].params["target_rms"] = 0.3f;
+    CHECK_FALSE(a == b);
+
+    b = a; b.dsp["AGC"].enabled = true;
+    CHECK_FALSE(a == b);
+
+    // bank_search_dir driv v rucnim debounce retezci CHYBEL (nalez revize).
+    b = a; b.bank_search_dir = "/nove/banky";
+    CHECK_FALSE(a == b);
+
+    b = a; b.master_gain_db = -3.f;
+    CHECK_FALSE(a == b);
+
+    b = a; b.window.w = 640;
+    CHECK_FALSE(a == b);   // geometrie je soucasti rovnosti; debounce ji resi zvlast
 }
 
 TEST_CASE("Persistence missing file") {
@@ -194,8 +301,8 @@ TEST_CASE("window geometrie se sanitizuje (0x0 z minimalizovaneho okna nezabije 
     }
     auto st = loadState(p);
     REQUIRE(st.has_value());
-    CHECK(st->window_w >= 320);
-    CHECK(st->window_h >= 240);
+    CHECK(st->window.w >= 320);
+    CHECK(st->window.h >= 240);
     CHECK(st->midi_channel == -1);   // mimo rozsah → OMNI
     std::filesystem::remove(p);
 }

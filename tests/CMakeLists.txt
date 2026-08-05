@@ -110,6 +110,14 @@ target_include_directories(test_persistence PRIVATE
 target_link_libraries(test_persistence PRIVATE ithaca_core doctest)
 add_test(NAME test_persistence COMMAND test_persistence)
 
+# Zrcadleni DspChain <-> GuiState::dsp (genericke, pres Param::id). Header-only
+# dsp_state.h, takze staci include cesta do app/gui.
+add_executable(test_gui_dsp_state test_gui_dsp_state.cpp)
+target_include_directories(test_gui_dsp_state PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_link_libraries(test_gui_dsp_state PRIVATE ithaca_core doctest)
+add_test(NAME test_gui_dsp_state COMMAND test_gui_dsp_state)
+
 add_executable(test_midi_channel test_midi_channel.cpp)
 target_link_libraries(test_midi_channel PRIVATE ithaca_core doctest)
 add_test(NAME test_midi_channel COMMAND test_midi_channel)

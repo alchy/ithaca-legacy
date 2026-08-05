@@ -2,13 +2,33 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 
 namespace ithaca::gui {
 
+// Stav jedne DSP stage. Parametry jsou klicovane pres Param::id (stabilni klic
+// urceny prave pro persistenci) — pridani parametru do stage tedy nevyzaduje
+// ZADNOU zmenu tady ani v load/save. Drive bylo kazde pole vypsane zvlast na
+// 6 mistech (GuiState, loadState, saveState, initFromState, zrcadleni, debounce).
+struct DspStageState {
+    bool enabled = false;
+    int  choice  = -1;                     // -1 = stage nema volic (jen Convolver ma)
+    std::map<std::string, float> params;   // Param::id -> hodnota
+    bool operator==(const DspStageState&) const = default;
+};
+
+// Geometrie okna. Vydelena zvlast, protoze se meni kazdy frame (tazeni/resize)
+// a do persistence debounce nepatri — uklada se az pri shutdownu.
+struct WindowGeom {
+    int x = 100, y = 100;
+    int w = 1280, h = 720;                 // HW cilovy display 1280x720
+    bool operator==(const WindowGeom&) const = default;
+};
+
 struct GuiState {
-    int         schema_version    = 4;
+    int         schema_version    = 5;
     // Adresar, ve kterem se hleda banky (dropdown ho scanu). Pri prazdnem
     // bank_path je tohle jediny zdroj kandidatu — bez ne by uzivatel nemel
     // jak vybrat banku z GUI. Settable pres --bank-dir CLI flag nebo
@@ -28,22 +48,24 @@ struct GuiState {
     int         resonance_window_ms  = 12000; // RAM cache rezonance [ms]; jen JSON (ne GUI)
     int         preload_ms           = 150;   // preload hlavy samplu [ms]; jen JSON (ne GUI)
     int         cache_budget_mb      = 0;     // RAM budget banky [MB], 0=auto; jen JSON (ne GUI)
-    // -- DSP chain (defaulty = zadna zmena chovani: vsechny stage vyplé) --
-    bool  agc_enabled = false;     float agc_target = 0.15f;  float agc_release_ms = 200.f;  float agc_floor = 0.05f;
-    bool  enhancer_enabled = false; float enhancer_process = 0.f; float enhancer_contour = 0.f; float enhancer_mid = 0.f;
-    bool  limiter_enabled = false; float limiter_threshold_db = 0.f; float limiter_release_ms = 200.f;
-    bool   convolver_enabled = false;
-    float  convolver_mix     = 0.15f;
-    int    convolver_choice  = 0;
-    float  convolver_decay   = 0.5f;
-    float  convolver_tone    = 0.6f;
-    float  convolver_size    = 0.5f;
     int   config_page = 0;         // 0 = MASTER, 1 = RESONANCE, 2 = CONVOLVER, 3 = AGC, 4 = ENHANCER, 5 = LIMITER
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
     int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only
-    int         window_x = 100, window_y = 100;
-    int         window_w = 1280, window_h = 720;   // HW cilovy display 1280x720
+
+    // Stav celeho DSP chainu, klicovany jmenem stage ("CONVOLVER", "AGC", ...).
+    // Nahradilo 16 plochych poli (agc_target, convolver_mix, ...) — ta se pri
+    // pridani parametru musela rucne doplnit na 6 mistech. Plni/aplikuje se
+    // genericky pres dspStateFromChain()/applyDspStateToChain(), viz dsp_state.h.
+    // Prazdna mapa = stage si drzi vlastni defaulty (vsechny vyple).
+    std::map<std::string, DspStageState> dsp;
+
+    WindowGeom window;
+
+    // Rovnost vsech persistovanych poli. Persistence debounce v main.cpp ji
+    // pouziva misto rucniho retezce porovnani (ten drive vynechaval
+    // bank_search_dir a pri pridani pole se na nej snadno zapomnelo).
+    bool operator==(const GuiState&) const = default;
 };
 
 // Najit cestu k state.json podle OS:
