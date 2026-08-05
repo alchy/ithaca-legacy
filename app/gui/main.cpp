@@ -295,12 +295,10 @@ int main(int argc, char* argv[]) {
         glfwGetWindowContentScale(w, &xs, &ys);
         ithaca::gui::layout::g_scale = (xs > 0.f) ? xs : 1.f;   // DPI scale (Retina ~2.0)
         ithaca::gui::theme::apply_theme();
-        ithaca::gui::theme::set_exe_dir(argv[0]);   // fonty i mimo CWD
-        std::string ttf = ithaca::gui::theme::find_asset_path("cormorant/Cormorant-Medium.ttf");
-        if (ttf.empty())
-            std::fprintf(stderr, "WARN: Cormorant TTF nenalezen — default font.\n");
         const float s = ithaca::gui::layout::g_scale;
-        ithaca::gui::theme::load_fonts(ttf, s);   // raster ve fyzickem rozliseni
+        // Font je zabudovany v binarce (embedded_font.cpp) — zadny asset se
+        // za behu nehleda. Raster ve fyzickem rozliseni, viz load_fonts.
+        ithaca::gui::theme::load_fonts(s);
         ImGuiIO& io = ImGui::GetIO();
         // Font rasterizovan na size*scale → zobraz v logicke velikosti (1/scale)
         // = ostre, spravna velikost. Viz load_fonts.
