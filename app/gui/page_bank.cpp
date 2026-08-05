@@ -195,7 +195,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
 
     // RELOAD vpravo dole.
     ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 160.f, fy + 4.f));
-    if (wdg::toggle("##reload", "RELOAD", false) && !ctx.state.bank_path.empty())
+    if (wdg::button("##reload", "RELOAD") && !ctx.state.bank_path.empty())
         ctx.requestBankReload(ctx.state.bank_path);
 }
 

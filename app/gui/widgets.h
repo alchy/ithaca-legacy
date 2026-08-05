@@ -198,6 +198,32 @@ inline bool paramSlider(const char* id, const char* label, float* v,
     return changed;
 }
 
+// -- Akcni tlacitko ---------------------------------------------------------
+// Pro akce (RELOAD, RESCAN, RESET). Prepinac by k nim vykreslil stav ON/OFF,
+// coz u akce nedava smysl — nic se nezapina.
+inline bool button(const char* id, const char* label) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float px = fontPx(Fonts::small);
+    const float w  = textW(Fonts::small, px, label) + 44.f;
+    const float h  = L::Dims::touch * 0.62f;
+
+    ImGui::SetCursorScreenPos(o);
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, L::Dims::touch));
+    const bool down    = ImGui::IsItemActive();
+
+    if (down) {
+        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Colors::inv_bg);
+        dl->AddText(Fonts::small, px, ImVec2(o.x + 22.f, o.y + (h - px) * 0.5f),
+                    Colors::inv_fg, label);
+    } else {
+        dl->AddRect(o, ImVec2(o.x + w, o.y + h), Colors::line);
+        dl->AddText(Fonts::small, px, ImVec2(o.x + 22.f, o.y + (h - px) * 0.5f),
+                    Colors::ink, label);
+    }
+    return clicked;
+}
+
 // -- ON/OFF prepinac --------------------------------------------------------
 inline bool toggle(const char* id, const char* label, bool on) {
     ImDrawList* dl = ImGui::GetWindowDrawList();

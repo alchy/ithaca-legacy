@@ -102,7 +102,7 @@ void pageSys(AppContext& ctx, const Rect& r) {
             }
         }
         ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 120.f, y + px_s));
-        if (wdg::toggle("##rescan", "RESCAN", false))
+        if (wdg::button("##rescan", "RESCAN"))
             ps.midi_ports = ithaca::MidiInput::listPorts();
     }
     y += lh;
@@ -166,7 +166,7 @@ void pageSys(AppContext& ctx, const Rect& r) {
 
     // -- RESET -------------------------------------------------------------
     ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 190.f, r.hi.y - L::Dims::touch));
-    if (wdg::toggle("##reset", "RESET PARAMS", false)) {
+    if (wdg::button("##reset", "RESET PARAMS")) {
         // Genericky pres Param::def — MASTER a RESONANCE, ne DSP retezec:
         // smazani celeho retezce jednim klepnutim by bylo destruktivni prekvapeni.
         ctx.engine.setMasterGain(1.f);

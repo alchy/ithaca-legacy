@@ -70,8 +70,11 @@ void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
 // cist tvar vlny. Tvar je proto parametricky (soucet tri pomalych sinusovek
 // s driftujici fazi) a zvuk mu jen MODULUJE amplitudu pres pomalou obalku.
 // Vysledek pri hre dycha, v tichu se sotva znatelne vlni.
+// `vis` skaluje sytost vlny. PLAY je ambientni obrazovka, tam je vlna hvezda;
+// ostatni jsou pracovni, tam ustoupi, aby neprochazela textem. Vypnout ji ale
+// nelze — indikace, ze zvuk hraje, ma platit vsude.
 void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
-                ImVec2 wave_lo, ImVec2 wave_hi) {
+                ImVec2 wave_lo, ImVec2 wave_hi, float vis) {
     const float w = hi.x - lo.x;
 
     // Gradient: vpravo nahore svetlejsi, vlevo dole tmavsi.
@@ -187,7 +190,7 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
             const float hv = hsum / (float)hcnt;
             pts[i] = v * (0.28f + 0.72f * hv);
         }
-        glow(pts, kPts, amp, R.col, R.alpha, R.th);
+        glow(pts, kPts, amp, R.col, R.alpha * vis, R.th);
     }
     dl->PopClipRect();
 }
@@ -224,7 +227,8 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages)
     const float foot_y = lcd_hi.y - pad - L::Dims::foot_h;
     const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, lamp_y - L::Dims::gap) };
 
-    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi);
+    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi,
+               ctx.panels.page == PAGE_PLAY ? 1.0f : 0.42f);
 
     // -- Zalozky --
     ImGui::SetCursorScreenPos(ImVec2(cx, lcd_lo.y + pad));
