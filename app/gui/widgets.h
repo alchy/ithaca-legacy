@@ -110,24 +110,31 @@ inline void vmeter(ImDrawList* dl, ImVec2 pos, float w, float h, float frac01,
     }
 }
 
-// -- Osciloskop s dosvitem ---------------------------------------------------
-// Misto sloupcoveho metru ukazuje SKUTECNY prubeh L a R. Starsi stopy zustavaji
-// slabe viditelne (ghosting) — jako dosvit luminoforu; diky tomu je videt, jak
-// se vlna vyvijela, ne jen jak vypada ted, a pohyb je mekky misto trhaneho.
+// -- Vlnova cara (pozadi) ---------------------------------------------------
+// Pozadi ve stylu PS3 XMB: mekke cary tekouci pres plochu. Tvar rizne SKUTECNY
+// zvuk, ale silne vyhlazeny — syrovy prubeh je zubaty a na pozadi by rusil
+// cteni; vyhlazenim zustane reakce na hru, ale pohyb je hedvabny.
 //
-// Kresli se dve krivky pres sebe v tomtez modrem odstinu, odlisene jasem:
-// L plnym jasem, R tlumene.
-inline void scopeTrace(ImDrawList* dl, ImVec2 pos, float w, float h,
-                       const float* pts, int n, ImU32 col, float alpha,
-                       float thickness) {
+// Zadna vypln: samotna cara staci a nechava text citelny. Zato je siroka —
+// tenka linka by se na pozadi ztratila a pusobila jako grafova mrizka.
+//
+// base_y je ABSOLUTNI souradnice osy, ne pomer: osa ma prochazet stredem
+// vybraneho patche, ktery zna az stranka PLAY.
+inline void waveLine(ImDrawList* dl, float x0, float w, float base_y,
+                     const float* pts, int n, float amp_px, float gain,
+                     ImU32 col, float alpha, float thickness) {
     if (n < 2 || alpha <= 0.004f) return;
-    const float cy = pos.y + h * 0.5f;
-    const float half = h * 0.5f;
-    const ImU32 c = (col & 0x00FFFFFF) | ((ImU32)(alpha * 255.f) << 24);
+    const ImU32 c = (col & 0x00FFFFFF) | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
     dl->PathClear();
     for (int i = 0; i < n; ++i) {
-        const float x = pos.x + w * ((float)i / (float)(n - 1));
-        const float y = cy - std::clamp(pts[i], -1.f, 1.f) * half;
+        const float x = x0 + w * ((float)i / (float)(n - 1));
+        // MEKKY limit misto tvrdeho orezu: soucet nosne vlny a modulace zvukem
+        // muze presahnout 1.0 a clamp by vrcholy usekl naplocho (bylo videt
+        // jako "clipovani"). tanh je ohne, takze tvar zustane hladky.
+        // Mekky limit misto tvrdeho orezu. Vstup je konstruovan tak, aby se
+        // bezne pohyboval hluboko v LINEARNI oblasti tanh — saturace slouzi
+        // jen jako pojistka pro spicky, ne jako bezny rezim.
+        const float y = base_y - std::tanh(pts[i] * gain * 0.85f) * amp_px * 1.15f;
         dl->PathLineTo(ImVec2(x, y));
     }
     dl->PathStroke(c, 0, thickness);

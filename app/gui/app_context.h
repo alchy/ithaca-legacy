@@ -65,20 +65,35 @@ struct PanelState {
     float reel_grab0    = 0.f;   // posun na zacatku tahu
     bool  reel_armed    = false; // ceka se na ustaleni, pak nacist
 
-    // -- Osciloskop --
-    // Drzi nekolik poslednich stop, aby se daly vykreslit s klesajici sytosti —
-    // "ghosting" jako dosvit luminoforu na CRT. Ulozene jsou uz PREPOCTENE
-    // amplitudy (-1..1) na pevny pocet bodu, ne syrove vzorky: stopa se kresli
-    // kazdy frame znovu a prevzorkovani historie by bylo zbytecne drahe.
-    struct Scope {
-        static constexpr int kPts    = 192;   // bodu na stopu
-        static constexpr int kGhosts = 14;    // hloubka dosvitu (~230 ms @60 fps)
-        float l[kGhosts][kPts]{};
-        float r[kGhosts][kPts]{};
-        int   head  = 0;                      // kam se zapise dalsi stopa
-        int   count = 0;                      // kolik stop uz je platnych
+    // -- Vlna v pozadi --
+    // Tvar je PARAMETRICKY (soucet pomalych sinusovek), zvuk mu jen moduluje
+    // amplitudu. Kreslit primo prubeh vzorku bylo pri pomalem tempu prilis
+    // neklidne: pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal cist
+    // tvar vlny. Proto tu nejsou stopy, ale jen dve obalky a normalizace.
+    struct Wave {
+        float env_l = 0.f, env_r = 0.f;   // vyhlazena hlasitost kanalu 0..1
+        // DVE nezavisle reference. Obalka se meri v RMS, historie ve spickach —
+        // a spicka je u hudby nekolikanasobek RMS, takze delit jednu druhou
+        // znamena drzet modulaci trvale na dorazu (vypadalo to jako clipping).
+        float norm_rms  = 0.f;            // pro obalku
+        float norm_peak = 0.f;            // pro posuvnou historii
+        // Posuvna historie hlasitosti (0..1, NE znamenkova spicka): kazdy frame
+        // vstoupi zleva jedna nova hodnota a starsi se odsouvaji doprava — vlna
+        // tim PLYNE, protoze se prehrava. Pri 60 fps trva pruchod sirkou ~2 s.
+        //
+        // Zamerne hlasitost a ne prubeh: znamenkova spicka preskakuje mezi
+        // + a - kazdy frame, coz delalo zubatou caru se schody. Hlasitost
+        // MODULUJE AMPLITUDU nosne vlny, takze tvar zustava hladky a zvuk se
+        // projevi nabyvanim a splaskavanim podel toku.
+        static constexpr int kHist = 128;
+        float hist_l[kHist]{}, hist_r[kHist]{};
+        int   head = 0;                   // pozice nejnovejsiho vzorku
     };
-    Scope scope;
+    Wave wave;
+    // Svisla osa vlny. Nastavuje ji stranka PLAY na stred vybraneho patche,
+    // aby vlna protekala prave jmenem nactene banky. 0 = jeste neznama,
+    // pozadi pak vezme stred plochy.
+    float scope_center_y = 0.f;
 
     // -- LOG --
     bool log_unseen = false;     // kontrolka sviti, dokud se stranka neotevre

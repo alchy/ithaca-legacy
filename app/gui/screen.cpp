@@ -14,6 +14,8 @@
 #include "widgets.h"
 #include "dsp/dsp_stage.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace ithaca::gui {
@@ -60,6 +62,136 @@ void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
                 Colors::dimmer, buf);
 }
 
+// Pozadi ve stylu PS3 XMB: gradient do svetla vpravo nahore + nekolik mekce
+// se vlnicich stuh.
+//
+// KLICOVE: tvar NENI prubeh zvuku. Kreslit vzorky primo bylo pri pomalem tempu
+// prilis neklidne — pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal
+// cist tvar vlny. Tvar je proto parametricky (soucet tri pomalych sinusovek
+// s driftujici fazi) a zvuk mu jen MODULUJE amplitudu pres pomalou obalku.
+// Vysledek pri hre dycha, v tichu se sotva znatelne vlni.
+void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
+                ImVec2 wave_lo, ImVec2 wave_hi) {
+    const float w = hi.x - lo.x;
+
+    // Gradient: vpravo nahore svetlejsi, vlevo dole tmavsi.
+    dl->AddRectFilledMultiColor(lo, hi,
+        Colors::lcd,
+        IM_COL32(0x18, 0x46, 0xa8, 255),
+        IM_COL32(0x0c, 0x27, 0x66, 255),
+        IM_COL32(0x08, 0x1c, 0x4c, 255));
+
+    // -- Obalka ze zvuku ---------------------------------------------------
+    auto& wv = ctx.panels.wave;
+    constexpr int kN = ithaca::Engine::kScopeSize;
+    static float raw_l[kN], raw_r[kN];
+    ctx.engine.scopeSnapshot(raw_l, raw_r, kN);
+
+    float sl = 0.f, sr = 0.f;
+    for (int i = 0; i < kN; ++i) { sl += raw_l[i] * raw_l[i]; sr += raw_r[i] * raw_r[i]; }
+    const float rms_l = std::sqrt(sl / (float)kN);
+    const float rms_r = std::sqrt(sr / (float)kN);
+
+    // Auto-rozsah, aby vlna vypadala stejne pri tichem i hlasitem hrani —
+    // pozadi neni meridlo. Spodni mez drzi ticho klidne.
+    wv.norm_rms = std::max(std::max(rms_l, rms_r), wv.norm_rms * 0.995f);
+    const float ref = std::max(wv.norm_rms, 0.005f);
+
+    // Pomaly follower: svizne nahoru (aby nastup noty byl videt), liny dolu
+    // (aby dozniv plynul misto skoku). Tohle je to, co dela klid.
+    auto follow = [](float& env, float target) {
+        const float k = (target > env) ? 0.10f : 0.020f;
+        env += (target - env) * k;
+    };
+    follow(wv.env_l, std::clamp(rms_l / ref, 0.f, 1.f));
+    follow(wv.env_r, std::clamp(rms_r / ref, 0.f, 1.f));
+
+    // Nova hodnota do historie: HLASITOST bloku (0..1), ne znamenkova spicka.
+    auto absPeak = [](const float* v, int n) {
+        float m = 0.f;
+        for (int i = 0; i < n; ++i) m = std::max(m, std::fabs(v[i]));
+        return m;
+    };
+    const float pk_l = absPeak(raw_l, kN);
+    const float pk_r = absPeak(raw_r, kN);
+    wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * 0.995f);
+    const float pref = std::max(wv.norm_peak, 0.01f);
+
+    const int prev = wv.head;
+    wv.head = (wv.head + 1) % PanelState::Wave::kHist;
+    // Casove vyhlazeni pri vstupu: bez nej by kazdy frame skocil jinam a podel
+    // vlny by vznikaly schody.
+    wv.hist_l[wv.head] = 0.55f * std::clamp(pk_l / pref, 0.f, 1.f)
+                       + 0.45f * wv.hist_l[prev];
+    wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
+                       + 0.45f * wv.hist_r[prev];
+
+    // -- Tvar --------------------------------------------------------------
+    const float wh = wave_hi.y - wave_lo.y;
+    const float axis = (ctx.panels.scope_center_y > 0.f)
+                     ? ctx.panels.scope_center_y : (wave_lo.y + wh * 0.5f);
+    const float room = std::max(24.f, std::min(axis - wave_lo.y, wave_hi.y - axis));
+    const float t = (float)ImGui::GetTime();
+
+    constexpr int kPts = 128;
+    static float pts[kPts];
+
+    // Ctyri stuhy ve dvou rodinach. KAZDY KANAL JE JINAK PROSVICEN — levy
+    // svetly, pravy hlubsi modry — takze je od sebe poznas, i kdyz se prolinaji
+    // kolem teze osy. Je to ambientni vizualizer: ma dychat, ne informovat.
+    struct Ribbon { float phase, speed, scale, alpha, th; ImU32 col; bool right; };
+    const Ribbon ribs[] = {
+        { 0.0f, 0.16f, 1.00f, 0.30f, 2.6f, Colors::ink,    false },
+        { 2.3f, 0.11f, 0.72f, 0.15f, 1.8f, Colors::inv_bg, false },
+        { 1.1f, 0.13f, 0.88f, 0.26f, 2.6f, Colors::fill,   true  },
+        { 3.7f, 0.09f, 0.58f, 0.13f, 1.6f, Colors::line,   true  },
+    };
+
+    // Zar: tyz tvar trikrat pres sebe — siroky a slaby vespod, uzky a jasny
+    // nahore. Levny bloom, ktery z care udela svetlo.
+    auto glow = [&](const float* p, int n, float amp, ImU32 col, float a, float th) {
+        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a * 0.16f, th * 3.4f);
+        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a * 0.36f, th * 1.9f);
+        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a,         th);
+    };
+
+    dl->PushClipRect(wave_lo, wave_hi, true);
+    for (const Ribbon& R : ribs) {
+        const float env = R.right ? wv.env_r : wv.env_l;
+        // I v tichu se pozadi nepatrne vlni, aby panel nepusobil zamrzle.
+        const float amp = room * R.scale * (0.16f + 0.80f * env);
+        const float* hist = R.right ? wv.hist_r : wv.hist_l;
+
+        for (int i = 0; i < kPts; ++i) {
+            const float u = (float)i / (float)(kPts - 1);
+            const float a = u * 6.2831853f;
+            // Nosna vlna. Vsechny slozky maji ZAPORNE znamenko u casu, takze
+            // vzor putuje doprava — kdyby se znamenka michala, jen by se
+            // treplo na miste. Ruzne rychlosti delaji mekky rozpad tvaru.
+            // Koeficienty davaji v souctu 1.0, takze nosna sama nikdy nepresahne
+            // rozsah a tanh nize pracuje v linearni oblasti misto v nasyceni.
+            float v = 0.55f * std::sin(a * 1.0f - t * R.speed)
+                    + 0.30f * std::sin(a * 1.9f - t * R.speed * 1.4f + R.phase)
+                    + 0.15f * std::sin(a * 3.1f - t * R.speed * 2.1f + R.phase * 0.6f);
+
+            // Zvuk MODULUJE AMPLITUDU nosne vlny, neprictava se k vychylce —
+            // proto zustava tvar hladky. Historie plyne doprava: nejnovejsi
+            // hodnota je vlevo, starsi se odsouvaji.
+            const int hn = PanelState::Wave::kHist;
+            const int c = (int)(u * (hn - 1));
+            float hsum = 0.f; int hcnt = 0;
+            for (int d = -3; d <= 3; ++d) {          // prostorove vyhlazeni
+                const int k = (wv.head - (c + d) + hn * 3) % hn;
+                hsum += hist[k]; ++hcnt;
+            }
+            const float hv = hsum / (float)hcnt;
+            pts[i] = v * (0.28f + 0.72f * hv);
+        }
+        glow(pts, kPts, amp, R.col, R.alpha, R.th);
+    }
+    dl->PopClipRect();
+}
+
 } // namespace
 
 void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages) {
@@ -78,14 +210,21 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float b = L::Dims::bezel;
 
-    // Plocha displeje uvnitr ramecku.
     const ImVec2 lcd_lo(b, b), lcd_hi(W - b, H - b);
-    dl->AddRectFilled(lcd_lo, lcd_hi, Colors::lcd);
 
     // Vnitrni odsazeni obsahu od hrany displeje.
     const float pad = 12.f;
     const float cx = lcd_lo.x + pad;
     const float cw = (lcd_hi.x - lcd_lo.x) - pad * 2.f;
+
+    // Rozvrzeni se pocita PRED kreslenim, protoze pozadi potrebuje vedet,
+    // kde konci lista a kde zacinaji kontrolky.
+    const float top    = lcd_lo.y + pad + L::Dims::tab_h + L::Dims::gap;
+    const float lamp_y = lcd_hi.y - pad - L::Dims::foot_h - L::Dims::lamp_h;
+    const float foot_y = lcd_hi.y - pad - L::Dims::foot_h;
+    const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, lamp_y - L::Dims::gap) };
+
+    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi);
 
     // -- Zalozky --
     ImGui::SetCursorScreenPos(ImVec2(cx, lcd_lo.y + pad));
@@ -108,12 +247,6 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages)
         ctx.state.config_page = page;      // prezije restart
         if (page == PAGE_LOG) ctx.panels.log_unseen = false;   // videl jsi to
     }
-
-    // -- Rozvrzeni zbytku --
-    const float top    = lcd_lo.y + pad + L::Dims::tab_h + L::Dims::gap;
-    const float lamp_y = lcd_hi.y - pad - L::Dims::foot_h - L::Dims::lamp_h;
-    const float foot_y = lcd_hi.y - pad - L::Dims::foot_h;
-    const Rect body{ ImVec2(cx, top), ImVec2(cx + cw, lamp_y - L::Dims::gap) };
 
     ensureBankList(ctx);
 
