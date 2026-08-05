@@ -38,21 +38,31 @@ void renderBankPanel(AppContext& ctx) {
     wdg::Eyebrow("BANK", Colors::silver2);
     ImGui::Dummy({0, 6});
 
-    // Scan kandidatu (cache dle search_root).
-    static std::vector<std::string> cands;
-    static std::string last_root;
+    // Scan kandidatu. Cache zije v ctx.panels (drive function-local static).
+    auto& ps = ctx.panels;
     std::string root = !ctx.state.bank_search_dir.empty()
         ? ctx.state.bank_search_dir
         : (ctx.state.bank_path.empty() ? std::string("")
            : std::filesystem::path(ctx.state.bank_path).parent_path().string());
-    if (root != last_root) { cands = scanBanks(root); last_root = root; }
+    if (!ps.bank_cands_valid || root != ps.bank_cands_root) {
+        ps.bank_cands = scanBanks(root);
+        ps.bank_cands_root = root;
+        ps.bank_cands_valid = true;
+    }
 
     // Bank dropdown
     std::string curr = ctx.state.bank_path.empty() ? std::string("(none)")
         : std::filesystem::path(ctx.state.bank_path).filename().string();
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - pad);
     if (ImGui::BeginCombo("##bank", curr.c_str())) {
-        for (const auto& b : cands) {
+        // Rescan pri OTEVRENI comba (1x per open, stejne jako MIDI dropdown).
+        // Drive se scanovalo jen pri zmene rootu, takze cerstve zkopirovana
+        // banka se v seznamu neobjevila az do restartu aplikace.
+        if (!ps.bank_combo_open) {
+            ps.bank_cands = scanBanks(root);
+            ps.bank_combo_open = true;
+        }
+        for (const auto& b : ps.bank_cands) {
             std::string label = std::filesystem::path(b).filename().string();
             bool sel = (b == ctx.state.bank_path);
             if (ImGui::Selectable(label.c_str(), sel)) {
@@ -63,6 +73,8 @@ void renderBankPanel(AppContext& ctx) {
             }
         }
         ImGui::EndCombo();
+    } else {
+        ps.bank_combo_open = false;
     }
     ImGui::Dummy({0, 8});
 

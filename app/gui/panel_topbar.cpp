@@ -34,10 +34,11 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
     // MIDI IN dropdown + RESCAN. Seznam portu je CACHOVANY — listPorts()
     // konstruuje RtMidi klienta (OS IPC) a per-frame volani bylo nejdrazsi
     // operace celeho GUI. Rescan: prvni frame, otevreni comba, tlacitko RESCAN.
-    static std::vector<std::string> ports;
-    static bool ports_scanned  = false;
-    static bool combo_was_open = false;
-    if (!ports_scanned) { ports = ithaca::MidiInput::listPorts(); ports_scanned = true; }
+    auto& ps = ctx.panels;   // cache zije v AppContext (drive function-local static)
+    if (!ps.midi_ports_scanned) {
+        ps.midi_ports = ithaca::MidiInput::listPorts();
+        ps.midi_ports_scanned = true;
+    }
     // Popisek v body fontu (stejna velikost jako tlacitko RESCAN), tlumena barva.
     // AlignTextToFramePadding → vertikalni stred s combo/tlacitkem na radku.
     ImGui::AlignTextToFramePadding();
@@ -49,33 +50,45 @@ void renderTopBar(AppContext& ctx, ithaca::dsp::IParamPage** reset_pages, int n_
     const char* cur = ctx.state.midi_port_name.empty() ? "(none)"
                     : ctx.state.midi_port_name.c_str();
     if (ImGui::BeginCombo("##midi", cur)) {
-        if (!combo_was_open) {   // rescan pri otevreni comba (1x per open)
-            ports = ithaca::MidiInput::listPorts();
-            combo_was_open = true;
+        if (!ps.midi_combo_open) {   // rescan pri otevreni comba (1x per open)
+            ps.midi_ports = ithaca::MidiInput::listPorts();
+            ps.midi_combo_open = true;
         }
         if (ImGui::Selectable("(none)", ctx.state.midi_port_name.empty())) {
             ctx.midi.close();
             ctx.state.midi_port_name.clear();
         }
-        for (size_t i = 0; i < ports.size(); ++i) {
-            bool sel = ports[i] == ctx.state.midi_port_name;
-            if (ImGui::Selectable(ports[i].c_str(), sel)) {
-                if (ports[i] != ctx.state.midi_port_name) {
+        for (size_t i = 0; i < ps.midi_ports.size(); ++i) {
+            const std::string& name = ps.midi_ports[i];
+            if (ImGui::Selectable(name.c_str(), name == ctx.state.midi_port_name)
+                && name != ctx.state.midi_port_name) {
+                // Otevirat podle JMENA, ne podle indexu do cachovaneho seznamu:
+                // kdyz se zarizeni odpoji mezi otevrenim comba a klikem, index
+                // uz ukazuje jinam a otevrel by se cizi port. (initFromState
+                // matchuje podle jmena taky — ted je to konzistentni.)
+                const auto live = ithaca::MidiInput::listPorts();
+                int idx = -1;
+                for (size_t k = 0; k < live.size(); ++k)
+                    if (live[k] == name) { idx = (int)k; break; }
+                if (idx >= 0) {
                     ctx.midi.close();
-                    if (ctx.midi.open(ctx.engine, (int)i)) {
-                        ctx.state.midi_port_name = ports[i];
-                        ctx.midi.setChannel(ctx.state.midi_channel);
-                    }
+                    ctx.midi.setChannel(ctx.state.midi_channel);   // pred open
+                    if (ctx.midi.open(ctx.engine, idx))
+                        ctx.state.midi_port_name = name;
+                } else {
+                    log::Logger::default_().log("gui", log::Severity::Warning,
+                        "MIDI port zmizel: %s", name.c_str());
+                    ps.midi_ports = live;
                 }
             }
         }
         ImGui::EndCombo();
     } else {
-        combo_was_open = false;
+        ps.midi_combo_open = false;
     }
     ImGui::SameLine();
     if (ImGui::Button("RESCAN##reload"))
-        ports = ithaca::MidiInput::listPorts();
+        ps.midi_ports = ithaca::MidiInput::listPorts();
     ImGui::SameLine(0, L::Dims::tb_gap);
 
     // CHANNEL dropdown: OMNI + 1..16. Popisek v body fontu (jako RESCAN).

@@ -19,8 +19,41 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace ithaca::gui {
+
+// Stav panelu, ktery musi prezit mezi framy: cache seznamu (jejich poroizeni
+// je drahe) a sample-and-hold citace indikatoru. Drive to byly function-local
+// `static` promenne primo v render funkcich — skryty globalni stav, ktery
+// nesel ani otestovat, ani resetovat pri reloadu.
+struct PanelState {
+    // MIDI porty. listPorts() konstruuje RtMidi klienta (OS IPC), takze
+    // per-frame volani bylo nejdrazsi operace celeho GUI. Rescan jen pri
+    // prvnim frame, otevreni comba a tlacitkem RESCAN.
+    std::vector<std::string> midi_ports;
+    bool                     midi_ports_scanned = false;
+    bool                     midi_combo_open    = false;
+
+    // Kandidati na banku = podadresare bank_search_dir. Rescanuje se pri zmene
+    // rootu A pri otevreni comba — jen na zmenu rootu to nestacilo: nove
+    // zkopirovana banka se v seznamu neobjevila az do restartu aplikace.
+    std::vector<std::string> bank_cands;
+    std::string              bank_cands_root;
+    bool                     bank_cands_valid   = false;
+    bool                     bank_combo_open    = false;
+
+    // Sample-and-hold pro ciselne dlazdice: drzi maximum za okno (400 ms),
+    // jinak by cisla pri 60 fps necitelne blikala.
+    struct Hold { float shown = 0.f, winmax = 0.f, t0 = 0.f; };
+    Hold h_voices, h_reso, h_main_rings, h_reso_rings, h_load;
+
+    // Scratch pro snapshot LOG stripu. Predalokovany, aby se 50 LogEntry
+    // (kazdy 2x std::string) nealokovalo kazdy frame. Snapshot se dela do nej,
+    // aby se mutex ring bufferu nedrzel po celou dobu renderu.
+    static constexpr int      kLogSnapshot = 50;
+    std::vector<log::LogEntry> log_scratch  = std::vector<log::LogEntry>(kLogSnapshot);
+};
 
 struct AppContext {
     ithaca::Engine                       engine;
@@ -28,6 +61,7 @@ struct AppContext {
     ithaca::MidiInput                    midi;
     LogRingBuffer                        log_buf;
     GuiState                             state;
+    PanelState                           panels;
 
     // Init: subscriber pripoji, engine init z state, audio start, optional
     // bank load + MIDI open. Vraci true pri uspechu (engine init musi projit;
