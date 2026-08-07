@@ -249,8 +249,14 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
         if (m < 2) return;
         // Nasobitel skaluje SPAD, ne cely polomer: pri 1 vyjde presne puvodni
         // dosah (th * 3.4), pri 0 zbyde jadro, tedy hola cara.
+        //
+        // Strop na VYSCE PLOCHY: zar se stejne orezava na `wave_hi/lo`, takze
+        // za tou hranici uz je kazdy dalsi pixel jen vyplna navic pri naprosto
+        // stejnem obrazu. Bez toho by --wave-glow 1000 vypadalo identicky jako
+        // --wave-glow 50 a jen by to zabijelo grafiku.
         const float core = std::min(0.8f, th * 0.30f);
-        const float span = std::max(th * 3.4f - core, 0.f) * glow_scale;
+        const float span = std::min(std::max(th * 3.4f - core, 0.f) * glow_scale,
+                                    wave_hi.y - wave_lo.y);
         wdg::waveGlow(dl, poly, m, core, core + span, col, a);
     };
 

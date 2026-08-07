@@ -60,6 +60,8 @@ struct GuiState {
     //   >1   = sirsi rozostreni; 100 je uz pruh pres cely displej
     // Dosah je jedina vec na panelu, ktera roste s VYPLNI, takze je to hlavni
     // paka pro slabsi grafiku. Pocet drah profilu se dopocita sam (glowLanes).
+    // POZOR pri nastavovani: hodnota MUSI projit sanitizeGlow(). state.json se
+    // edituje rucne a CLI bere cokoli, takze sem muze prijit i NaN nebo 1e9.
     float wave_glow      = 1.f;
     // Strop, kolik smi kresleni stuh stat na snimek [ms]. Kdyz se prekroci,
     // regulator dosah SNIZI (viz glow_auto.h). 0 = automatika vypnuta.
@@ -93,6 +95,18 @@ struct GuiState {
     // bank_search_dir a pri pridani pole se na nej snadno zapomnelo).
     bool operator==(const GuiState&) const = default;
 };
+
+// Ocisteni vzhledovych parametru zare. JEDNO misto, kterym musi projit vsechno,
+// co prijde zvenci — state.json (rucne editovatelny) i CLI.
+//
+// Nestaci std::clamp: ten pri NaN vraci NaN, protoze vsechna porovnani s NaN
+// jsou nepravdiva. NaN by se propsal do souradnic vrcholu vlny.
+inline float sanitizeGlow(float v, float max_v) {
+    if (!(v >= 0.f)) return 0.f;              // chyti NaN i zapornou hodnotu
+    return (v > max_v) ? max_v : v;
+}
+inline constexpr float kWaveGlowMax   = 128.f;   // ~1300 px dosahu, vic nez panel
+inline constexpr float kWaveBudgetMax = 1000.f;  // 1 s na snimek uz neni rozpocet
 
 // Najit cestu k state.json podle OS:
 //  macOS: $HOME/Library/Application Support/ithaca-legacy/state.json

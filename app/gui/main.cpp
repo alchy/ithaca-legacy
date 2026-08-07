@@ -233,9 +233,17 @@ int main(int argc, char* argv[]) {
     // CLI override: --log-level nahrad persistovany log_level (aplikuje se
     // v AppContext::initFromState pres setMinSeverity).
     if (!cli_log_level.empty()) st.log_level = cli_log_level;
-    // CLI override: dosah zare + strop periody. Stejne meze jako v persistenci.
-    if (cli_glow)        st.wave_glow = std::clamp(*cli_glow, 0.f, 128.f);
-    if (cli_glow_budget) st.wave_glow_budget_ms = std::max(*cli_glow_budget, 0.f);
+    // CLI override: dosah zare + strop periody. Tataz sanitizace jako
+    // v persistenci — strtof vrati NaN treba pro "--wave-glow nan".
+    if (cli_glow)        st.wave_glow = sanitizeGlow(*cli_glow, kWaveGlowMax);
+    if (cli_glow_budget) st.wave_glow_budget_ms = sanitizeGlow(*cli_glow_budget,
+                                                               kWaveBudgetMax);
+    // Kdyz nastroj nejede na vychozim vzhledu, ma to byt videt v logu — jinak
+    // se "proc je vlna jina" hleda hodne blbe.
+    if (st.wave_glow != 1.f || st.wave_glow_budget_ms > 0.f) {
+        LOG_INFO("gui", "Wave glow: %.2f%s", (double)st.wave_glow,
+                 st.wave_glow_budget_ms > 0.f ? " (auto)" : "");
+    }
 
     // 2. GLFW window. Pozice nastavime az po vytvoreni (GLFW nema
     //    GLFW_POSITION_X hint v 3.3; v 3.4+ ano, ale my vendorujeme starsi).

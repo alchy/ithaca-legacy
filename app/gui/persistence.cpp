@@ -254,11 +254,13 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.cache_budget_mb     = readI("cache_budget_mb", s.cache_budget_mb);
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
-        // Zar vlny. Strop 128 odpovida dosahu ~1300 px, tedy vic nez cely
-        // panel — nad tim uz to neni nastaveni, ale preklep.
-        s.wave_glow = std::clamp(readF("wave_glow", s.wave_glow), 0.f, 128.f);
+        // Zar vlny. Strop odpovida dosahu ~1300 px, tedy vic nez cely panel —
+        // nad tim uz to neni nastaveni, ale preklep. Rucne editovany soubor
+        // muze obsahovat i NaN, proto sanitizeGlow a ne std::clamp.
+        s.wave_glow = sanitizeGlow(readF("wave_glow", s.wave_glow), kWaveGlowMax);
         s.wave_glow_budget_ms =
-            std::max(readF("wave_glow_budget_ms", s.wave_glow_budget_ms), 0.f);
+            sanitizeGlow(readF("wave_glow_budget_ms", s.wave_glow_budget_ms),
+                         kWaveBudgetMax);
 
         // -- Genericke sekce "<prefix><STAGE>.<Param::id>" ---------------------
         // Persistence jmena parametru nezna — proste vezme vse pod prefixem

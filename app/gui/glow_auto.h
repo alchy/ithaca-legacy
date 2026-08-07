@@ -50,8 +50,20 @@ public:
     // `want`      = co si preje uzivatel,
     // `budget_ms` = strop periody (0 = automatika vypnuta).
     void step(float frame_ms, float want, float budget_ms, float dt) {
-        want = std::max(want, 0.f);
-        if (dt <= 0.f) return;
+        // -- Ocisteni vstupu ------------------------------------------------
+        // Zapis pres negaci chyti NaN i zapornou hodnotu; std::max(NaN, 0.f)
+        // by NaN propustil dal.
+        //
+        // Nekonecna perioda musi byt SRAZENA, ne jen propustena: prvni krok by
+        // z EMA udelal nekonecno a druhy (inf - inf) NaN, po kterem uz jsou
+        // vsechna porovnani nepravdiva a regulator natrvalo prestane reagovat.
+        // Nasel to test, ne uvaha.
+        if (frame_ms != frame_ms) return;        // NaN = rozbite hodiny, ignoruj
+        if (!(frame_ms < kFrameMsMax)) frame_ms = kFrameMsMax;   // vc. nekonecna
+        if (!(frame_ms >= 0.f))  frame_ms = 0.f;
+        if (!(want >= 0.f))      want = 0.f;
+        if (!(budget_ms >= 0.f)) budget_ms = 0.f;
+        if (!(dt > 0.f) || !(dt < kDtMax)) return;
         if (cur_ > want) cur_ = want;            // uzivatel snizil strop
 
         // Vyhlazeni. Jedna spicka z planovace nesmi hnout polomerem.
@@ -80,7 +92,7 @@ public:
 
     // Uzivatel zmenil parametr rucne — zacit od nej, ne od zdedene hodnoty.
     void reset(float want) {
-        cur_ = std::max(want, 0.f);
+        cur_ = (want >= 0.f) ? want : 0.f;      // chyti i NaN
         over_s_ = under_s_ = 0.f;
     }
 
@@ -94,6 +106,10 @@ private:
     // Nula by znamenala holou caru; na tu se spadne jen rucne, ne automatikou —
     // automatika ma ubrat na vzhledu, ne ho vypnout.
     static constexpr float kMinScale  = 0.15f;
+    // Meze duveryhodnosti vstupu. Deset vterin na snimek uz neni pomaly panel,
+    // ale zaseknuty proces; delsi krok casu nema smysl integrovat.
+    static constexpr float kFrameMsMax = 10000.f;
+    static constexpr float kDtMax      = 10.f;
 
     float cur_    = 1.f;
     float ema_ms_ = 0.f;

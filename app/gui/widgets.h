@@ -164,6 +164,11 @@ inline int glowLanes(float span_px) {
 inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
                      float core_px, float glow_px, ImU32 col, float alpha) {
     if (n < 2 || alpha <= 0.004f) return;
+    // Rozmery se OVERUJI, ne clampuji: std::clamp(NaN, lo, hi) vraci NaN,
+    // protoze vsechna porovnani s NaN jsou nepravdiva. NaN by se odsud
+    // propsal do souradnic vrcholu a grafika by kreslila nesmysly. Zapis
+    // pres negaci (`!(x >= 0)`) je zamerny — chyti NaN i zapornou hodnotu.
+    if (!(core_px >= 0.f) || !(glow_px >= core_px)) return;
 
     constexpr float kSpace = 1.8f;   // > 1 = hustsi vzorkovani u jadra
     constexpr float kFall  = 3.2f;   // strmost Gaussovy krivky
@@ -183,6 +188,7 @@ inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
 
     // Profil je pro celou caru stejny — spocitat jednou, ne v kazdem bode.
     constexpr int kMaxLanes = 24;                 // 2 * strop z glowLanes
+    IM_ASSERT(kLanes <= kMaxLanes);               // strop musi sedet s glowLanes
     float off[kMaxLanes];
     ImU32 colr[kMaxLanes];
     for (int j = 0; j < kSide; ++j) {
