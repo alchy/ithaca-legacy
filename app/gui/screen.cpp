@@ -38,19 +38,42 @@ const char* const kTabs[PAGE_COUNT] = {
 // Sedi ve stejnem radku jako paticka, ne ve vlastnim pasu: samostatny pruh
 // ukrajel 36 px vysky na kazde strance, coz je na 7" panelu citelne — a jde
 // o tyz druh informace jako zbytek paticky (stav pristroje).
+// NOTE a OFF sem pribyly z PLAY. Je to stav PRISTROJE, ne stranky: ze do
+// nastroje chodi MIDI potrebujes vedet i ve chvili, kdy zrovna nastavujes DSP
+// a nic nehraje — presne jako u UNDERRUN nebo CLIP. Na PLAY tim navic zbyl
+// jeden sloupec, ktery na uzkem panelu chybel.
 void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
+    auto& ps = ctx.panels;
     const bool ur = ctx.engine.mainStreamUnderrunRecent(4000.f) ||
                     ctx.engine.resonanceStreamUnderrunRecent(4000.f);
     const bool clip = ctx.engine.masterPeakL() >= 0.999f ||
                       ctx.engine.masterPeakR() >= 0.999f;
+
+    // Vyhlazeni MIDI lamp: engine dava jen ano/ne s oknem 120 ms, bez nej by
+    // lampa cvakala. Vazane na CAS, ne na snimek, takze vypada stejne pri
+    // jakemkoli fps.
+    const float dt = ImGui::GetIO().DeltaTime;
+    const float k  = 1.f - std::exp(-dt / 0.20f);
+    ps.lamp_note += ((ctx.engine.noteOnRecent(120.f)  ? 1.f : 0.f) - ps.lamp_note) * k;
+    ps.lamp_off  += ((ctx.engine.noteOffRecent(120.f) ? 1.f : 0.f) - ps.lamp_off)  * k;
+
+    struct Lamp { const char* label; float on; ImU32 col; };
+    const Lamp lamps[] = {
+        { "NOTE",     ps.lamp_note,                  Colors::ink  },
+        { "OFF",      ps.lamp_off,                   Colors::dim  },
+        { "UNDERRUN", ur ? 1.f : 0.f,                Colors::warn },
+        { "CLIP",     clip ? 1.f : 0.f,              Colors::warn },
+        { "LOG",      ps.log_unseen ? 1.f : 0.f,     Colors::warn },
+    };
+
     // Na stred paticky, mezi stitek a audio rezim.
-    const float total = wdg::lampW("UNDERRUN") + wdg::lampW("CLIP") + wdg::lampW("LOG");
+    float total = 0.f;
+    for (const Lamp& l : lamps) total += wdg::lampW(l.label);
     float x = pos.x + (w - total) * 0.5f;
-    wdg::lamp(dl, ImVec2(x, pos.y), "UNDERRUN", ur ? 1.f : 0.f, Colors::warn);
-    x += wdg::lampW("UNDERRUN");
-    wdg::lamp(dl, ImVec2(x, pos.y), "CLIP", clip ? 1.f : 0.f, Colors::warn);
-    x += wdg::lampW("CLIP");
-    wdg::lamp(dl, ImVec2(x, pos.y), "LOG", ctx.panels.log_unseen ? 1.f : 0.f, Colors::warn);
+    for (const Lamp& l : lamps) {
+        wdg::lamp(dl, ImVec2(x, pos.y), l.label, l.on, l.col);
+        x += wdg::lampW(l.label);
+    }
 }
 
 // Paticka: stitek nastroje vlevo, audio rezim vpravo. Stitek je tu proto,
@@ -305,9 +328,12 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
 
     // Rozvrzeni se pocita PRED kreslenim, protoze pozadi potrebuje vedet,
     // kde konci lista a kde zacinaji kontrolky.
-    // Zalozky jsou ctverce o strane rovne SIRCE bunky (viz squareTabH), takze
-    // vyska radku se pocita az tady, kdyz je znama sirka displeje.
-    const float tab_h  = L::squareTabH(cw, PAGE_COUNT, lcd_hi.y - lcd_lo.y);
+    // Profil displeje: na sirokem panelu ctvercove zalozky, na uzkem
+    // obdelnikove (ctverec by tam snedl ctvrtinu vysky). Vyska radku se proto
+    // pocita az tady, kdyz je znama velikost displeje. Nastavuje se JEDNOU za
+    // snimek a cte ho cely panel — viz layout::Screen.
+    L::setScreen(lcd_hi.x - lcd_lo.x, lcd_hi.y - lcd_lo.y, cw, PAGE_COUNT);
+    const float tab_h = L::g_screen.tab_h;
     const float top    = lcd_lo.y + pad + tab_h + L::Dims::gap;
     // Paticka sedi u SPODNI hrany se stejnym odsazenim, jake ma pas zalozek
     // od horni (`pad`). Drive mela vlastni pasmo `foot_h` a text se kreslil

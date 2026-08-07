@@ -34,6 +34,11 @@ namespace {
 // se ta dve na obrazovce nerozchazi.
 constexpr float kHoldWin = 0.125f;
 
+// Kolik bunek ma stavovy radek. MIDI lampy odesly do paticky mezi ostatni
+// indikatory (screen.cpp::lampRow), takze zbylo sedm cisel. Compact profil je
+// sazi do dvou radek (4 + 3), na sirokem panelu jsou v jedne.
+constexpr int kStatCells = 7;
+
 // Drzi MAXIMUM za okno. Spravne pro veliciny, u kterych je zajimava spicka:
 // pocet hlasu, zatez DSP, peak metr.
 float holdMax(PanelState::Hold& s, float cur, float now_s, float win = kHoldWin) {
@@ -70,8 +75,15 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     const float dt = ImGui::GetIO().DeltaTime;
     const float now_s = (float)ImGui::GetTime();
 
-    // -- Rozvrzeni: vytah nahore, cisla + sustain dole --------------------
-    const float stat_h = 110.f;
+    // -- Rozvrzeni: vytah nahore, cisla dole ------------------------------
+    // Na uzkem panelu se sedm sloupcu do sirky nevejde (744/7 = 106 px, ale
+    // "128/256" ve stavovem pismu ma 117 px), takze je Compact profil sazi do
+    // dvou radek. Vytah se o ten radek musi zkratit, jinak do nej zaroste.
+    const int   cols   = std::min(L::g_screen.stat_cols, kStatCells);
+    const int   rows   = (kStatCells + cols - 1) / cols;
+    const float line_h = wdg::fontPx(Fonts::num) + wdg::fontPx(Fonts::small) + 4.f;
+    // Pro jednu radku zustava puvodnich 110 px i s rezervou nad cisly.
+    const float stat_h = 110.f + (float)(rows - 1) * (line_h + L::Dims::gap_s);
     const Rect reel_r{ r.lo, ImVec2(r.hi.x, r.hi.y - stat_h) };
 
     const int n = (int)ps.banks.size();
@@ -80,10 +92,16 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     // ta je nesymetricka (lista nahore vyssi nez paticka dole, spodek ukrajuje
     // rada udaju), takze by pri kazde zmene velikosti okna utikal nahoru.
     // Clamp drzi radek uvnitr vyrezu i na velmi malem okne.
+    //
+    // Na uzkem panelu to ale neplati: plocha vytahu je tam tak nizka, ze stred
+    // OBRAZOVKY padne az na jeji spodni hranu a videt je jedina polozka —
+    // z vytahu se stane cedule. Compact profil proto stredi podle vlastni
+    // plochy, aby byl videt soused nad i pod.
     const float half = row * 0.5f;
-    const float mid_y = std::clamp(
-        (ps.lcd_center_y > 0.f) ? ps.lcd_center_y : (reel_r.lo.y + reel_r.hi.y) * 0.5f,
-        reel_r.lo.y + half, reel_r.hi.y - half);
+    const float want_y = (!L::g_screen.compact && ps.lcd_center_y > 0.f)
+                       ? ps.lcd_center_y
+                       : (reel_r.lo.y + reel_r.hi.y) * 0.5f;
+    const float mid_y = std::clamp(want_y, reel_r.lo.y + half, reel_r.hi.y - half);
     // Vlna v pozadi protéká stredem vybraneho patche — osu si bere odsud.
     ps.scope_center_y = mid_y;
 
@@ -186,8 +204,15 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     // Radek se kotvi u SPODNI hrany plochy, ne pevnym odsazenim od zacatku
     // pasma: drzi se tak dole u paticky misto aby plaval uprostred volneho
     // mista pod vytahem.
-    const float sy = r.hi.y - 16.f - wdg::fontPx(Fonts::num)
-                             - wdg::fontPx(Fonts::small) - 4.f;
+    const float sy = r.hi.y - 16.f - (float)rows * line_h
+                                   - (float)(rows - 1) * L::Dims::gap_s;
+
+    // Levy horni roh i-te bunky stavu.
+    const float col_w = r.w() / (float)cols;
+    auto cell_at = [&](int i) {
+        return ImVec2(r.lo.x + col_w * (float)(i % cols),
+                      sy + (line_h + L::Dims::gap_s) * (float)(i / cols));
+    };
 
     char v[16], rs[16], pk[16], ds[16], su[16], rg[24], rgr[24];
     std::snprintf(v,  sizeof(v),  "%d", (int)holdMax(ps.h_voices,
@@ -210,33 +235,19 @@ void pagePlay(AppContext& ctx, const Rect& r) {
                   (int)holdMax(ps.h_reso_rings, (float)ctx.engine.resonanceRingsUsed(), now_s),
                   ctx.engine.resonanceRingsTotal());
 
-    // Sest sloupcu: pet cisel + dvojice MIDI lamp jako sesty. Lampy se
-    // rozsvecuji a hasnou plynule (~200 ms), aby necvakaly — vyhlazeni je
-    // vazane na cas, ne na snimek, takze vypada stejne pri jakemkoli fps.
-    const float k = 1.f - std::exp(-dt / 0.20f);
-    ps.lamp_note += ((ctx.engine.noteOnRecent(120.f)  ? 1.f : 0.f) - ps.lamp_note) * k;
-    ps.lamp_off  += ((ctx.engine.noteOffRecent(120.f) ? 1.f : 0.f) - ps.lamp_off)  * k;
-
-    const float col = r.w() / 8.f;
-    statNum(dl, ImVec2(r.lo.x,             sy), "VOICES",   v);
-    statNum(dl, ImVec2(r.lo.x + col,       sy), "RESO",     rs);
-    statNum(dl, ImVec2(r.lo.x + col * 2.f, sy), "RING",     rg);
-    statNum(dl, ImVec2(r.lo.x + col * 3.f, sy), "RING RESO", rgr);
-    statNum(dl, ImVec2(r.lo.x + col * 4.f, sy), "PEAK dB",  pk);
-    statNum(dl, ImVec2(r.lo.x + col * 5.f, sy), "DSP",      ds,
+    statNum(dl, cell_at(0), "VOICES",    v);
+    statNum(dl, cell_at(1), "RESO",      rs);
+    statNum(dl, cell_at(2), "RING",      rg);
+    statNum(dl, cell_at(3), "RING RESO", rgr);
+    statNum(dl, cell_at(4), "PEAK dB",   pk);
+    statNum(dl, cell_at(5), "DSP",       ds,
             ctx.engine.overloadRecent(4000.f) ? Colors::warn : Colors::ink);
     // Pedal uz nema vlastni bar — jeho INDIKACE je pata stuha v pozadi
     // (viz screen.cpp). Tady zustava jen cislo, protoze udaj se ma cist presne.
-    statNum(dl, ImVec2(r.lo.x + col * 6.f, sy), "SUSTAIN",  su);
-
-    // MIDI vstup pod sebou v poslednim sloupci. Ukazuje, ze do nas neco CHODI —
-    // coz je jina informace nez ze neco hraje.
-    {
-        const float px = wdg::fontPx(Fonts::small);
-        const float nx = r.lo.x + col * 7.f;
-        wdg::lamp(dl, ImVec2(nx, sy),               "NOTE", ps.lamp_note, Colors::ink);
-        wdg::lamp(dl, ImVec2(nx, sy + px + 12.f),   "OFF",  ps.lamp_off,  Colors::dim);
-    }
+    statNum(dl, cell_at(6), "SUSTAIN",   su);
+    // MIDI lampy NOTE/OFF sedi v paticce vedle UNDERRUN, CLIP a LOG
+    // (screen.cpp::lampRow) — je to tentyz druh indikatoru, stav pristroje,
+    // a patri tedy na kazdou stranku, ne jen sem.
 }
 
 } // namespace ithaca::gui

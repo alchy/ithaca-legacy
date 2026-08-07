@@ -72,6 +72,10 @@ namespace Dims {
     // do pasu pres celou sirku je snadne i kdyz je nizsi.
     inline constexpr float param_trk_min = 52.f;
     inline constexpr float param_h_min   = param_trk_min + param_gap;
+    // Tvrda podlaha citelnosti. Pod param_h_min se jde jen na uzkem panelu a
+    // jen proto, ze alternativa je parametr, ktery na obrazovce vubec neni.
+    inline constexpr float param_trk_floor = 34.f;
+    inline constexpr float param_h_floor   = param_trk_floor + param_gap;
 
     // Mezery.
     inline constexpr float gap    = 10.f;
@@ -102,6 +106,63 @@ namespace Dims {
     // Neni to dotykovy cil (ten je `touch`) — je to mez citelnosti: uzsi pole
     // uz neuveze ani kratky popisek.
     inline constexpr float cell_min = 56.f;
+}
+
+// -- Profil displeje --------------------------------------------------------
+// Nastroj cili na DVA panely a mezi nimi neni rozdil v meritku, ale v PLOSE:
+//
+//   7,0"  1280x720   210 DPI   telo stranky 1224 x 458
+//   4,3"   800x480   217 DPI   telo stranky  744 x 286   (61 % / 62 %)
+//
+// Hustota je prakticky stejna, takze `touch` = 74 px plati na obou a nic se
+// nezmensuje — jen se toho na obrazovku vejde min. Skalovani (--ui-scale) je
+// tedy spatny nastroj; spravna odpoved je JINE ROZVRZENI, ne mensi prvky.
+//
+// Compact profil resi tri mista, kde se rozvrzeni na malem panelu rozpadalo:
+//   - pas zalozek: ctverec by mel 104 px, tedy 23 % vysky displeje
+//   - SYS: rozteC radku vysla mensi nez vyska bunky (radky se prekryvaly)
+//   - PLAY: osm sloupcu po 93 px, do kterych se cisla nevejdou
+struct Screen {
+    bool  compact  = false;
+    float tab_h    = Dims::tab_h_max;  // vyska pasu zalozek
+    float btn_h    = Dims::touch;      // vyska akcniho pasu u spodni hrany
+    int   stat_cols = 7;               // sloupcu na PLAY v jednom radku
+};
+
+// Nastavuje ho renderScreen jednou za snimek, cte cely panel. Stejna kategorie
+// jako g_scale vyse — az se GUI vycleni do knihovny, stane se z obojiho
+// parametr, ktery si volajici drzi sam.
+inline Screen g_screen;
+
+// Strana ctvercove dlazdice hlavniho menu: SIRKA bunky, ne vyska radku.
+// Zalozky jsou hlavni mechanismus prepinani, takze dostavaji nejvetsi plochu
+// na panelu — ctverec se odviji od delsi (vodorovne) osy, ne od kratsi.
+// Strop je tab_h_max a ctvrtina vysky displeje, aby v sirokem okne na PC
+// nesnedly celou obrazovku.
+inline float squareTabH(float w, int n, float lcd_h) {
+    if (n <= 0) return Dims::tab_h_max;
+    const float cell = (w - Dims::tab_gap * (float)(n - 1)) / (float)n;
+    return std::min(std::min(cell, Dims::tab_h_max), lcd_h * 0.26f);
+}
+
+inline void setScreen(float lcd_w, float lcd_h, float content_w, int n_tabs) {
+    Screen s;
+    // Prah je plocha, ne uhlopricka: rozhoduje, kolik radku a sloupcu se vejde.
+    s.compact = (lcd_w < 1024.f || lcd_h < 600.f);
+
+    if (s.compact) {
+        // Obdelnikove zalozky. Ctverec by na 800x480 mel 104 px a snedl by
+        // ctvrtinu displeje; 56 px je porad nad prstem, protoze zalozka je
+        // siroka pres celou bunku (~104 px).
+        s.tab_h = Dims::subtab_h;
+        // Nizsi akcni pas. Tlacitka jsou siroka pres pul obrazovky, takze
+        // nizsi pas se porad trefuje snadno — a uvolni 28 px pro obsah.
+        s.btn_h = Dims::touch * Dims::chip_h_f;
+        s.stat_cols = 4;                // PLAY: dve radky, 4 + 3
+    } else {
+        s.tab_h = squareTabH(content_w, n_tabs, lcd_h);
+    }
+    g_screen = s;
 }
 
 // -- Roztazeny radek --------------------------------------------------------
@@ -138,17 +199,6 @@ struct Row {
     // Celkova vyska pasu vcetne zalomeni (bez koncove mezery).
     float height() const { return (float)rows * cell_h + (float)(rows - 1) * gap; }
 };
-
-// Strana ctvercove dlazdice hlavniho menu: SIRKA bunky, ne vyska radku.
-// Zalozky jsou hlavni mechanismus prepinani, takze dostavaji nejvetsi plochu
-// na panelu — ctverec se odviji od delsi (vodorovne) osy, ne od kratsi.
-// Strop je tab_h_max a ctvrtina vysky displeje, aby v sirokem okne na PC
-// nesnedly celou obrazovku.
-inline float squareTabH(float w, int n, float lcd_h) {
-    if (n <= 0) return Dims::tab_h_max;
-    const float cell = (w - Dims::tab_gap * (float)(n - 1)) / (float)n;
-    return std::min(std::min(cell, Dims::tab_h_max), lcd_h * 0.26f);
-}
 
 // -- Svisly rozpocet --------------------------------------------------------
 // Protejsek splitRow: ten deli vodorovny pas na sloupce, tenhle ukrajuje pasy

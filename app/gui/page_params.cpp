@@ -74,15 +74,24 @@ void pageParams(AppContext& ctx, const Rect& r, ithaca::dsp::IParamPage& page) {
     // Kdyz se blok nevejde (CONVOLVER ma ctyri parametry a nad nimi jeste
     // podzalozky), track se stlaci — az na param_trk_min. Radeji o neco nizsi
     // pas nez parametr, ktery na panelu vubec neni videt.
+    //
+    // Na uzkem panelu ale ani param_h_min nestacilo: na 800x480 zbylo na ctyri
+    // parametry CONVOLVERu 136 px, vesly se dva a smycka na tretim delala
+    // `break` — dva parametry tise ZMIZELY, bez jakekoli stopy na obrazovce.
+    // Proto se pas smi stlacit i pod param_h_min, az na tvrdou podlahu
+    // citelnosti; a kdyz se nevejdou ani tak, REKNE se to.
     const float avail = r.hi.y - top;
     float row_h = L::Dims::param_h;
     if ((float)n * row_h > avail)
         row_h = std::max(L::Dims::param_h_min, avail / (float)n);
+    if ((float)n * row_h > avail)
+        row_h = std::max(L::Dims::param_h_floor, avail / (float)n);
     const float trk_h = row_h - L::Dims::param_gap;
 
     float y = std::max(top, r.hi.y - (float)n * row_h);
 
     const bool on = !page.hasEnable() || page.enabled();
+    int shown = 0;
     for (int i = 0; i < n; ++i) {
         if (y + row_h > r.hi.y + 1.f) break;           // radeji orez nez pretect
         const auto& p = page.param(i);
@@ -99,6 +108,17 @@ void pageParams(AppContext& ctx, const Rect& r, ithaca::dsp::IParamPage& page) {
         ImGui::EndChild();
         ImGui::PopItemWidth();
         y += row_h;
+        ++shown;
+    }
+
+    // Kdyz se neco presto nevejde, musi to byt VIDET. Tiche zahozeni parametru
+    // je nejhorsi mozne chovani: uzivatel nema jak poznat, ze stage ma dalsi
+    // ovladani, a hleda chybu ve zvuku.
+    if (shown < n) {
+        char note[48];
+        std::snprintf(note, sizeof(note), "+%d MORE - NOT ENOUGH HEIGHT", n - shown);
+        const float px = wdg::fontPx(Fonts::small);
+        wdg::invField(dl, ImVec2(r.lo.x, top - px * 1.45f - 4.f), Fonts::small, note);
     }
 }
 
