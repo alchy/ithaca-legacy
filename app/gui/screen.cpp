@@ -226,6 +226,25 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
     };
 
     dl->PushClipRect(wave_lo, wave_hi, true);
+
+    // Stuhy se rasteruji JEDNOU cestou. ImGui kresli tlustou caru bud geometrii
+    // (4 vrcholy na bod), nebo — kdyz je tloustka CELE cislo — texturou z pasu
+    // pecenych car (2 vrcholy na bod). Z patnacti tahu zare na to sahal presne
+    // jeden: pedalova stuha ma th = 3.0 a nasobitel 1.0, takze vysla na
+    // celociselnou trojku. Cistou nahodou, ne umyslem.
+    //
+    // Projevilo se to jako "dira" uprostred te jedne cary — okraje videt, stred
+    // nevybarveny. ImGui 1.91.8 zmensilo ulozeni pecenych car z ~64x64 na
+    // ~32x32 (TexUvLines ma ted 33 polozek misto 64) a s nasim atlasem 2048x2048
+    // ta cesta nekresli, co ma.
+    //
+    // Nechavame proto vsech patnact tahu na geometricke ceste. Cena je 256
+    // vrcholu na snimek. Zaroven to znamena, ze "zaokrouhlit tloustky na cela
+    // cisla, at se zapne texturovy antialiasing" NENI bezpecna optimalizace —
+    // zaplo by to tuhle cestu na vsech patnacti tazich.
+    const ImDrawListFlags saved_flags = dl->Flags;
+    dl->Flags &= ~ImDrawListFlags_AntiAliasedLinesUseTex;
+
     for (const Ribbon& R : ribs) {
         const float env = (R.src == 2) ? wv.env_p : (R.src == 1 ? wv.env_r : wv.env_l);
         // Pedalova stuha ma VLASTNI viditelnost: seslapnuty pedal ma byt videt
@@ -275,6 +294,8 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
         }
         glow(pts, kPts, amp, col, R.alpha * vis * vis_r, R.th);
     }
+
+    dl->Flags = saved_flags;
     dl->PopClipRect();
 }
 
