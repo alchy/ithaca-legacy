@@ -185,7 +185,8 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
     const float t = (float)ImGui::GetTime();
 
     constexpr int kPts = 128;
-    float pts[kPts];              // lokalni, ne `static` — viz waveUpdate
+    float  pts[kPts];             // lokalni, ne `static` — viz waveUpdate
+    ImVec2 poly[kPts];            // body jednoho tahu; sdili je vsechny tri prujezdy zare
 
     // Ctyri stuhy ve dvou rodinach. KAZDY KANAL JE JINAK PROSVICEN — levy
     // svetly, pravy hlubsi modry — takze je od sebe poznas, i kdyz se prolinaji
@@ -211,10 +212,17 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
 
     // Zar: tyz tvar trikrat pres sebe — siroky a slaby vespod, uzky a jasny
     // nahore. Levny bloom, ktery z care udela svetlo.
+    //
+    // Body se spocitaji JEDNOU a obtahnou se trikrat. Nejvyssi z tri
+    // pruhlednosti je `a` sama, takze kdyz uz ta je zanedbatelna, nema smysl
+    // geometrii vubec stavet — stejne by se nic nenakreslilo.
     auto glow = [&](const float* p, int n, float amp, ImU32 col, float a, float th) {
-        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a * 0.16f, th * 3.4f);
-        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a * 0.36f, th * 1.9f);
-        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a,         th);
+        if (a <= 0.004f) return;
+        const int m = wdg::waveBuild(poly, kPts, wave_lo.x, w, axis, p, n, amp, 1.f);
+        if (m < 2) return;
+        wdg::wavePolyline(dl, poly, m, col, a * 0.16f, th * 3.4f);
+        wdg::wavePolyline(dl, poly, m, col, a * 0.36f, th * 1.9f);
+        wdg::wavePolyline(dl, poly, m, col, a,         th);
     };
 
     dl->PushClipRect(wave_lo, wave_hi, true);

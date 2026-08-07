@@ -81,24 +81,40 @@ inline float lampW(const char* label) {
 //
 // base_y je ABSOLUTNI souradnice osy, ne pomer: osa ma prochazet stredem
 // vybraneho patche, ktery zna az stranka PLAY.
-inline void waveLine(ImDrawList* dl, float x0, float w, float base_y,
-                     const float* pts, int n, float amp_px, float gain,
-                     ImU32 col, float alpha, float thickness) {
-    if (n < 2 || alpha <= 0.004f) return;
-    const ImU32 c = (col & 0x00FFFFFF) | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
-    dl->PathClear();
+// Barva s danou pruhlednosti (RGB z `col`, alfa z `alpha`).
+inline ImU32 tint(ImU32 col, float alpha) {
+    return (col & 0x00FFFFFF)
+         | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
+}
+
+// Spocita BODY vlny do `out`. Vraci pocet zapsanych bodu (0 = nevejde se).
+//
+// Oddelene od obtazeni proto, ze zar se kresli TREMI tahy pres tytez body
+// (siroky a slaby vespod, uzky a jasny nahore). Drive to byla tri volani
+// jedne funkce, ktera pokazde znovu spocitala x, tanh i nasobeni amplitudou —
+// pri peti stuhach a 128 bodech tedy 1920 volani tanh na snimek misto 640.
+inline int waveBuild(ImVec2* out, int cap, float x0, float w, float base_y,
+                     const float* pts, int n, float amp_px, float gain) {
+    if (n < 2 || cap < n) return 0;
     for (int i = 0; i < n; ++i) {
         const float x = x0 + w * ((float)i / (float)(n - 1));
         // MEKKY limit misto tvrdeho orezu: soucet nosne vlny a modulace zvukem
         // muze presahnout 1.0 a clamp by vrcholy usekl naplocho (bylo videt
-        // jako "clipovani"). tanh je ohne, takze tvar zustane hladky.
-        // Mekky limit misto tvrdeho orezu. Vstup je konstruovan tak, aby se
-        // bezne pohyboval hluboko v LINEARNI oblasti tanh — saturace slouzi
-        // jen jako pojistka pro spicky, ne jako bezny rezim.
+        // jako "clipovani"). tanh je ohne, takze tvar zustane hladky. Vstup je
+        // konstruovan tak, aby se bezne pohyboval hluboko v LINEARNI oblasti —
+        // saturace slouzi jen jako pojistka pro spicky, ne jako bezny rezim.
         const float y = base_y - std::tanh(pts[i] * gain * 0.85f) * amp_px * 1.15f;
-        dl->PathLineTo(ImVec2(x, y));
+        out[i] = ImVec2(x, y);
     }
-    dl->PathStroke(c, 0, thickness);
+    return n;
+}
+
+// Jeden tah pres uz spocitane body. AddPolyline bere pole primo, takze
+// PathClear/PathLineTo/PathStroke odpadaji.
+inline void wavePolyline(ImDrawList* dl, const ImVec2* p, int n, ImU32 col,
+                         float alpha, float thickness) {
+    if (n < 2 || alpha <= 0.004f) return;
+    dl->AddPolyline(p, n, tint(col, alpha), 0, thickness);
 }
 
 // -- Dotykovy slider --------------------------------------------------------
