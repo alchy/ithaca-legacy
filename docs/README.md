@@ -25,6 +25,7 @@ bankami.
 | 3 | [Raspberry Pi 5](prirucka/03-raspberry-pi-5.md) | Kompletní setup od karty po hraní |
 | 4 | [Konfigurace (`state.json`)](prirucka/04-konfigurace.md) | Persistované nastavení GUI, migrace, CLI overrides |
 | 5 | [Formát banky](prirucka/05-format-banky.md) | Model v paměti, tři podoby na disku, načítání, sample rate, bakování |
+| 6 | [Panel na Raspberry Pi](prirucka/06-panel-a-rpi.md) | SDL3/KMSDRM bez X, balíčky, oprávnění, ladicí páky, druhý panel 800×480 |
 
 ## Část II — Jak engine funguje uvnitř
 

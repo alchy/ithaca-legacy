@@ -85,7 +85,7 @@ Pár vlastností odlišuje ithacu od „prostě přehraj WAV":
 Engine `libithaca_core` je headless knihovna; používají ho dva konzumenti:
 
 - **`ithaca-cli`** — dávkové renderování banky do WAV (smoke test, offline).
-- **`ithaca-gui`** — čelní panel nástroje (Dear ImGui + GLFW) pro hraní naživo,
+- **`ithaca-gui`** — čelní panel nástroje (Dear ImGui + SDL3) pro hraní naživo,
   s asynchronním načítáním banky a perzistencí nastavení do `state.json`.
 
 Banka existuje ve dvou podobách: jako **adresář** WAV souborů (čitelný,

@@ -8,6 +8,11 @@ i na Raspberry Pi se streamovanim samplu z disku.
 Kompletni dokumentace (knizka): **[docs/README.md](docs/README.md)** — provoz
 (build, Raspberry Pi, konfigurace, format banky) i vnitrek enginu.
 
+> **Panel na Raspberry Pi:** celni panel bezi pres SDL3/KMSDRM, tedy **primo na
+> framebuffer bez X11 a Waylandu**. Kompletni postup — balicky a k cemu jsou,
+> opravneni, boot do konzole, ladici paky pro pasivne chlazene Pi a druhy panel
+> 800x480 — je v **[docs/prirucka/06-panel-a-rpi.md](docs/prirucka/06-panel-a-rpi.md)**.
+
 ## Build (macOS)
 
 Jednorazove stazeni vendored deps, pak build:
@@ -59,7 +64,7 @@ Vyslednou binarku najdes v `build/` (resp. `build/Release/` u VS generatoru).
     engine/       headless knihovna libithaca_core (sample, voice, dsp,
                   resonance, stream, midi, io, util)
     app/cli/      ithaca-cli — headless konzument (batch render)
-    app/gui/      ithaca-gui — Art Deco GUI (Dear ImGui + GLFW)
+    app/gui/      ithaca-gui — celni panel nastroje (Dear ImGui + SDL3)
     third-party/  vendored deps (fetch-third-party.sh)
     tests/        doctest unit testy
     tools/        bake/secret skripty (python)

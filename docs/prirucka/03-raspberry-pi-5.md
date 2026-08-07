@@ -288,16 +288,21 @@ sudo apt install -y \
     python3 \
     pkg-config
 
-# Volitelné pro CLI / GUI:
+# Pro panel (SDL3 + KMSDRM, tedy bez X):
 sudo apt install -y \
-    libglfw3-dev libgl1-mesa-dev \
-    xorg-dev
+    libdrm-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev \
+    libudev-dev
 ```
 
 `libasound2-dev` je nutný pro miniaudio i RtMidi (ALSA backend).
-`libglfw3-dev` z aptu **nutný není** — GLFW si `fetch-third-party.sh` stahuje a
-buildí z vendoru; apt balíček je tam jen jako záloha pro případ, že by vendor
-build selhal kvůli chybějícím OpenGL dev hlavičkám.
+
+Ke druhé skupině: SDL zapne backend KMSDRM jen když najde `libdrm`, `gbm` **a**
+EGL — a hledá je výhradně přes `pkg-config`, takže ten musí být taky. Podrobný
+rozpis, co která knihovna dělá, je v
+[6 · Panel na Raspberry Pi](06-panel-a-rpi.md#balíčky-a-k-čemu-jsou).
+
+> `xorg-dev` je potřeba **jen** když chcete i ladicí cestu `--video-driver x11`
+> na Pi s desktopem. Pro samotný přístroj se neinstaluje.
 
 ### Clone
 
@@ -311,7 +316,7 @@ cd ithaca-legacy
 
 ```bash
 make check-tools           # ověří cmake/ninja v PATH
-make fetch-third-party     # stáhne doctest, nlohmann, miniaudio, RtMidi, ImGui, GLFW
+make fetch-third-party     # stáhne doctest, nlohmann, miniaudio, RtMidi, ImGui, SDL3
 make build                 # cmake configure + build
 ```
 
@@ -423,8 +428,10 @@ celou plochu:
 ./build/ithaca-gui --fullscreen --bank-dir /cesta/k/bankám
 ```
 
-> GLFW potřebuje běžící display server. Z holé konzole bez X11/Wayland se okno
-> nevytvoří; přes SSH je nutné `DISPLAY=:0`.
+> Panel jede přes SDL3/KMSDRM, tedy **přímo na framebuffer bez X11 a Waylandu**.
+> Pi ale musí bootovat do konzole — desktop obsadí KMS a backend selže.
+> Kompletní postup (oprávnění, boot, ladicí páky) je v
+> [6 · Panel na Raspberry Pi](06-panel-a-rpi.md).
 
 Panel se otevře na stránce **PLAY**: uprostřed vybraná banka, pod ní řádek
 `VOICES · RESO · RING · RING RESO · PEAK dB · DSP · SUSTAIN` a dvojice MIDI
@@ -565,7 +572,8 @@ vcgencmd get_throttled  # nenulový bit = throttle aktivní
 ### Build selže
 
 - Chybí `libasound2-dev`? Při kompilaci RtMidi → „ALSA/asoundlib.h not found".
-- Vendor build GLFW padá na ARM? Zkontroluj apt balíček `xorg-dev`.
+- Panel se neotevře (`no available video device`)? Viz
+  [6 · Panel na Raspberry Pi](06-panel-a-rpi.md#když-to-nejede).
 - Práva na vendor adresáři? `fetch-third-party.sh` má dostat chmod 755.
 
 ### Kernel / driver problémy

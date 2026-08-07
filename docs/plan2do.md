@@ -211,6 +211,21 @@ ignorované chyby `fwrite` ve `wav_writer`.
 
 ## Část E — RT / multithreading (technické dluhy)
 
+### E0. Panel na Raspberry Pi — HOTOVO, čeká na ověření na HW
+
+✅ *Napsáno a ověřeno na Windows; na Pi neověřeno.*
+
+Přechod GLFW → SDL3/KMSDRM (běh z holé konzole bez X), OpenGL ES 3, Compact
+profil pro panel 800×480, parametry vzhledu a tempa, nástroje pro měření bez
+displeje. Popsáno v [6 · Panel na Raspberry Pi](prirucka/06-panel-a-rpi.md)
+a [H · GUI](reference/H-gui.md).
+
+**Co zbývá:** první překlad a spuštění na reálném Pi. Zejména ověřit, že SDL
+najde `kmsdrm` (`Video driver:` v logu při startu), že dotyk chodí přes evdev
+a že se `--wave-glow` / `--frame-divider` chovají podle očekávání pod pasivním
+chlazením (`vcgencmd get_throttled` musí zůstat nulové a sloupec DSP na PLAY
+se nesmí zhoršit).
+
 ### E1. RT fallback na Linuxu
 
 🟡 *Kód má jen `pthread_setschedparam`.*

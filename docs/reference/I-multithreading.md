@@ -17,7 +17,7 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 | Vlákno | Co dělá | Co NESMÍ (RT pravidla) | Spouští / joinuje kdo |
 |--------|---------|------------------------|-----------------------|
 | **Audio vlákno** (`processBlock`) | Při prvním bloku per thread: FTZ/DAZ + (jen při `cfg_.rt_priority`, tj. GUI a CLI `--play`) `enableRealtimeAudio()` — SCHED_FIFO / time-constraint / MMCSS, soft-failure s `LOG_RT_*` TIPem. Tikne `block_epoch_`; drainuje `MidiQueue` → aktualizuje `PedalState`, `VoicePool`, `ResonanceEngine`; renderuje hlasy; aplikuje master gain + `DspChain`; počítá peak + DSP load metr. | Alokovat paměť, volat blokující I/O, zamykat mutexy (vyjma atomik), volat ne-RT logger (`log()`) — diagnostika jde přes `LOG_RT_*`. | miniaudio (interní OS audio thread); `AudioDevice::start()` / `AudioDevice::stop()`. |
-| **GUI hlavní vlákno** | GLFW event loop + ImGui render loop (~60 Hz vsync); čte diagnostické atomiky z `Engine`; volá `engine.setMasterGain/setReleaseMs/…`; volá `engine.reloadBank()`. | Nic specificky zakázáno — GUI je non-RT. | `main()` ve `app/gui/main.cpp`; žije po celou dobu procesu. |
+| **GUI hlavní vlákno** | SDL event loop + ImGui render loop (vsync / dělitel, viz H-gui); čte diagnostické atomiky z `Engine`; volá `engine.setMasterGain/setReleaseMs/…`; volá `engine.reloadBank()`. | Nic specificky zakázáno — GUI je non-RT. | `main()` ve `app/gui/main.cpp`; žije po celou dobu procesu. |
 | **MIDI callback vlákno** | RtMidi interní vlákno; `MidiInput::callback()` překládá MIDI bajty → `engine.noteOn/noteOff/sustainPedal/allNotesOff()` (vše jen `midi_q_.push()`). | Volat cokoli blokujícího; přímý přístup na engine state mimo frontu. | RtMidi knihovna; `MidiInput::open()` / `MidiInput::close()`. |
 | **Stream worker thready — main pool** | `StreamEngine::workerLoop()` (N vláken, **auto-sized** v `Engine::init` z `hardware_concurrency()`: `clamp(jádra/2, 2, 8)`; configem lze přebít); vybírají `StreamRequest` z `StreamRequestQueue` (mutex na pop); čtou WAV z disku pres `readWavRange()`; zapisují do `RingHandle::buf` (`push()`); nastavují `ring->eof_`. | — (non-RT; mohou blokovat na disk I/O). | `StreamEngine::start()` v `engine/stream/stream_engine.cpp`; `StreamEngine::stop()` (join). Engine::init() → stream_main_->start(). |
 | **Stream worker thready — resonance pool** | Totéž pro druhý `StreamEngine` (`stream_resonance_`); izolovaný od main poolu (separátní ringy + fronta). Auto-sized `clamp(jádra/4, 1, 4)`. | — | Stejný vzor; `Engine::init()` → `stream_resonance_->start()`; `Engine::~Engine()` → `stop()`. |
@@ -243,7 +243,7 @@ main() / main.cpp
    a. `recache_thread_.join()` (pokud běží bg rebuild).
    b. `stream_main_->stop()` (join workerů).
    c. `stream_resonance_->stop()` (join workerů).
-4. ImGui/GLFW shutdown.
+4. ImGui/SDL shutdown.
 
 ### raw `StreamEngine*` v hlasech — proč to není use-after-free
 
