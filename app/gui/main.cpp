@@ -59,6 +59,10 @@ static void printUsage(const char* argv0) {
         "                     1 = kazdy vsync, 2 = kazdy druhy (30 fps na 60 Hz).\n"
         "                     Panel je pristroj, ne hra — polovicni tempo je\n"
         "                     polovicni prace. Persistovano v state.json.\n"
+        "  --frame-divider-idle <n>\n"
+        "                     delitel v KLIDU (0..8, 0 = nezpomalovat). Kdyz\n"
+        "                     nastroj mlci a nikdo se ho nedotyka, tempo klesne;\n"
+        "                     prvni dotek nebo nota ho vrati okamzite.\n"
         "  --fullscreen       rezim panelu: okno bez dekoraci pres celou obrazovku.\n"
         "                     Na displeji zabudovanem v nastroji nema byt videt\n"
         "                     titulek okna. Vyzaduje bezici display server (X11/\n"
@@ -207,7 +211,7 @@ int main(int argc, char* argv[]) {
     std::string cli_bank_dir;
     std::string cli_log_level;
     std::optional<float> cli_glow, cli_glow_budget;
-    std::optional<int>   cli_divider;
+    std::optional<int>   cli_divider, cli_divider_idle;
     bool cli_fullscreen = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -222,6 +226,8 @@ int main(int argc, char* argv[]) {
             cli_glow_budget = std::strtof(argv[++i], nullptr);
         } else if (a == "--frame-divider" && i + 1 < argc) {
             cli_divider = std::atoi(argv[++i]);
+        } else if (a == "--frame-divider-idle" && i + 1 < argc) {
+            cli_divider_idle = std::atoi(argv[++i]);
         } else if (a == "--fullscreen") {
             cli_fullscreen = true;
         } else {
@@ -246,15 +252,19 @@ int main(int argc, char* argv[]) {
     if (cli_glow)        st.wave_glow = sanitizeGlow(*cli_glow, kWaveGlowMax);
     if (cli_glow_budget) st.wave_glow_budget_ms = sanitizeGlow(*cli_glow_budget,
                                                                kWaveBudgetMax);
-    if (cli_divider)     st.frame_divider = std::clamp(*cli_divider, 1, 4);
+    if (cli_divider)      st.frame_divider = std::clamp(*cli_divider, 1, 4);
+    if (cli_divider_idle) st.frame_divider_idle = std::clamp(*cli_divider_idle, 0, 8);
     // Kdyz nastroj nejede na vychozim vzhledu, ma to byt videt v logu — jinak
     // se "proc je vlna jina" hleda hodne blbe.
     if (st.wave_glow != 1.f || st.wave_glow_budget_ms > 0.f) {
         LOG_INFO("gui", "Wave glow: %.2f%s", (double)st.wave_glow,
                  st.wave_glow_budget_ms > 0.f ? " (auto)" : "");
     }
-    if (st.frame_divider != 1)
-        LOG_INFO("gui", "Frame divider: %d", st.frame_divider);
+    if (st.frame_divider != 1 || st.frame_divider_idle > 0) {
+        LOG_INFO("gui", "Frame divider: %d (v klidu %d)", st.frame_divider,
+                 st.frame_divider_idle > st.frame_divider ? st.frame_divider_idle
+                                                          : st.frame_divider);
+    }
 
     // 2. GLFW window.
     glfwSetErrorCallback(glfwErrorCb);
@@ -435,6 +445,10 @@ int main(int argc, char* argv[]) {
     // hotovem pristroji. Viz frame_stats.h, proc percentily a proc geometrie.
     FrameStats stats;
 
+    // Aktualne nastavene tempo. Swap interval se prestavuje JEN pri zmene:
+    // volat ho kazdy snimek je zbytecne a na nekterych ovladacich to skube.
+    int applied_divider = ctx.state.frame_divider;
+
     while (!glfwWindowShouldClose(w)) {
         const auto t_frame0 = std::chrono::steady_clock::now();
         glfwPollEvents();
@@ -523,6 +537,22 @@ int main(int argc, char* argv[]) {
         glViewport(0, 0, fbw, fbh);
         glClearColor(0.1f, 0.1f, 0.1f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
+        // Adaptivni tempo. Zrychleni je odpoved na dotek, takze musi platit
+        // OKAMZITE — proto se dotaz dela jeste pred swapem, ne az po nem.
+        {
+            const int want = ctx.pace.step(ctx.busy(), ImGui::GetIO().DeltaTime,
+                                           ctx.state.frame_divider,
+                                           ctx.state.frame_divider_idle);
+            if (want != applied_divider) {
+                // Zmena tempa se loguje: na hotovem pristroji je to jediny
+                // zpusob, jak poznat, ze usporny rezim vubec nabehl (a hlavne
+                // ze se z nej vraci vcas).
+                LOG_DEBUG("gui", "Pace: delitel %d -> %d", applied_divider, want);
+                glfwSwapInterval(want);
+                applied_divider = want;
+            }
+        }
+
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(w);
         const auto t_present1 = std::chrono::steady_clock::now();

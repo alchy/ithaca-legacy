@@ -72,6 +72,10 @@ struct GuiState {
     // presne polovina prace. Delitel (ne cilove fps) proto, ze takhle zustava
     // obraz synchronizovany s panelem a netrha se.
     int   frame_divider = 1;
+    // Delitel v KLIDU — kdyz nastroj mlci a nikdo se ho nedotyka. 0 nebo
+    // hodnota <= frame_divider = nezpomalovat. Nahoru se prepina okamzite
+    // (odpoved na dotek), dolu az po prodleve (viz pace.h).
+    int   frame_divider_idle = 0;
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
     int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only

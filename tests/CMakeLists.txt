@@ -206,6 +206,14 @@ target_compile_features(test_frame_stats PRIVATE cxx_std_20)
 target_link_libraries(test_frame_stats PRIVATE doctest)
 add_test(NAME test_frame_stats COMMAND test_frame_stats)
 
+# Prepinani tempa prekreslovani (pace.h je header-only, bez ImGui a enginu).
+add_executable(test_pace test_pace.cpp)
+target_include_directories(test_pace PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_compile_features(test_pace PRIVATE cxx_std_20)
+target_link_libraries(test_pace PRIVATE doctest)
+add_test(NAME test_pace COMMAND test_pace)
+
 # Regulator dosahu zare vlny (glow_auto.h je header-only, bez ImGui a enginu).
 add_executable(test_glow_auto test_glow_auto.cpp)
 target_include_directories(test_glow_auto PRIVATE
