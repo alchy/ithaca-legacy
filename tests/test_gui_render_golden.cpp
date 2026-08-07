@@ -198,10 +198,23 @@ Shot renderPage(Harness& h, int page, float W, float H, bool saver = false,
     // vlna v sporici plyne dvojnasobnou rychlosti. Scenar to drzi pod dohledem.
     h.ctx.panels.idle_t = saver ? 400.f : 0.f;
 
+    // Rezim nahledu ITHACA_FPS: prekresluje se jinou frekvenci, ale po STEJNOU
+    // simulovanou dobu (pocet snimku se dopocita). Slouzi k overeni, ze
+    // vyhlazovani vlny je vazane na cas a ne na snimek — pri 12 fps ma vyjit
+    // temer tentyz obraz jako pri 60.
+    float fps = 60.f;
+    if (const char* f = std::getenv("ITHACA_FPS")) {
+        const float v = (float)std::atof(f);
+        if (v > 1.f && v < 1000.f) {
+            fps    = v;
+            frames = std::max(2, (int)((float)frames * v / 60.f + 0.5f));
+        }
+    }
+
     Shot s;
     for (int f = 0; f < frames; ++f) {
         h.pinWave();                        // stav "nastroj hraje", viz Harness
-        io.DeltaTime = 1.f / 60.f;          // pevny krok = deterministicky cas
+        io.DeltaTime = 1.f / fps;           // pevny krok = deterministicky cas
         ImGui::NewFrame();
         renderScreen(h.ctx, h.pages.data(), (int)h.pages.size(), W, H);
         ImGui::Render();
@@ -403,7 +416,8 @@ TEST_CASE("otisk vykresleneho panelu") {
 
     // Nahled varianty vzhledu — otisk by nutne nesedel, protoze se kresli
     // neco jineho, nez na cem byla baseline porizena.
-    if (std::getenv("ITHACA_GLOW") || std::getenv("ITHACA_WAVE_STEP")) {
+    if (std::getenv("ITHACA_GLOW") || std::getenv("ITHACA_WAVE_STEP")
+        || std::getenv("ITHACA_FPS")) {
         std::printf("[golden] rezim nahledu (ITHACA_GLOW), otisk se neporovnava\n");
         ImGui::DestroyContext();
         return;

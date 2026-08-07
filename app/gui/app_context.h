@@ -101,6 +101,10 @@ struct PanelState {
         // z nej dlouha klidna vlna, opticky odlisna od zivych L/R.
         float hist_p[kHist]{};
         int   head = 0;                   // pozice nejnovejsiho vzorku
+        // Zlomek kroku historie, ktery jeste nedosel. Posun je vazany na CAS
+        // (60 polozek/s), ne na snimek — jinak by se vlna pri usporne snimkove
+        // frekvenci sama zpomalila. Viz screen.cpp::waveUpdate.
+        float hist_acc = 0.f;
     };
     Wave wave;
     // Regulator dosahu zare. Drzi nasobitel, ktery se skutecne kresli — smi

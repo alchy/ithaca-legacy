@@ -135,6 +135,37 @@ void backgroundFill(ImDrawList* dl, ImVec2 lo, ImVec2 hi) {
 // dvakrat za snimek, takze vlna ve sporici plynula dvojnasobnou rychlosti a
 // obalky mely polovicni casovou konstantu. Rozdeleni to resi z podstaty: stav
 // se aktualizuje jednou, kreslit se smi kolikrat je potreba.
+// -- Casove konstanty vlny --------------------------------------------------
+// Vsechno vyhlazovani vlny bylo puvodne vazane na SNIMEK: koeficienty jako
+// 0,10 nebo 0,995 se aplikovaly jednou za prekresleni. Pri 60 fps to vypadalo
+// spravne, ale znamenalo to, ze animace zavisi na snimkove frekvenci —
+// zahozeny snimek ji zmenil a pri 12 fps by se vlna sama zpomalila petkrat.
+// Bez teto opravy nejde snizit tempo prekreslovani (a to je na Pi ta nejvetsi
+// uspora, jaka je k dispozici).
+//
+// Konstanty jsou prepocitane z puvodnich koeficientu pri 60 fps:
+//   tau = -(1/60) / ln(1 - k)
+// takze pri 60 fps vypada vsechno PRESNE jako predtim a lisi se to teprve
+// tam, kde bylo puvodni chovani spatne.
+namespace wave_tau {
+    inline constexpr float env_up   = 0.158f;   // bylo k = 0,10  (nastup noty)
+    inline constexpr float env_down = 0.825f;   // bylo k = 0,020 (dozniv)
+    inline constexpr float vis_up   = 0.110f;   // bylo k = 0,14
+    inline constexpr float vis_down = 2.770f;   // bylo k = 0,006 (~4 s vyhasnuti)
+    inline constexpr float ped_up   = 0.0747f;  // bylo k = 0,20
+    inline constexpr float ped_down = 0.200f;   // bylo k = 0,08
+    inline constexpr float norm     = 3.325f;   // bylo *0,995 za snimek
+}
+
+// Historie plyne v PEVNEM tempu, ne po snimcich: 60 polozek za vterinu, tedy
+// pruchod sirkou (128 polozek) trva 2,13 s bez ohledu na to, kolikrat se
+// mezitim prekreslilo.
+constexpr float kHistRate  = 60.f;
+// Dlouhy vypadek (load banky, prepnuti okna) se NEDOHANI — jinak by vlna
+// skokem poskocila a obalky by se propadly. Stejna uvaha jako clamp
+// v motion::Settle.
+constexpr float kWaveDtMax = 0.10f;
+
 void waveUpdate(AppContext& ctx) {
     auto& wv = ctx.panels.wave;
     constexpr int kN = ithaca::Engine::kScopeSize;
@@ -156,16 +187,22 @@ void waveUpdate(AppContext& ctx) {
     const float rms_l = std::sqrt(sl / (float)kN);
     const float rms_r = std::sqrt(sr / (float)kN);
 
+    // Krok casu misto "jednoho snimku" — viz wave_tau vyse.
+    const float dt   = std::min(ImGui::GetIO().DeltaTime, kWaveDtMax);
+    const auto  lag  = [dt](float tau) { return 1.f - std::exp(-dt / tau); };
+    const float decay = std::exp(-dt / wave_tau::norm);
+
     // Auto-rozsah, aby vlna vypadala stejne pri tichem i hlasitem hrani —
     // pozadi neni meridlo. Spodni mez drzi ticho klidne.
-    wv.norm_rms = std::max(std::max(rms_l, rms_r), wv.norm_rms * 0.995f);
+    wv.norm_rms = std::max(std::max(rms_l, rms_r), wv.norm_rms * decay);
     const float ref = std::max(wv.norm_rms, 0.005f);
 
     // Pomaly follower: svizne nahoru (aby nastup noty byl videt), liny dolu
     // (aby dozniv plynul misto skoku). Tohle je to, co dela klid.
-    auto follow = [](float& env, float target) {
-        const float k = (target > env) ? 0.10f : 0.020f;
-        env += (target - env) * k;
+    const float k_up   = lag(wave_tau::env_up);
+    const float k_down = lag(wave_tau::env_down);
+    auto follow = [k_up, k_down](float& env, float target) {
+        env += (target - env) * ((target > env) ? k_up : k_down);
     };
     follow(wv.env_l, std::clamp(rms_l / ref, 0.f, 1.f));
     follow(wv.env_r, std::clamp(rms_r / ref, 0.f, 1.f));
@@ -176,7 +213,8 @@ void waveUpdate(AppContext& ctx) {
     // v tichu zesilil sum a vlna by nezhasla nikdy.
     const float lvl = std::max(rms_l, rms_r);
     const float vis_target = (lvl > 2.0e-4f) ? 1.f : 0.f;
-    wv.vis += (vis_target - wv.vis) * (vis_target > wv.vis ? 0.14f : 0.006f);
+    wv.vis += (vis_target - wv.vis)
+            * lag(vis_target > wv.vis ? wave_tau::vis_up : wave_tau::vis_down);
 
     // Blizkost prehlceni: od -9 dB (0) k 0 dB (1). Bere skutecny peak metr,
     // ktery ma vlastni decay, takze kratka spicka zustane chvili videt.
@@ -186,23 +224,37 @@ void waveUpdate(AppContext& ctx) {
 
     // Nova hodnota do historie: HLASITOST bloku (0..1), ne znamenkova spicka.
     // pk_l/pk_r uz jsou spocitane vyse ve spolecnem pruchodu.
-    wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * 0.995f);
+    wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * decay);
     const float pref = std::max(wv.norm_peak, 0.01f);
 
     // Pedal: vlastni obalka i historie. Neni to zvuk, takze se nenormalizuje —
     // 0..127 je uz absolutni skala.
     const float ped = std::clamp((float)ctx.engine.pedalCC() / 127.f, 0.f, 1.f);
-    wv.env_p += (ped - wv.env_p) * ((ped > wv.env_p) ? 0.20f : 0.08f);
+    wv.env_p += (ped - wv.env_p)
+              * lag((ped > wv.env_p) ? wave_tau::ped_up : wave_tau::ped_down);
 
-    const int prev = wv.head;
-    wv.head = (wv.head + 1) % PanelState::Wave::kHist;
-    // Casove vyhlazeni pri vstupu: bez nej by kazdy frame skocil jinam a podel
-    // vlny by vznikaly schody.
-    wv.hist_l[wv.head] = 0.55f * std::clamp(pk_l / pref, 0.f, 1.f)
-                       + 0.45f * wv.hist_l[prev];
-    wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
-                       + 0.45f * wv.hist_r[prev];
-    wv.hist_p[wv.head] = 0.35f * wv.env_p + 0.65f * wv.hist_p[prev];
+    // Posun historie je vazany na CAS, ne na snimek: nova polozka vstupuje
+    // 60x za vterinu at se kresli jakkoli casto. Drive to byla jedna polozka
+    // na snimek, takze pruchod sirkou trval 2,1 s pri 60 fps, ale 10,7 s pri
+    // 12 fps — vlna by se pri usporne snimkove frekvenci sama zpomalila.
+    wv.hist_acc += dt * kHistRate;
+    // Strop poctu kroku: po dlouhem vypadku nema smysl dohanet, vlna by
+    // poskocila. dt uz je omezene, tohle je jen pojistka.
+    int steps = (int)wv.hist_acc;
+    if (steps > 8) { steps = 8; wv.hist_acc = 0.f; }
+    wv.hist_acc -= (float)steps;
+
+    for (int s = 0; s < steps; ++s) {
+        const int prev = wv.head;
+        wv.head = (wv.head + 1) % PanelState::Wave::kHist;
+        // Casove vyhlazeni pri vstupu: bez nej by kazdy krok skocil jinam a
+        // podel vlny by vznikaly schody.
+        wv.hist_l[wv.head] = 0.55f * std::clamp(pk_l / pref, 0.f, 1.f)
+                           + 0.45f * wv.hist_l[prev];
+        wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
+                           + 0.45f * wv.hist_r[prev];
+        wv.hist_p[wv.head] = 0.35f * wv.env_p + 0.65f * wv.hist_p[prev];
+    }
 }
 
 // Stuhy. Cte stav, ktery pripravil waveUpdate — sam nic nemeni, takze se smi
