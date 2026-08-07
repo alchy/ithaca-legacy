@@ -58,13 +58,17 @@ struct SysMetrics {
 
 SysMetrics sysMetrics(const Rect& r) {
     SysMetrics m{};
-    m.btn_y = r.hi.y - L::Dims::touch;
     m.lab_h = wdg::fontPx(Fonts::small) + 6.f;
+
+    // Odzdola pas tlacitek, zbytek jsou tri bloky voleb.
+    L::Band band{r};
+    const Rect btns = band.takeBottom(L::Dims::touch);
+    m.btn_y = btns.lo.y;
 
     // Tri bloky (MIDI IN, CHANNEL, BUFFER), z toho CHANNEL ma dve radky voleb.
     constexpr int kBlocks   = 3;
     constexpr int kChipRows = 1 + kChanRows + 1;
-    const float avail = m.btn_y - L::Dims::gap - r.lo.y;
+    const float avail = band.h();
     m.unit = (avail - (float)kBlocks * m.lab_h
                     - (float)kBlocks * L::Dims::gap_s) / (float)kChipRows;
     m.cell_h = std::clamp(m.unit - L::Dims::gap_s, 36.f, 56.f);
@@ -115,7 +119,7 @@ void pageSys(AppContext& ctx, const Rect& r,
         for (size_t i = 0; i < ps.midi_ports.size(); ++i)
             if (ps.midi_ports[i] == ctx.state.midi_port_name) { cur = (int)i + 1; break; }
 
-        const float rescan_w = 150.f;
+        const float rescan_w = L::Dims::act_w;
         const float row_y = y + m.lab_h;   // stejna uctara jako volby vedle
         const int hit = settingRow("##midi", r, m, y, "MIDI IN",
                                    items.data(), (int)items.size(), cur,
