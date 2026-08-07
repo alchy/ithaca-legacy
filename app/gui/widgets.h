@@ -109,12 +109,63 @@ inline int waveBuild(ImVec2* out, int cap, float x0, float w, float base_y,
     return n;
 }
 
-// Jeden tah pres uz spocitane body. AddPolyline bere pole primo, takze
-// PathClear/PathLineTo/PathStroke odpadaji.
-inline void wavePolyline(ImDrawList* dl, const ImVec2* p, int n, ImU32 col,
-                         float alpha, float thickness) {
+// Zar kolem krivky — JEDNIM tahem, s prechodem primo ve vrcholech.
+//
+// Drive to byly tri obtahy AddPolyline pres sebe (siroky slaby, stredni, uzky
+// jasny). Tri konstantni pruhlednosti daji ale schody, a nejvnitrnejsi obtah je
+// pres celou svou tloustku PLNY — vysledek se cetl jako plochy PAS s hranou,
+// ne jako cara, ktera pohasina do okolí.
+//
+// Tady se misto toho posle pas trojuhelniku, ktery ma pruhlednost primo ve
+// vrcholech: 0 na kraji zare, `alpha*kMid` na hranici jadra, `alpha` ve stredu.
+// Grafika mezi nimi interpoluje spojite, takze spad je hladky a stred je BOD,
+// ne plato. Vedlejsi efekt: 5 vrcholu na bod misto 3x4, tedy i mene geometrie.
+//
+// `core_px` je polomer jadra (drz maly, jinak cara zase ztloustne),
+// `glow_px` dosah zare.
+inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
+                     float core_px, float glow_px, ImU32 col, float alpha) {
     if (n < 2 || alpha <= 0.004f) return;
-    dl->AddPolyline(p, n, tint(col, alpha), 0, thickness);
+    constexpr float kMid = 0.42f;          // pruhlednost na hranici jadra
+
+    const ImVec2 uv     = ImGui::GetFontTexUvWhitePixel();
+    const ImU32  c_core = tint(col, alpha);
+    const ImU32  c_mid  = tint(col, alpha * kMid);
+    const ImU32  c_edge = col & 0x00FFFFFF;          // pruhledna, tatáž barva
+
+    const int seg = n - 1;
+    dl->PrimReserve(seg * 24, n * 5);
+    const unsigned int base = dl->_VtxCurrentIdx;
+
+    for (int i = 0; i < n; ++i) {
+        // Normala z tecny (centralni diference). Na koncich jednostranne.
+        const ImVec2 a = p[(i > 0) ? i - 1 : 0];
+        const ImVec2 b = p[(i < n - 1) ? i + 1 : n - 1];
+        float dx = b.x - a.x, dy = b.y - a.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len > 1e-6f) { dx /= len; dy /= len; } else { dx = 1.f; dy = 0.f; }
+        const float nx = -dy, ny = dx;
+
+        const ImVec2 q = p[i];
+        dl->PrimWriteVtx(ImVec2(q.x - nx * glow_px, q.y - ny * glow_px), uv, c_edge);
+        dl->PrimWriteVtx(ImVec2(q.x - nx * core_px, q.y - ny * core_px), uv, c_mid);
+        dl->PrimWriteVtx(q,                                             uv, c_core);
+        dl->PrimWriteVtx(ImVec2(q.x + nx * core_px, q.y + ny * core_px), uv, c_mid);
+        dl->PrimWriteVtx(ImVec2(q.x + nx * glow_px, q.y + ny * glow_px), uv, c_edge);
+    }
+
+    for (int s = 0; s < seg; ++s) {
+        const unsigned int i0 = base + (unsigned)s * 5;
+        const unsigned int i1 = i0 + 5;
+        for (unsigned k = 0; k < 4; ++k) {          // ctyri pasy mezi peti drahami
+            dl->PrimWriteIdx((ImDrawIdx)(i0 + k));
+            dl->PrimWriteIdx((ImDrawIdx)(i0 + k + 1));
+            dl->PrimWriteIdx((ImDrawIdx)(i1 + k + 1));
+            dl->PrimWriteIdx((ImDrawIdx)(i0 + k));
+            dl->PrimWriteIdx((ImDrawIdx)(i1 + k + 1));
+            dl->PrimWriteIdx((ImDrawIdx)(i1 + k));
+        }
+    }
 }
 
 // -- Dotykovy slider --------------------------------------------------------

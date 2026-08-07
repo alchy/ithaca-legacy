@@ -193,6 +193,95 @@ Shot renderPage(Harness& h, int page, float W, float H, bool saver = false,
     return s;
 }
 
+// -- Softwarovy rasterizer ---------------------------------------------------
+// ImDrawData jsou obycejne trojuhelniky s barvou a UV. Slozit si je do bufferu
+// znamena videt panel bez jakehokoli displeje — a diky tomu posuzovat vzhled
+// (profil zare napric carou, prekryv, mezery) i pri praci na stroji, kde zadny
+// panel neni. Zapina se promennou ITHACA_GOLDEN_DUMP=<scenar>.
+struct Image {
+    int w = 0, h = 0;
+    std::vector<unsigned char> rgba;
+};
+
+void blend(unsigned char* dst, float r, float g, float b, float a) {
+    dst[0] = (unsigned char)(r * a + dst[0] * (1.f - a) + 0.5f);
+    dst[1] = (unsigned char)(g * a + dst[1] * (1.f - a) + 0.5f);
+    dst[2] = (unsigned char)(b * a + dst[2] * (1.f - a) + 0.5f);
+    dst[3] = (unsigned char)(255.f * a + dst[3] * (1.f - a) + 0.5f);
+}
+
+void rasterize(const ImDrawData* dd, Image& img) {
+    ImGuiIO& io = ImGui::GetIO();
+    unsigned char* tex = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsAlpha8(&tex, &tw, &th);
+
+    img.rgba.assign((size_t)img.w * img.h * 4, 0);
+
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        for (const ImDrawCmd& cmd : cl->CmdBuffer) {
+            if (cmd.UserCallback) continue;
+            const ImDrawIdx* idx = cl->IdxBuffer.Data + cmd.IdxOffset;
+            const ImDrawVert* vtx = cl->VtxBuffer.Data + cmd.VtxOffset;
+            const float cx0 = std::max(cmd.ClipRect.x, 0.f);
+            const float cy0 = std::max(cmd.ClipRect.y, 0.f);
+            const float cx1 = std::min(cmd.ClipRect.z, (float)img.w);
+            const float cy1 = std::min(cmd.ClipRect.w, (float)img.h);
+
+            for (unsigned e = 0; e + 2 < cmd.ElemCount; e += 3) {
+                const ImDrawVert& a = vtx[idx[e + 0]];
+                const ImDrawVert& b = vtx[idx[e + 1]];
+                const ImDrawVert& c = vtx[idx[e + 2]];
+                const float area = (b.pos.x - a.pos.x) * (c.pos.y - a.pos.y)
+                                 - (c.pos.x - a.pos.x) * (b.pos.y - a.pos.y);
+                if (std::fabs(area) < 1e-9f) continue;
+
+                int x0 = (int)std::floor(std::min({a.pos.x, b.pos.x, c.pos.x}));
+                int x1 = (int)std::ceil (std::max({a.pos.x, b.pos.x, c.pos.x}));
+                int y0 = (int)std::floor(std::min({a.pos.y, b.pos.y, c.pos.y}));
+                int y1 = (int)std::ceil (std::max({a.pos.y, b.pos.y, c.pos.y}));
+                x0 = std::max(x0, (int)cx0); x1 = std::min(x1, (int)cx1);
+                y0 = std::max(y0, (int)cy0); y1 = std::min(y1, (int)cy1);
+
+                for (int y = y0; y < y1; ++y)
+                for (int x = x0; x < x1; ++x) {
+                    const float px = x + 0.5f, py = y + 0.5f;
+                    float w0 = ((b.pos.x - px) * (c.pos.y - py)
+                              - (c.pos.x - px) * (b.pos.y - py)) / area;
+                    float w1 = ((c.pos.x - px) * (a.pos.y - py)
+                              - (a.pos.x - px) * (c.pos.y - py)) / area;
+                    float w2 = 1.f - w0 - w1;
+                    if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+
+                    auto ch = [&](const ImDrawVert& v, int s) {
+                        return (float)((v.col >> (s * 8)) & 0xFF);
+                    };
+                    const float r = w0 * ch(a,0) + w1 * ch(b,0) + w2 * ch(c,0);
+                    const float g = w0 * ch(a,1) + w1 * ch(b,1) + w2 * ch(c,1);
+                    const float bl = w0 * ch(a,2) + w1 * ch(b,2) + w2 * ch(c,2);
+                    float al = (w0 * ch(a,3) + w1 * ch(b,3) + w2 * ch(c,3)) / 255.f;
+
+                    // Textura je alpha8 atlas pisma; vlna sazi na bily pixel.
+                    const float u = w0 * a.uv.x + w1 * b.uv.x + w2 * c.uv.x;
+                    const float v = w0 * a.uv.y + w1 * b.uv.y + w2 * c.uv.y;
+                    const int tx = std::clamp((int)(u * tw), 0, tw - 1);
+                    const int ty = std::clamp((int)(v * th), 0, th - 1);
+                    al *= (float)tex[ty * tw + tx] / 255.f;
+                    if (al <= 0.f) continue;
+                    blend(&img.rgba[((size_t)y * img.w + x) * 4], r, g, bl, al);
+                }
+            }
+        }
+    }
+}
+
+void writePPM(const char* path, const Image& img) {
+    std::ofstream f(path, std::ios::binary);
+    f << "P6\n" << img.w << ' ' << img.h << "\n255\n";
+    for (size_t i = 0; i < (size_t)img.w * img.h; ++i)
+        f.write((const char*)&img.rgba[i * 4], 3);
+}
+
 // -- Baseline ----------------------------------------------------------------
 
 const char* kBaselineFile = "gui_golden.txt";
@@ -256,9 +345,37 @@ TEST_CASE("otisk vykresleneho panelu") {
         { "play_saver_1280x720", PAGE_PLAY, 1280.f, 720.f, true, 1200 },
     };
 
+    // DOCASNA SONDA: obsah pasu pecenych car v atlasu.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        unsigned char* px = nullptr; int tw = 0, th = 0;
+        io.Fonts->GetTexDataAsAlpha8(&px, &tw, &th);
+        std::printf("[diag] atlas %dx%d\n", tw, th);
+        for (int wq = 1; wq <= 5; ++wq) {
+            const ImVec4& uv = io.Fonts->TexUvLines[wq];
+            const int x0 = (int)(uv.x * tw), x1 = (int)(uv.z * tw);
+            const int yy = (int)(uv.y * th);
+            std::printf("[diag] sirka %d: y=%d x=%d..%d  alfa:", wq, yy, x0, x1);
+            for (int x = x0 - 2; x <= x1 + 2; ++x)
+                std::printf(" %3d", (x >= 0 && x < tw) ? px[yy * tw + x] : -1);
+            std::printf("\n");
+        }
+    }
+
+    const char* dump = std::getenv("ITHACA_GOLDEN_DUMP");
+
     std::map<std::string, Shot> now;
-    for (const auto& sc : kScenarios)
+    for (const auto& sc : kScenarios) {
         now[sc.name] = renderPage(h, sc.page, sc.w, sc.h, sc.saver, sc.frames);
+        if (dump && std::strcmp(dump, sc.name) == 0) {
+            Image img; img.w = (int)sc.w; img.h = (int)sc.h;
+            rasterize(ImGui::GetDrawData(), img);
+            char path[128];
+            std::snprintf(path, sizeof(path), "%s.ppm", sc.name);
+            writePPM(path, img);
+            std::printf("[dump] %s (%dx%d)\n", path, img.w, img.h);
+        }
+    }
 
     // Tabulka se tiskne VZDY — pocty vertexu jsou to, cim se meri ucinek
     // optimalizaci na stroji, kde je mereni casu bezcenne.

@@ -210,40 +210,21 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
         { 5.2f, 0.19f, 0.55f, 0.86f, 0.20f, 3.0f, Colors::dim,    2 },
     };
 
-    // Zar: tyz tvar trikrat pres sebe — siroky a slaby vespod, uzky a jasny
-    // nahore. Levny bloom, ktery z care udela svetlo.
+    // Zar kolem krivky. Jadro je uzke a jasne, kolem nej spojity spad do ztracena
+    // — cara ma pohasinat do okoli, ne byt pas s hranou. Tvar nese primo
+    // geometrie (pruhlednost ve vrcholech), viz wdg::waveGlow.
     //
-    // Body se spocitaji JEDNOU a obtahnou se trikrat. Nejvyssi z tri
-    // pruhlednosti je `a` sama, takze kdyz uz ta je zanedbatelna, nema smysl
-    // geometrii vubec stavet — stejne by se nic nenakreslilo.
+    // Jadro se drzi POD jednim pixelem polomeru: nad nim uz cara opticky
+    // ztloustne a spojity spad se ztrati v plose. Dosah zare zustava tam, kde
+    // byl nejsirsi z byvalych tri obtahu (th * 3.4).
     auto glow = [&](const float* p, int n, float amp, ImU32 col, float a, float th) {
         if (a <= 0.004f) return;
         const int m = wdg::waveBuild(poly, kPts, wave_lo.x, w, axis, p, n, amp, 1.f);
         if (m < 2) return;
-        wdg::wavePolyline(dl, poly, m, col, a * 0.16f, th * 3.4f);
-        wdg::wavePolyline(dl, poly, m, col, a * 0.36f, th * 1.9f);
-        wdg::wavePolyline(dl, poly, m, col, a,         th);
+        wdg::waveGlow(dl, poly, m, std::min(0.9f, th * 0.35f), th * 3.4f, col, a);
     };
 
     dl->PushClipRect(wave_lo, wave_hi, true);
-
-    // Stuhy se rasteruji JEDNOU cestou. ImGui kresli tlustou caru bud geometrii
-    // (4 vrcholy na bod), nebo — kdyz je tloustka CELE cislo — texturou z pasu
-    // pecenych car (2 vrcholy na bod). Z patnacti tahu zare na to sahal presne
-    // jeden: pedalova stuha ma th = 3.0 a nasobitel 1.0, takze vysla na
-    // celociselnou trojku. Cistou nahodou, ne umyslem.
-    //
-    // Projevilo se to jako "dira" uprostred te jedne cary — okraje videt, stred
-    // nevybarveny. ImGui 1.91.8 zmensilo ulozeni pecenych car z ~64x64 na
-    // ~32x32 (TexUvLines ma ted 33 polozek misto 64) a s nasim atlasem 2048x2048
-    // ta cesta nekresli, co ma.
-    //
-    // Nechavame proto vsech patnact tahu na geometricke ceste. Cena je 256
-    // vrcholu na snimek. Zaroven to znamena, ze "zaokrouhlit tloustky na cela
-    // cisla, at se zapne texturovy antialiasing" NENI bezpecna optimalizace —
-    // zaplo by to tuhle cestu na vsech patnacti tazich.
-    const ImDrawListFlags saved_flags = dl->Flags;
-    dl->Flags &= ~ImDrawListFlags_AntiAliasedLinesUseTex;
 
     for (const Ribbon& R : ribs) {
         const float env = (R.src == 2) ? wv.env_p : (R.src == 1 ? wv.env_r : wv.env_l);
@@ -295,7 +276,6 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
         glow(pts, kPts, amp, col, R.alpha * vis * vis_r, R.th);
     }
 
-    dl->Flags = saved_flags;
     dl->PopClipRect();
 }
 
@@ -348,7 +328,7 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
 
     // Stuhy POD ovladanim. Ve sporici je prekryje zavoj, takze kdyz uz je
     // temer neprusvitny, nema smysl je kreslit — prah je tentyz, jaky pouziva
-    // wdg::waveLine pro zanedbatelnou pruhlednost.
+    // wdg::waveGlow pro zanedbatelnou pruhlednost.
     const float veil0 = 1.f - ctx.panels.chrome_a;
     if (veil0 < 0.996f)
         waveRibbons(ctx, dl, lcd_w, body.lo, body.hi, wave_vis);
