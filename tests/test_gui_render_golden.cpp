@@ -248,10 +248,12 @@ TEST_CASE("otisk vykresleneho panelu") {
         { "dsp_800x480",    PAGE_DSP,   800.f, 480.f },
         { "sys_800x480",    PAGE_SYS,   800.f, 480.f },
         { "log_800x480",    PAGE_LOG,   800.f, 480.f },
-        // Sporic — stav, ve kterem panel travi vetsinu zivota. Vic snimku
-        // proto, ze zavoj nabiha 2,5 s: teprve v USTALENEM sporici je videt
-        // cela cena dvojiho kresleni pozadi.
-        { "play_saver_1280x720", PAGE_PLAY, 1280.f, 720.f, true, 600 },
+        // Sporic — stav, ve kterem panel travi vetsinu zivota. Dvacet vterin
+        // proto, ze zavoj nabiha s casovou konstantou 2,5 s a plne neprusvitny
+        // je az kolem 14. vteriny; teprve tam je videt cela cena kresleni
+        // pozadi nadvakrat. Sporic se zapina po peti minutach necinnosti a pak
+        // drzi hodiny, takze ustaleny stav je ten realny.
+        { "play_saver_1280x720", PAGE_PLAY, 1280.f, 720.f, true, 1200 },
     };
 
     std::map<std::string, Shot> now;

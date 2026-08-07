@@ -76,36 +76,40 @@ void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w,
                 Colors::dimmer, buf);
 }
 
-// Pozadi ve stylu PS3 XMB: gradient do svetla vpravo nahore + nekolik mekce
-// se vlnicich stuh.
-//
-// KLICOVE: tvar NENI prubeh zvuku. Kreslit vzorky primo bylo pri pomalem tempu
-// prilis neklidne — pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal
-// cist tvar vlny. Tvar je proto parametricky (soucet tri pomalych sinusovek
-// s driftujici fazi) a zvuk mu jen MODULUJE amplitudu pres pomalou obalku.
-// Vysledek pri hre dycha, v tichu se sotva znatelne vlni.
-// `vis` skaluje sytost vlny. PLAY je ambientni obrazovka, tam je vlna hvezda;
-// ostatni jsou pracovni, tam ustoupi, aby neprochazela textem. Vypnout ji ale
-// nelze — indikace, ze zvuk hraje, ma platit vsude.
-void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
-                ImVec2 wave_lo, ImVec2 wave_hi, float vis) {
-    const float w = hi.x - lo.x;
-
-    // Gradient: vpravo nahore svetlejsi, vlevo dole tmavsi.
+// Vypln plochy displeje. Gradient: vpravo nahore svetlejsi, vlevo dole tmavsi.
+void backgroundFill(ImDrawList* dl, ImVec2 lo, ImVec2 hi) {
     dl->AddRectFilledMultiColor(lo, hi,
         Colors::lcd,
         IM_COL32(0x18, 0x46, 0xa8, 255),
         IM_COL32(0x0c, 0x27, 0x66, 255),
         IM_COL32(0x08, 0x1c, 0x4c, 255));
+}
 
-    // -- Obalka ze zvuku ---------------------------------------------------
+// Stav vlny — JEDNOU ZA SNIMEK, oddelene od kresleni.
+//
+// Drive to bylo v jedne funkci s kreslenim, a ta se pri zapnutem sporici volala
+// DVAKRAT (jednou pod ovladani, podruhe nad zavoj). Historie se tim posouvala
+// dvakrat za snimek, takze vlna ve sporici plynula dvojnasobnou rychlosti a
+// obalky mely polovicni casovou konstantu. Rozdeleni to resi z podstaty: stav
+// se aktualizuje jednou, kreslit se smi kolikrat je potreba.
+void waveUpdate(AppContext& ctx) {
     auto& wv = ctx.panels.wave;
     constexpr int kN = ithaca::Engine::kScopeSize;
-    static float raw_l[kN], raw_r[kN];
+    // Lokalni, ne `static`: 8 KB na zasobniku je levnejsi nez skryty globalni
+    // stav, ktery by po vyclenení GUI do knihovny sdilely vsechny instance.
+    float raw_l[kN], raw_r[kN];
     ctx.engine.scopeSnapshot(raw_l, raw_r, kN);
 
-    float sl = 0.f, sr = 0.f;
-    for (int i = 0; i < kN; ++i) { sl += raw_l[i] * raw_l[i]; sr += raw_r[i] * raw_r[i]; }
+    // JEDEN pruchod pro obe veliciny. Drive to byly tri (suma ctvercu + dvakrat
+    // absPeak) pres tychz 2048 vzorku. Poradi akumulace je zachovane, takze
+    // vysledek je bitove tentyz.
+    float sl = 0.f, sr = 0.f, pk_l = 0.f, pk_r = 0.f;
+    for (int i = 0; i < kN; ++i) {
+        const float a = raw_l[i], b = raw_r[i];
+        sl += a * a; sr += b * b;
+        pk_l = std::max(pk_l, std::fabs(a));
+        pk_r = std::max(pk_r, std::fabs(b));
+    }
     const float rms_l = std::sqrt(sl / (float)kN);
     const float rms_r = std::sqrt(sr / (float)kN);
 
@@ -138,13 +142,7 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     wv.clip = std::clamp((pk_db + 9.f) / 9.f, 0.f, 1.f);
 
     // Nova hodnota do historie: HLASITOST bloku (0..1), ne znamenkova spicka.
-    auto absPeak = [](const float* v, int n) {
-        float m = 0.f;
-        for (int i = 0; i < n; ++i) m = std::max(m, std::fabs(v[i]));
-        return m;
-    };
-    const float pk_l = absPeak(raw_l, kN);
-    const float pk_r = absPeak(raw_r, kN);
+    // pk_l/pk_r uz jsou spocitane vyse ve spolecnem pruchodu.
     wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * 0.995f);
     const float pref = std::max(wv.norm_peak, 0.01f);
 
@@ -162,6 +160,22 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
                        + 0.45f * wv.hist_r[prev];
     wv.hist_p[wv.head] = 0.35f * wv.env_p + 0.65f * wv.hist_p[prev];
+}
+
+// Stuhy. Cte stav, ktery pripravil waveUpdate — sam nic nemeni, takze se smi
+// volat vickrat za snimek (pod ovladanim i nad zavojem sporice).
+//
+// KLICOVE: tvar NENI prubeh zvuku. Kreslit vzorky primo bylo pri pomalem tempu
+// prilis neklidne — pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal
+// cist tvar vlny. Tvar je proto parametricky (soucet tri pomalych sinusovek
+// s driftujici fazi) a zvuk mu jen MODULUJE amplitudu pres pomalou obalku.
+// Vysledek pri hre dycha, v tichu se sotva znatelne vlni.
+// `vis` skaluje sytost vlny. PLAY je ambientni obrazovka, tam je vlna hvezda;
+// ostatni jsou pracovni, tam ustoupi, aby neprochazela textem. Vypnout ji ale
+// nelze — indikace, ze zvuk hraje, ma platit vsude.
+void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
+                 ImVec2 wave_lo, ImVec2 wave_hi, float vis) {
+    const auto& wv = ctx.panels.wave;
 
     // -- Tvar --------------------------------------------------------------
     const float wh = wave_hi.y - wave_lo.y;
@@ -171,7 +185,7 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     const float t = (float)ImGui::GetTime();
 
     constexpr int kPts = 128;
-    static float pts[kPts];
+    float pts[kPts];              // lokalni, ne `static` — viz waveUpdate
 
     // Ctyri stuhy ve dvou rodinach. KAZDY KANAL JE JINAK PROSVICEN — levy
     // svetly, pravy hlubsi modry — takze je od sebe poznas, i kdyz se prolinaji
@@ -297,7 +311,18 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
     ctx.panels.lcd_center_y = (lcd_lo.y + lcd_hi.y) * 0.5f;
 
     const float wave_vis = (ctx.panels.page == PAGE_PLAY) ? 1.0f : 0.42f;
-    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi, wave_vis);
+    const float lcd_w    = lcd_hi.x - lcd_lo.x;
+
+    // Stav vlny se posune JEDNOU za snimek, at se pak kresli kolikrat chce.
+    waveUpdate(ctx);
+    backgroundFill(dl, lcd_lo, lcd_hi);
+
+    // Stuhy POD ovladanim. Ve sporici je prekryje zavoj, takze kdyz uz je
+    // temer neprusvitny, nema smysl je kreslit — prah je tentyz, jaky pouziva
+    // wdg::waveLine pro zanedbatelnou pruhlednost.
+    const float veil0 = 1.f - ctx.panels.chrome_a;
+    if (veil0 < 0.996f)
+        waveRibbons(ctx, dl, lcd_w, body.lo, body.hi, wave_vis);
 
     // -- Sporic ------------------------------------------------------------
     // Po peti minutach bez DOTYKU se ovladaci prvky pomalu vytrati a zustane
@@ -373,7 +398,9 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
             IM_COL32(0x0c, 0x27, 0x66, (int)(veil * 255)),
             IM_COL32(0x08, 0x1c, 0x4c, (int)(veil * 255)));
         ImGui::PopClipRect();
-        background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi, wave_vis * veil);
+        // Jen stuhy — vypln uz je pod zavojem. Drive se tady volalo cele
+        // pozadi vcetne gradientu a vcetne posunu historie vlny.
+        waveRibbons(ctx, dl, lcd_w, body.lo, body.hi, wave_vis * veil);
     }
 
     ImGui::End();
