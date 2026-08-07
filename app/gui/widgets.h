@@ -72,16 +72,13 @@ inline float lampW(const char* label) {
 }
 
 // -- Vlnova cara (pozadi) ---------------------------------------------------
-// Pozadi ve stylu PS3 XMB: mekke cary tekouci pres plochu. Tvar rizne SKUTECNY
-// zvuk, ale silne vyhlazeny — syrovy prubeh je zubaty a na pozadi by rusil
-// cteni; vyhlazenim zustane reakce na hru, ale pohyb je hedvabny.
-//
-// Zadna vypln: samotna cara staci a nechava text citelny. Zato je siroka —
-// tenka linka by se na pozadi ztratila a pusobila jako grafova mrizka.
+// Pozadi ve stylu PS3 XMB: mekke svetelne cary tekouci pres plochu. Kresli se
+// ve dvou krocich — waveBuild() spocita body, waveGlow() z nich udela svetlo.
 //
 // base_y je ABSOLUTNI souradnice osy, ne pomer: osa ma prochazet stredem
 // vybraneho patche, ktery zna az stranka PLAY.
-// Barva s danou pruhlednosti (RGB z `col`, alfa z `alpha`).
+
+// Barva s danou pruhlednosti (RGB z `col`, alfa z `alpha`; alfa se stropuje).
 inline ImU32 tint(ImU32 col, float alpha) {
     return (col & 0x00FFFFFF)
          | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
@@ -109,32 +106,66 @@ inline int waveBuild(ImVec2* out, int cap, float x0, float w, float base_y,
     return n;
 }
 
-// Zar kolem krivky — JEDNIM tahem, s prechodem primo ve vrcholech.
+// Zar kolem krivky. Misto obtahovani carou se posila pas trojuhelniku, ktery
+// ma pruhlednost primo ve vrcholech — grafika mezi nimi interpoluje spojite.
 //
 // Drive to byly tri obtahy AddPolyline pres sebe (siroky slaby, stredni, uzky
 // jasny). Tri konstantni pruhlednosti daji ale schody, a nejvnitrnejsi obtah je
 // pres celou svou tloustku PLNY — vysledek se cetl jako plochy PAS s hranou,
-// ne jako cara, ktera pohasina do okolí.
+// ne jako cara, ktera pohasina do okoli.
 //
-// Tady se misto toho posle pas trojuhelniku, ktery ma pruhlednost primo ve
-// vrcholech: 0 na kraji zare, `alpha*kMid` na hranici jadra, `alpha` ve stredu.
-// Grafika mezi nimi interpoluje spojite, takze spad je hladky a stred je BOD,
-// ne plato. Vedlejsi efekt: 5 vrcholu na bod misto 3x4, tedy i mene geometrie.
+// Profil napric carou se vzorkuje po drahach vrcholu. Dve pozadovane
+// vlastnosti jdou proti sobe a kazda urcuje jeden parametr:
 //
-// `core_px` je polomer jadra (drz maly, jinak cara zase ztloustne),
-// `glow_px` dosah zare.
+//   "jadro musi byt videt"     -> plne kryci oblast musi mit SIRKU (plato
+//      o polosirce core_px). Prvni verze mela plnou pruhlednost jen ve
+//      stredove drare, tedy v oblasti nulove sirky — rasterizace ji rozredila
+//      mezi sousedni pixely a cara byla sotva znat.
+//
+//   "nesmi byt videt vrstvy"   -> spad musi byt vzorkovany dost husto. Pet
+//      drah delalo v mistech zlomu viditelna rozhrani, protoze linearni
+//      interpolace mezi nimi ma v kazde draze zlom derivace.
+//
+// Proto se profil nezadava konstantami, ale POCITA: pruhlednost jde po
+// Gaussove krivce a drahy jsou rozlozene kvadraticky (husto u jadra, ridce
+// v ohonu), takze pomer sousednich pruhlednosti zustava maly i daleko od
+// stredu. Vysledek se cte jako svetlo, ne jako pas ani jako schodiste.
 inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
                      float core_px, float glow_px, ImU32 col, float alpha) {
     if (n < 2 || alpha <= 0.004f) return;
-    constexpr float kMid = 0.42f;          // pruhlednost na hranici jadra
 
-    const ImVec2 uv     = ImGui::GetFontTexUvWhitePixel();
-    const ImU32  c_core = tint(col, alpha);
-    const ImU32  c_mid  = tint(col, alpha * kMid);
-    const ImU32  c_edge = col & 0x00FFFFFF;          // pruhledna, tatáž barva
+    // Drah na kazdou stranu od stredu. Cim vic, tim hladsi spad — a tim vic
+    // geometrie. Ctyri uz vypadaji stejne jako sest, pet je rezerva pro
+    // nejsirsi stuhu (dosah zare 10 px, tam jsou drahy nejdal od sebe).
+    // Tohle je prvni misto, kde ubrat, kdyby na Pi bylo tesno.
+    constexpr int   kSide  = 5;
+    constexpr float kSpace = 1.8f;   // > 1 = hustsi vzorkovani u jadra
+    constexpr float kFall  = 3.2f;   // strmost Gaussovy krivky
+    // Tri obtahy pres sebe skladaly ve stredu vic, nez byla pruhlednost
+    // kteregokoli z nich (1-(1-0.048)(1-0.108)(1-0.30) = 0.41 pri a = 0.30).
+    // Jedna vrstva to sama nedozene a cara pak pusobi vybledle, proto se jadro
+    // dosvetli na srovnatelnou uroven. tint() alfu stropuje na 1.
+    constexpr float kCore  = 1.45f;
+
+    const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+
+    // Profil je pro celou caru stejny — spocitat jednou, ne v kazdem bode.
+    constexpr int kLanes = kSide * 2;
+    float off[kLanes];
+    ImU32 colr[kLanes];
+    for (int j = 0; j < kSide; ++j) {
+        const float u = (kSide > 1) ? (float)j / (float)(kSide - 1) : 0.f;
+        const float d = core_px + (glow_px - core_px) * std::pow(u, kSpace);
+        // Posledni draha musi byt uplne pruhledna, jinak ma zar na svem obvodu
+        // hranu.
+        const float a = (j == kSide - 1) ? 0.f : std::exp(-kFall * u * u);
+        const ImU32 c = tint(col, alpha * a * kCore);
+        off [kSide - 1 - j] = -d;  colr[kSide - 1 - j] = c;
+        off [kSide + j]     =  d;  colr[kSide + j]     = c;
+    }
 
     const int seg = n - 1;
-    dl->PrimReserve(seg * 24, n * 5);
+    dl->PrimReserve(seg * (kLanes - 1) * 6, n * kLanes);
     const unsigned int base = dl->_VtxCurrentIdx;
 
     for (int i = 0; i < n; ++i) {
@@ -147,17 +178,15 @@ inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
         const float nx = -dy, ny = dx;
 
         const ImVec2 q = p[i];
-        dl->PrimWriteVtx(ImVec2(q.x - nx * glow_px, q.y - ny * glow_px), uv, c_edge);
-        dl->PrimWriteVtx(ImVec2(q.x - nx * core_px, q.y - ny * core_px), uv, c_mid);
-        dl->PrimWriteVtx(q,                                             uv, c_core);
-        dl->PrimWriteVtx(ImVec2(q.x + nx * core_px, q.y + ny * core_px), uv, c_mid);
-        dl->PrimWriteVtx(ImVec2(q.x + nx * glow_px, q.y + ny * glow_px), uv, c_edge);
+        for (int k = 0; k < kLanes; ++k)
+            dl->PrimWriteVtx(ImVec2(q.x + nx * off[k], q.y + ny * off[k]),
+                             uv, colr[k]);
     }
 
     for (int s = 0; s < seg; ++s) {
-        const unsigned int i0 = base + (unsigned)s * 5;
-        const unsigned int i1 = i0 + 5;
-        for (unsigned k = 0; k < 4; ++k) {          // ctyri pasy mezi peti drahami
+        const unsigned int i0 = base + (unsigned)s * kLanes;
+        const unsigned int i1 = i0 + kLanes;
+        for (unsigned k = 0; k + 1 < (unsigned)kLanes; ++k) {
             dl->PrimWriteIdx((ImDrawIdx)(i0 + k));
             dl->PrimWriteIdx((ImDrawIdx)(i0 + k + 1));
             dl->PrimWriteIdx((ImDrawIdx)(i1 + k + 1));

@@ -221,7 +221,7 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
         if (a <= 0.004f) return;
         const int m = wdg::waveBuild(poly, kPts, wave_lo.x, w, axis, p, n, amp, 1.f);
         if (m < 2) return;
-        wdg::waveGlow(dl, poly, m, std::min(0.9f, th * 0.35f), th * 3.4f, col, a);
+        wdg::waveGlow(dl, poly, m, std::min(0.8f, th * 0.30f), th * 3.4f, col, a);
     };
 
     dl->PushClipRect(wave_lo, wave_hi, true);
