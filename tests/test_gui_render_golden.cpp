@@ -115,6 +115,11 @@ struct Harness {
         ctx.panels.midi_ports_scanned = true;
         ctx.state.bank_path = "/fixed/banks/beta";
         ctx.state.midi_port_name = "Fixed Port A";
+        // Rezim nahledu: prestavi dosah zare, aby slo porovnat varianty bez
+        // displeje. Otisk se v tomhle rezimu NEporovnava (viz nize) — je to
+        // prohlizeni, ne overovani.
+        if (const char* g = std::getenv("ITHACA_GLOW"))
+            ctx.state.wave_glow = (float)std::atof(g);
         seedWaveHistory();
     }
 
@@ -383,6 +388,14 @@ TEST_CASE("otisk vykresleneho panelu") {
     for (const auto& [name, s] : now)
         std::printf("%-18s %10d %10d %6d\n", name.c_str(), s.vtx, s.idx, s.cmds);
     std::printf("\n");
+
+    // Nahled varianty vzhledu — otisk by nutne nesedel, protoze se kresli
+    // neco jineho, nez na cem byla baseline porizena.
+    if (std::getenv("ITHACA_GLOW")) {
+        std::printf("[golden] rezim nahledu (ITHACA_GLOW), otisk se neporovnava\n");
+        ImGui::DestroyContext();
+        return;
+    }
 
     const auto base = loadBaseline();
 
