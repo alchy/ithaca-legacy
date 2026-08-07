@@ -286,9 +286,9 @@ Původní obava: po zjištění, že soubor vrátil méně framů než `head_fra
 
 `sortBankSlotsByRms()` řadí podle `VelocitySlot.rms_db`, který je nastaven z `measurePeakRmsDb()` volané nad `preload_head`. Kód obsahuje INVARIANT komentář: pro piano-class samply je peak RMS vždy v attack fázi, která se vejde do preload head. To platí pro typická klavírní data. Pro non-piano zvuky s pomalým nástupem (looped pady, smyčce) by peak RMS mohl ležet mimo preload_head — pak by `rms_db` bylo podhodnoceno a velocity řazení nesprávné. Komentář toto explicitně zmiňuje jako budoucí problém fáze 5+.
 
-### 4. Hranice short_threshold a možná nekonzistence mode u borderline samplů
+### 4. Hranice krátkého samplu a možná nekonzistence mode u borderline samplů
 
-`short_threshold_frames = preload_frames * 2`. Sampl přesně roven `short_threshold_frames` je označen jako FullyLoaded (`info.frames <= short_threshold`), ale `head_frames = info.frames`. Pokud by pak `readWavRange` vrátil méně framů (oříznutý soubor), přeřazení proběhne, ale viz bod 2 výše.
+Práh nemá v kódu vlastní jméno — je to přímo podmínka `info.frames <= preload_frames * 2` v `prepareSampleFile` (`sample_store.cpp`). Sampl přesně na prahu je označen jako FullyLoaded, ale `head_frames = info.frames`. Pokud by pak `readWavRange` vrátil méně framů (oříznutý soubor), přeřazení proběhne, ale viz bod 2 výše.
 
 ### 5. WAV parser předpokládá little-endian platformu
 

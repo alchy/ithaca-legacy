@@ -56,20 +56,22 @@ compile-time konstanty (typicky `static const Param kParams[]` ve třídě stage
 #### `struct IParamPage`
 
 GUI-facing rozhraní. Implementují ho `DspStage` (CONVOLVER, AGC, ENHANCER, Limiter) i param stránky
-(VOICE stránka v GUI). Volá ho generický renderer `renderParamPage()` a config panel
-`renderConfigPanel()`.
+(VOICE stránka v GUI). Volá ho generický renderer `pageParams()` (stránky TONE, RESO a všechny čtyři
+DSP stage přes `pageDsp()`) a stránka SYS přes `snapshotPages()` /
+`applyPagesState()` — vše v `app/gui/`.
 
 | Metoda (signatura) | Vlákno | Vstup → výstup | Volá ji | Volá (proč) | Popis |
 |--------------------|--------|----------------|---------|-------------|-------|
 | `name() → const char*` | libovolné | — → název stage | GUI panely | — | Název stage pro záhlaví stránky (`"CONVOLVER"`, `"AGC"`, `"ENHANCER"`, `"LIMITER"`) |
-| `paramCount() → int` | libovolné | — → počet parametrů | `renderParamPage` | — | Počet prvků v `kParams[]` |
-| `param(i) → const Param&` | libovolné | index → deskriptor | `renderParamPage` | — | Vrací konstantní deskriptor i-tého parametru |
-| `get(i) → float` | libovolné | index → aktuální hodnota | `renderParamPage`, persistence | `atomic::load(relaxed)` | Atomické čtení uložené hodnoty parametru |
-| `set(i, v)` | GUI | index + nová hodnota | `renderParamPage`, persistence, `app_context.cpp` | `atomic::store(relaxed)` po clamp | Klampuje `v` do `[min,max]`, uloží atomicky; audio vlákno přečte příště v `process()` |
-| `hasEnable() → bool` | libovolné | — → bool | `renderConfigPanel` | — | DSP stage: `true`; VoicePage: `false` |
-| `enabled() → bool` | libovolné | — → bool | `DspChain::process`, `renderConfigPanel` | `atomic::load(relaxed)` | Vrací stav enable flagu |
-| `setEnabled(on)` | GUI | bool | `renderConfigPanel`, `app_context.cpp` | `atomic::store(relaxed)` | Přepíná bypass stage bez zámku |
+| `paramCount() → int` | libovolné | — → počet parametrů | `pageParams` | — | Počet prvků v `kParams[]` |
+| `param(i) → const Param&` | libovolné | index → deskriptor | `pageParams` | — | Vrací konstantní deskriptor i-tého parametru |
+| `get(i) → float` | libovolné | index → aktuální hodnota | `pageParams`, persistence | `atomic::load(relaxed)` | Atomické čtení uložené hodnoty parametru |
+| `set(i, v)` | GUI | index + nová hodnota | `pageParams`, persistence, `app_context.cpp` | `atomic::store(relaxed)` po clamp | Klampuje `v` do `[min,max]`, uloží atomicky; audio vlákno přečte příště v `process()` |
+| `hasEnable() → bool` | libovolné | — → bool | `pageParams` | — | DSP stage: `true`; VoicePage: `false` |
+| `enabled() → bool` | libovolné | — → bool | `DspChain::process`, `pageParams` | `atomic::load(relaxed)` | Vrací stav enable flagu |
+| `setEnabled(on)` | GUI | bool | `pageParams`, `app_context.cpp` | `atomic::store(relaxed)` | Přepíná bypass stage bez zámku |
 | `meter(value&, label&) → bool` | GUI | — → (hodnota, popis) nebo false | diagnostický panel | konkrétní `atomic::load` | AGC vrací aktuální gain (lineární), Limiter vrací gain reduction (dB), Enhancer vrací `false` |
+| `resetToDefaults()` | GUI | — | `pageSys` (RESET TO FACTORY PROFILE) | `set(i, param(i).def)` | Vrátí všechny parametry na tovární `Param::def`. **Virtuální**, aby stránka mohla vyjmout parametr, jehož výchozí hodnota se odvozuje až za běhu — `ResonancePage` takhle vyňímá `RESONANCE LAYER`, který je vázaný na rozsah načtené banky. |
 
 #### `struct DspStage : IParamPage`
 
@@ -147,8 +149,8 @@ Attack time je fixní 5 ms (vypočten v `prepare()`): `atk_ = 1 − exp(−1/(0.
 |--------------------|--------|----------------|---------|-------------|-----------|------------|
 | `prepare(sr, max_block)` | off-RT | sample rate | `DspChain::prepare` | `applyParams_(true)`, `reset()` | — | Uloží `sr_`, vypočte fixní `atk_`, vynutí přepočet release, resetuje stav |
 | `reset()` | off-RT | — | `DspChain::reset` | `cur_gain_.store(1.f)` | — | Nastaví `gain_ = 1.f` a atomický metr na 1.f |
-| `get(i) / set(i,v)` | GUI / libovolné | index, hodnota | `renderParamPage`, persistence | `atomic::load/store(relaxed)` | i=0 target, i=1 release, i=2 floor | `set()` klampuje do `[min,max]` před uložením; triviální gettery |
-| `enabled() / setEnabled(on)` | libovolné / GUI | — / bool | `DspChain::process`, `renderConfigPanel` | `atomic::load/store(relaxed)` | — | Bezámkový bypass flag; výchozí `false` (AGC je standardně vypnuté) |
+| `get(i) / set(i,v)` | GUI / libovolné | index, hodnota | `pageParams`, persistence | `atomic::load/store(relaxed)` | i=0 target, i=1 release, i=2 floor | `set()` klampuje do `[min,max]` před uložením; triviální gettery |
+| `enabled() / setEnabled(on)` | libovolné / GUI | — / bool | `DspChain::process`, `pageParams` | `atomic::load/store(relaxed)` | — | Bezámkový bypass flag; výchozí `false` (AGC je standardně vypnuté) |
 | `meter(value&, label&) → true` | GUI | — → (aktuální gain lin, `"CURRENT GAIN"`) | diagnostický panel | `cur_gain_.load(relaxed)` | — | Čte atomický metr posílaný z audio threadu |
 | `applyParams_(force)` | audio (z process) | bool force | `process()`, `prepare()` | `atomic::load(relaxed)`, `std::exp` | `force`: přepočítat vždy bez ohledu na `last_rel_ms_` | Lazy přepočet `rel_` z `release_ms_`; porovnává `rel_ms != last_rel_ms_`; volá `std::exp` jen při změně |
 | `process(L, R, n)` | audio | in-place stereo buffer | `DspChain::process` | `applyParams_(false)`, `cur_gain_.store` | — | Viz níže |
@@ -213,7 +215,7 @@ magnitudově ploché). Viz spec 2026-06-03.
 |--------------------|--------|----------------|---------|-------------|------------|
 | `prepare(sr, max_block)` | off-RT | sr | `DspChain::prepare` | `computeCoeffs_()`, `reset()` | Přepočet crossover/all-pass koeficientů + peak attack/release; vynuluje stav |
 | `reset()` | off-RT | — | `DspChain::reset` | — | Vynuluje biquad stavy (6/kanál), all-pass stav, peak env |
-| `get(i)/set(i,v)` | GUI | index, dB | `renderParamPage`, persistence | atomic | i=0 process, 1 contour, 2 mid; `set()` klampuje |
+| `get(i)/set(i,v)` | GUI | index, dB | `pageParams`, persistence | atomic | i=0 process, 1 contour, 2 mid; `set()` klampuje |
 | `enabled()/setEnabled` | GUI | bool | `DspChain::process`, config panel | atomic | Výchozí `false` |
 | `meter(...) → false` | GUI | — | — | — | Enhancer nemá metr |
 | `computeCoeffs_()` | off-RT | — | `prepare` | `rbj_lowpass/highpass` | LP250/HP250/LP3k/HP3k/LPcap11k + all-pass koef `(tan−1)/(tan+1)` @700 Hz |
@@ -254,8 +256,8 @@ Na rozdíl od AGC používá `decay_coeff` (exponenciální klouzavý průměr),
 |--------------------|--------|----------------|---------|-------------|-----------|------------|
 | `prepare(sr, max_block)` | off-RT | sample rate | `DspChain::prepare` | `decay_coeff`, `applyParams_(true)`, `reset()` | — | Uloží `sr_`, fixní `atk_ = decay_coeff(0.001, sr)`, vynutí přepočet release a threshold, resetuje stav |
 | `reset()` | off-RT | — | `DspChain::reset` | `gr_db_.store(0.f)` | — | `gain_ = 1.f`, GR metr na 0 dB |
-| `get(i) / set(i,v)` | GUI / libovolné | index, hodnota | `renderParamPage`, persistence | `atomic::load/store(relaxed)` | i=0 threshold dB, i=1 release ms | Triviální; `set()` klampuje |
-| `enabled() / setEnabled(on)` | libovolné / GUI | — / bool | `DspChain::process`, `renderConfigPanel` | `atomic::load/store(relaxed)` | — | Výchozí `false` |
+| `get(i) / set(i,v)` | GUI / libovolné | index, hodnota | `pageParams`, persistence | `atomic::load/store(relaxed)` | i=0 threshold dB, i=1 release ms | Triviální; `set()` klampuje |
+| `enabled() / setEnabled(on)` | libovolné / GUI | — / bool | `DspChain::process`, `pageParams` | `atomic::load/store(relaxed)` | — | Výchozí `false` |
 | `meter(value&, label&) → true` | GUI | — → (GR v dB, `"GAIN REDUCTION"`) | diagnostický panel | `gr_db_.load(relaxed)` | — | Záporná nebo nulová hodnota (0 dB = bez redukce) |
 | `applyParams_(force)` | audio (z process) | bool force | `process()`, `prepare()` | `db_to_lin`, `decay_coeff` | `force`: vždy přepočítat | Lazy přepočet: `thr_lin_ = db_to_lin(thr_db)` při změně `thr_db_`; `rel_ = decay_coeff(rel_ms·0.001, sr)` při změně `rel_ms_` |
 | `process(L, R, n)` | audio | in-place stereo buffer | `DspChain::process` | `applyParams_(false)`, `gain_envelope_smooth`, `lin_to_db`, `gr_db_.store` | — | Viz níže |
