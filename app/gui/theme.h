@@ -61,7 +61,11 @@ struct Colors {
 };
 
 // -- Pisma zabudovana v binarce (viz embedded_fonts.cpp) --------------------
-struct FontBlob { const unsigned int* data; unsigned int size; };
+// Ukazatel je `const void*` zamerne: ImGui nastroj binary_to_compressed_c
+// zmenil vychozi vystup z `unsigned int[]` na `unsigned char[]` (verze 1.91.9,
+// prepinac -u8). Typ pole tedy neni nic, na cem by melo zaviset rozhrani —
+// AddFontFromMemoryCompressedTTF stejne bere const void*.
+struct FontBlob { const void* data; unsigned int size; };
 FontBlob monoBlob();         // JetBrains Mono Regular — cele rozhrani
 FontBlob brandBoldBlob();    // Barlow Condensed Bold  — "ITHACA"
 FontBlob brandLightBlob();   // Barlow Condensed Light — "LEGACY"
@@ -95,8 +99,10 @@ inline void load_fonts(float scale = 1.f) {
     const float sc = (scale > 0.f) ? scale : 1.f;
     const FontBlob mono = monoBlob();
 
+    // Prostrkani. ImGui 1.91.9 prejmenovalo GlyphExtraSpacing.x na
+    // GlyphExtraAdvanceX (stare pole uz v hlavicce neexistuje).
     auto addMono = [&](float px, float tracking) {
-        cfg.GlyphExtraSpacing.x = tracking * sc;
+        cfg.GlyphExtraAdvanceX = tracking * sc;
         return io.Fonts->AddFontFromMemoryCompressedTTF(
             mono.data, (int)mono.size, px * sc, &cfg, ranges);
     };
@@ -108,7 +114,7 @@ inline void load_fonts(float scale = 1.f) {
     // Wordmark — jine pismo nez rozhrani. Na skutecnych pristrojich mel displej
     // znakovy font, ale logo na panelu bylo sitotiskem v uzkem grotesku.
     const FontBlob bb = brandBoldBlob(), bl = brandLightBlob();
-    cfg.GlyphExtraSpacing.x = 7.f * sc;
+    cfg.GlyphExtraAdvanceX = 7.f * sc;
     Fonts::brand  = io.Fonts->AddFontFromMemoryCompressedTTF(
         bb.data, (int)bb.size, 64.f * sc, &cfg, ranges);
     Fonts::brandl = io.Fonts->AddFontFromMemoryCompressedTTF(

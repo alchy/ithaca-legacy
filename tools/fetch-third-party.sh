@@ -16,7 +16,7 @@ DOCTEST_VER="v2.4.11"
 NLOHMANN_VER="v3.11.3"
 MINIAUDIO_VER="0.11.21"
 RTMIDI_VER="6.0.0"
-IMGUI_VER="v1.91.0"
+IMGUI_VER="v1.91.9b"
 GLFW_VER="3.4"
 
 have() { command -v "$1" >/dev/null 2>&1; }
