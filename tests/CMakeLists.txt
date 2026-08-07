@@ -206,6 +206,14 @@ target_compile_features(test_frame_stats PRIVATE cxx_std_20)
 target_link_libraries(test_frame_stats PRIVATE doctest)
 add_test(NAME test_frame_stats COMMAND test_frame_stats)
 
+# Regulator dosahu zare vlny (glow_auto.h je header-only, bez ImGui a enginu).
+add_executable(test_glow_auto test_glow_auto.cpp)
+target_include_directories(test_glow_auto PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_compile_features(test_glow_auto PRIVATE cxx_std_20)
+target_link_libraries(test_glow_auto PRIVATE doctest)
+add_test(NAME test_glow_auto COMMAND test_glow_auto)
+
 # Otisk vykresleneho panelu bez displeje. ImGui zadny backend nepotrebuje —
 # Render() vyprodukuje ImDrawData i do prazdna, a jeho otisk je presny popis
 # toho, co by se nakreslilo. Stavi se jen kdyz je ImGui vendorovane (stejna

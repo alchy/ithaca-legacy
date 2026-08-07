@@ -138,15 +138,33 @@ inline int waveBuild(ImVec2* out, int cap, float x0, float w, float base_y,
 // Gaussove krivce a drahy jsou rozlozene kvadraticky (husto u jadra, ridce
 // v ohonu), takze pomer sousednich pruhlednosti zustava maly i daleko od
 // stredu. Vysledek se cte jako svetlo, ne jako pas ani jako schodiste.
+// Kolik drah na stranu potrebuje zar o danem DOSAHU, aby v ni nebyly videt
+// vrstvy. Roste s LOGARITMEM dosahu, ne linearne: drahy jsou rozlozene
+// kvadraticky, takze u jadra jsou husto a v ohonu, kde uz je pruhlednost mala,
+// staci ridce. Zdvojnasobeni dosahu tedy stoji jednu dalsi drahu, ne dvojnasobek.
+//
+//    dosah    5-10 px  ->  5 drah   (vychozi vzhled panelu)
+//             32 px    ->  7
+//            100 px    ->  9
+//           1024 px    -> 12 (strop)
+//
+// Kalibrovano tak, aby na vychozim dosahu vratilo presne 5 — tedy hodnotu,
+// na ktere byl vzhled odladen. Parametr wave_glow je tim ciste aditivni:
+// dokud se nesahne, nekresli se ani o vertex jinak.
+//
+// Dosah 0 (presneji: zadny presah pres jadro) znamena HOLOU CARU — jedna draha
+// na stranu, plna pruhlednost, zadny spad. Nejlevnejsi rezim, a zaroven ten,
+// na ktery se da spadnout, kdyz na zar neni vykon.
+inline int glowLanes(float span_px) {
+    if (span_px <= 0.25f) return 1;
+    const int lanes = 2 + (int)(std::log2(span_px + 1.f) + 0.5f);
+    return std::clamp(lanes, 2, 12);
+}
+
 inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
                      float core_px, float glow_px, ImU32 col, float alpha) {
     if (n < 2 || alpha <= 0.004f) return;
 
-    // Drah na kazdou stranu od stredu. Cim vic, tim hladsi spad — a tim vic
-    // geometrie. Ctyri uz vypadaji stejne jako sest, pet je rezerva pro
-    // nejsirsi stuhu (dosah zare 10 px, tam jsou drahy nejdal od sebe).
-    // Tohle je prvni misto, kde ubrat, kdyby na Pi bylo tesno.
-    constexpr int   kSide  = 5;
     constexpr float kSpace = 1.8f;   // > 1 = hustsi vzorkovani u jadra
     constexpr float kFall  = 3.2f;   // strmost Gaussovy krivky
     // Tri obtahy pres sebe skladaly ve stredu vic, nez byla pruhlednost
@@ -155,18 +173,26 @@ inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
     // dosvetli na srovnatelnou uroven. tint() alfu stropuje na 1.
     constexpr float kCore  = 1.45f;
 
+    // Pocet drah se odviji od POLOMERU zare, ne od konstanty: uzka zar nema co
+    // vzorkovat husto a siroka by pri malo drahach ukazala vrstvy.
+    const float span  = std::max(glow_px - core_px, 0.f);
+    const int   kSide = glowLanes(span);
+    const int   kLanes = kSide * 2;
+
     const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
 
     // Profil je pro celou caru stejny — spocitat jednou, ne v kazdem bode.
-    constexpr int kLanes = kSide * 2;
-    float off[kLanes];
-    ImU32 colr[kLanes];
+    constexpr int kMaxLanes = 24;                 // 2 * strop z glowLanes
+    float off[kMaxLanes];
+    ImU32 colr[kMaxLanes];
     for (int j = 0; j < kSide; ++j) {
         const float u = (kSide > 1) ? (float)j / (float)(kSide - 1) : 0.f;
-        const float d = core_px + (glow_px - core_px) * std::pow(u, kSpace);
+        const float d = core_px + span * std::pow(u, kSpace);
         // Posledni draha musi byt uplne pruhledna, jinak ma zar na svem obvodu
-        // hranu.
-        const float a = (j == kSide - 1) ? 0.f : std::exp(-kFall * u * u);
+        // hranu. Pri jedine draze (holá cara) to neplati — tam zadny spad neni
+        // a cara ma byt plna.
+        const float a = (kSide > 1 && j == kSide - 1) ? 0.f
+                                                     : std::exp(-kFall * u * u);
         const ImU32 c = tint(col, alpha * a * kCore);
         off [kSide - 1 - j] = -d;  colr[kSide - 1 - j] = c;
         off [kSide + j]     =  d;  colr[kSide + j]     = c;

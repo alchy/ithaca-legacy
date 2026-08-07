@@ -254,6 +254,11 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.cache_budget_mb     = readI("cache_budget_mb", s.cache_budget_mb);
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
+        // Zar vlny. Strop 128 odpovida dosahu ~1300 px, tedy vic nez cely
+        // panel — nad tim uz to neni nastaveni, ale preklep.
+        s.wave_glow = std::clamp(readF("wave_glow", s.wave_glow), 0.f, 128.f);
+        s.wave_glow_budget_ms =
+            std::max(readF("wave_glow_budget_ms", s.wave_glow_budget_ms), 0.f);
 
         // -- Genericke sekce "<prefix><STAGE>.<Param::id>" ---------------------
         // Persistence jmena parametru nezna — proste vezme vse pod prefixem
@@ -359,6 +364,8 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"window_h\": " << s.window.h << ",\n";
         f << "  \"config_page\": "        << s.config_page          << ",\n";
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
+        f << "  \"wave_glow\": "          << s.wave_glow            << ",\n";
+        f << "  \"wave_glow_budget_ms\": " << s.wave_glow_budget_ms << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate;
         // Genericke sekce: "<prefix><STAGE>.<Param::id>". Carka se pise PRED
         // kazdy radek (ne za), takze prazdna mapa nenecha visici carku.

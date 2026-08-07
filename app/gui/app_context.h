@@ -12,6 +12,7 @@
 #include "midi/midi_input.h"
 #include "sample/sample_store.h"   // BankLoadProgress
 
+#include "glow_auto.h"
 #include "log_subscriber.h"
 #include "motion.h"
 #include "persistence.h"
@@ -102,6 +103,10 @@ struct PanelState {
         int   head = 0;                   // pozice nejnovejsiho vzorku
     };
     Wave wave;
+    // Regulator dosahu zare. Drzi nasobitel, ktery se skutecne kresli — smi
+    // byt nizsi nez state.wave_glow, kdyz kresleni stuh prekroci rozpocet.
+    GlowAuto glow;
+    float    glow_want = -1.f;   // posledni videna hodnota parametru (detekce zmeny)
     // Svisly stred plochy displeje. Nastavuje shell; PLAY na nej sazi vybrany
     // nastroj, aby byl na stredu OBRAZOVKY a ne na stredu sve vlastni plochy
     // (ta je nesymetricka: lista nahore je vyssi nez paticka dole).

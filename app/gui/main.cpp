@@ -45,6 +45,15 @@ static void printUsage(const char* argv0) {
         "                     BANK; persistovano v state.json, staci zadat jednou.\n"
         "  --log-level <lvl>  debug | info | warn | error | fatal (default info);\n"
         "                     persistovano v state.json, menitelne i za behu v UI.\n"
+        "  --wave-glow <f>    dosah zare vlny v pozadi jako nasobitel (default 1):\n"
+        "                     0 = hola cara bez zare (nejlevnejsi), 1 = vychozi,\n"
+        "                     >1 = sirsi rozostreni. Zar je jedina vec na panelu,\n"
+        "                     ktera roste s vyplni — na slabsi grafice ubirat tady.\n"
+        "                     Persistovano v state.json.\n"
+        "  --wave-glow-budget <ms>\n"
+        "                     strop PERIODY snimku; nad nim regulator dosah sam\n"
+        "                     snizi (0 = vypnuto). Na panelu 60 Hz je nominal\n"
+        "                     16,7 ms, takze ~25 znamena zmesknuty snimek.\n"
         "  --fullscreen       rezim panelu: okno bez dekoraci pres celou obrazovku.\n"
         "                     Na displeji zabudovanem v nastroji nema byt videt\n"
         "                     titulek okna. Vyzaduje bezici display server (X11/\n"
@@ -192,6 +201,7 @@ int main(int argc, char* argv[]) {
     // 0. CLI parse: jen --bank-dir a --help.
     std::string cli_bank_dir;
     std::string cli_log_level;
+    std::optional<float> cli_glow, cli_glow_budget;
     bool cli_fullscreen = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -200,6 +210,10 @@ int main(int argc, char* argv[]) {
             cli_bank_dir = argv[++i];
         } else if (a == "--log-level" && i + 1 < argc) {
             cli_log_level = argv[++i];
+        } else if (a == "--wave-glow" && i + 1 < argc) {
+            cli_glow = std::strtof(argv[++i], nullptr);
+        } else if (a == "--wave-glow-budget" && i + 1 < argc) {
+            cli_glow_budget = std::strtof(argv[++i], nullptr);
         } else if (a == "--fullscreen") {
             cli_fullscreen = true;
         } else {
@@ -219,6 +233,9 @@ int main(int argc, char* argv[]) {
     // CLI override: --log-level nahrad persistovany log_level (aplikuje se
     // v AppContext::initFromState pres setMinSeverity).
     if (!cli_log_level.empty()) st.log_level = cli_log_level;
+    // CLI override: dosah zare + strop periody. Stejne meze jako v persistenci.
+    if (cli_glow)        st.wave_glow = std::clamp(*cli_glow, 0.f, 128.f);
+    if (cli_glow_budget) st.wave_glow_budget_ms = std::max(*cli_glow_budget, 0.f);
 
     // 2. GLFW window. Pozice nastavime az po vytvoreni (GLFW nema
     //    GLFW_POSITION_X hint v 3.3; v 3.4+ ano, ale my vendorujeme starsi).

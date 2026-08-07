@@ -240,11 +240,18 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
     // Jadro se drzi POD jednim pixelem polomeru: nad nim uz cara opticky
     // ztloustne a spojity spad se ztrati v plose. Dosah zare zustava tam, kde
     // byl nejsirsi z byvalych tri obtahu (th * 3.4).
+    // Dosah zare je nasobeny parametrem (GuiState::wave_glow) pres regulator,
+    // ktery ho smi snizit pod tlakem — viz glow_auto.h. Nula = hola cara.
+    const float glow_scale = ctx.panels.glow.scale();
     auto glow = [&](const float* p, int n, float amp, ImU32 col, float a, float th) {
         if (a <= 0.004f) return;
         const int m = wdg::waveBuild(poly, kPts, wave_lo.x, w, axis, p, n, amp, 1.f);
         if (m < 2) return;
-        wdg::waveGlow(dl, poly, m, std::min(0.8f, th * 0.30f), th * 3.4f, col, a);
+        // Nasobitel skaluje SPAD, ne cely polomer: pri 1 vyjde presne puvodni
+        // dosah (th * 3.4), pri 0 zbyde jadro, tedy hola cara.
+        const float core = std::min(0.8f, th * 0.30f);
+        const float span = std::max(th * 3.4f - core, 0.f) * glow_scale;
+        wdg::waveGlow(dl, poly, m, core, core + span, col, a);
     };
 
     dl->PushClipRect(wave_lo, wave_hi, true);
@@ -351,6 +358,18 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
     // Stav vlny se posune JEDNOU za snimek, at se pak kresli kolikrat chce.
     waveUpdate(ctx);
     backgroundFill(dl, lcd_lo, lcd_hi);
+
+    // Dosah zare: rucni zmena parametru prebije to, kam dosel regulator.
+    // Vstupem regulace je PERIODA snimku, ne cas kresleni — viz glow_auto.h.
+    if (ctx.panels.glow_want != ctx.state.wave_glow) {
+        ctx.panels.glow_want = ctx.state.wave_glow;
+        ctx.panels.glow.reset(ctx.state.wave_glow);
+    }
+    {
+        const float dt = ImGui::GetIO().DeltaTime;
+        ctx.panels.glow.step(dt * 1000.f, ctx.state.wave_glow,
+                             ctx.state.wave_glow_budget_ms, dt);
+    }
 
     // Stuhy POD ovladanim. Ve sporici je prekryje zavoj, takze kdyz uz je
     // temer neprusvitny, nema smysl je kreslit — prah je tentyz, jaky pouziva

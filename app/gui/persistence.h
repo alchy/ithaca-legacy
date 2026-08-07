@@ -53,6 +53,17 @@ struct GuiState {
     int         preload_ms           = 150;   // preload hlavy samplu [ms]; jen JSON (ne GUI)
     int         cache_budget_mb      = 0;     // RAM budget banky [MB], 0=auto; jen JSON (ne GUI)
     int   config_page = 0;         // 0 = MASTER, 1 = RESONANCE, 2 = CONVOLVER, 3 = AGC, 4 = ENHANCER, 5 = LIMITER
+    // -- Zar vlny v pozadi --
+    // Nasobitel DOSAHU zare (zakladni dosah je ~10 px u nejsirsi stuhy):
+    //   0    = hola cara bez zare, nejlevnejsi rezim
+    //   1    = vychozi vzhled
+    //   >1   = sirsi rozostreni; 100 je uz pruh pres cely displej
+    // Dosah je jedina vec na panelu, ktera roste s VYPLNI, takze je to hlavni
+    // paka pro slabsi grafiku. Pocet drah profilu se dopocita sam (glowLanes).
+    float wave_glow      = 1.f;
+    // Strop, kolik smi kresleni stuh stat na snimek [ms]. Kdyz se prekroci,
+    // regulator dosah SNIZI (viz glow_auto.h). 0 = automatika vypnuta.
+    float wave_glow_budget_ms = 0.f;
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
     int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only
