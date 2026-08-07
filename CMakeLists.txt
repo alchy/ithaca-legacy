@@ -57,6 +57,22 @@ else()
     message(STATUS "IPO/LTO nepodporovano: ${_ipo_msg}")
 endif()
 
+# -- GUI: OpenGL ES misto desktopoveho GL --------------------------------
+# Mesa ovladac V3D na Raspberry Pi poskytuje OpenGL ES, ne desktopove GL 3.3.
+# Zapina se automaticky na Linuxu/ARM, protoze tam je to jedina spravna volba;
+# jinde jde vynutit rucne (-DITHACA_GUI_GLES=ON) pro zkousku.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|armv8|armv7")
+    set(_gles_default ON)
+else()
+    set(_gles_default OFF)
+endif()
+option(ITHACA_GUI_GLES "GUI pouzije OpenGL ES 3 misto desktopoveho GL 3.3"
+       ${_gles_default})
+if(ITHACA_GUI_GLES)
+    message(STATUS "GUI: OpenGL ES 3 (KMSDRM/V3D)")
+endif()
+
 # -- vendored deps --
 add_subdirectory(third-party)
 
@@ -155,10 +171,10 @@ target_link_libraries(ithaca-cli PRIVATE ithaca_core)
 set_target_properties(ithaca-cli PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# -- ithaca-gui (F8: Dear ImGui + GLFW) --
-# Staveni jen kdyz jsou ImGui/GLFW vendorovany (fetch-third-party.sh).
+# -- ithaca-gui (Dear ImGui + SDL3) --
+# Staveni jen kdyz jsou ImGui/SDL3 vendorovany (fetch-third-party.sh).
 # Bez nich CLI a tests jdou stavet dal — GUI je optional.
-if(TARGET imgui AND TARGET glfw)
+if(TARGET imgui AND TARGET SDL3::SDL3-static)
     # -- Pisma zabudovana primo do binarky -------------------------------------
     # Zadny font se NEnacita ze souboru: ImGui nastroj binary_to_compressed_c
     # (vendorovany s ImGui) prevede kazde TTF na komprimovane C pole, ktere se
@@ -214,7 +230,10 @@ if(TARGET imgui AND TARGET glfw)
         ${CMAKE_CURRENT_SOURCE_DIR}/app/gui
         ${CMAKE_BINARY_DIR}/generated)
     add_dependencies(ithaca-gui ithaca_fonts)
-    target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui glfw)
+    target_link_libraries(ithaca-gui PRIVATE ithaca_core imgui SDL3::SDL3-static)
+    if(ITHACA_GUI_GLES)
+        target_compile_definitions(ithaca-gui PRIVATE ITHACA_GLES)
+    endif()
     set_target_properties(ithaca-gui PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
     # ImGui headery delaji memset(this, 0, sizeof(*this)) v ImDrawList ctorech;
@@ -223,15 +242,17 @@ if(TARGET imgui AND TARGET glfw)
     if(NOT MSVC)
         target_compile_options(ithaca-gui PRIVATE -Wno-nontrivial-memcall)
     endif()
+    # GL knihovna. SDL3 si systemove zavislosti (Cocoa, Win32, DRM/GBM/EGL)
+    # pritahne samo pres svuj target; tady se resi jen samotne GL/GLES.
     if(APPLE)
         # OpenGL je na macOS 10.14+ deprecated, ale stale plne funkcni.
         # ImGui i nase main.cpp pouzivaji legacy GL volani — silence.
         target_compile_definitions(ithaca-gui PRIVATE GL_SILENCE_DEPRECATION)
-        target_link_libraries(ithaca-gui PRIVATE
-            "-framework OpenGL" "-framework Cocoa" "-framework IOKit"
-            "-framework CoreVideo")
+        target_link_libraries(ithaca-gui PRIVATE "-framework OpenGL")
     elseif(WIN32)
         target_link_libraries(ithaca-gui PRIVATE opengl32)
+    elseif(ITHACA_GUI_GLES)
+        target_link_libraries(ithaca-gui PRIVATE GLESv2 EGL)
     elseif(UNIX)
         target_link_libraries(ithaca-gui PRIVATE GL)
     endif()

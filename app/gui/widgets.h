@@ -71,34 +71,170 @@ inline float lampW(const char* label) {
     return 8.f + 6.f + textW(Fonts::small, fontPx(Fonts::small), label) + 18.f;
 }
 
+// -- Ramecek nebo inverzni vypln --------------------------------------------
+// Jediny zpusob, jakym se na tomhle displeji dela duraz (viz pravidlo 1 nahore).
+// Sdileji ho vsechny "chipove" prvky: bunka radku, tlacitko i prepinac.
+inline void chipFrame(ImDrawList* dl, ImVec2 p, ImVec2 q, bool on) {
+    if (on) dl->AddRectFilled(p, q, Colors::inv_bg);
+    else    dl->AddRect(p, q, Colors::line);
+}
+
 // -- Vlnova cara (pozadi) ---------------------------------------------------
-// Pozadi ve stylu PS3 XMB: mekke cary tekouci pres plochu. Tvar rizne SKUTECNY
-// zvuk, ale silne vyhlazeny — syrovy prubeh je zubaty a na pozadi by rusil
-// cteni; vyhlazenim zustane reakce na hru, ale pohyb je hedvabny.
-//
-// Zadna vypln: samotna cara staci a nechava text citelny. Zato je siroka —
-// tenka linka by se na pozadi ztratila a pusobila jako grafova mrizka.
+// Pozadi ve stylu PS3 XMB: mekke svetelne cary tekouci pres plochu. Kresli se
+// ve dvou krocich — waveBuild() spocita body, waveGlow() z nich udela svetlo.
 //
 // base_y je ABSOLUTNI souradnice osy, ne pomer: osa ma prochazet stredem
 // vybraneho patche, ktery zna az stranka PLAY.
-inline void waveLine(ImDrawList* dl, float x0, float w, float base_y,
-                     const float* pts, int n, float amp_px, float gain,
-                     ImU32 col, float alpha, float thickness) {
-    if (n < 2 || alpha <= 0.004f) return;
-    const ImU32 c = (col & 0x00FFFFFF) | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
-    dl->PathClear();
+
+// Barva s danou pruhlednosti (RGB z `col`, alfa z `alpha`; alfa se stropuje).
+inline ImU32 tint(ImU32 col, float alpha) {
+    return (col & 0x00FFFFFF)
+         | ((ImU32)(std::clamp(alpha, 0.f, 1.f) * 255.f) << 24);
+}
+
+// Spocita BODY vlny do `out`. Vraci pocet zapsanych bodu (0 = nevejde se).
+//
+// Oddelene od obtazeni proto, ze zar se kresli TREMI tahy pres tytez body
+// (siroky a slaby vespod, uzky a jasny nahore). Drive to byla tri volani
+// jedne funkce, ktera pokazde znovu spocitala x, tanh i nasobeni amplitudou —
+// pri peti stuhach a 128 bodech tedy 1920 volani tanh na snimek misto 640.
+inline int waveBuild(ImVec2* out, int cap, float x0, float w, float base_y,
+                     const float* pts, int n, float amp_px, float gain) {
+    if (n < 2 || cap < n) return 0;
     for (int i = 0; i < n; ++i) {
         const float x = x0 + w * ((float)i / (float)(n - 1));
         // MEKKY limit misto tvrdeho orezu: soucet nosne vlny a modulace zvukem
         // muze presahnout 1.0 a clamp by vrcholy usekl naplocho (bylo videt
-        // jako "clipovani"). tanh je ohne, takze tvar zustane hladky.
-        // Mekky limit misto tvrdeho orezu. Vstup je konstruovan tak, aby se
-        // bezne pohyboval hluboko v LINEARNI oblasti tanh — saturace slouzi
-        // jen jako pojistka pro spicky, ne jako bezny rezim.
+        // jako "clipovani"). tanh je ohne, takze tvar zustane hladky. Vstup je
+        // konstruovan tak, aby se bezne pohyboval hluboko v LINEARNI oblasti —
+        // saturace slouzi jen jako pojistka pro spicky, ne jako bezny rezim.
         const float y = base_y - std::tanh(pts[i] * gain * 0.85f) * amp_px * 1.15f;
-        dl->PathLineTo(ImVec2(x, y));
+        out[i] = ImVec2(x, y);
     }
-    dl->PathStroke(c, 0, thickness);
+    return n;
+}
+
+// Zar kolem krivky. Misto obtahovani carou se posila pas trojuhelniku, ktery
+// ma pruhlednost primo ve vrcholech — grafika mezi nimi interpoluje spojite.
+//
+// Drive to byly tri obtahy AddPolyline pres sebe (siroky slaby, stredni, uzky
+// jasny). Tri konstantni pruhlednosti daji ale schody, a nejvnitrnejsi obtah je
+// pres celou svou tloustku PLNY — vysledek se cetl jako plochy PAS s hranou,
+// ne jako cara, ktera pohasina do okoli.
+//
+// Profil napric carou se vzorkuje po drahach vrcholu. Dve pozadovane
+// vlastnosti jdou proti sobe a kazda urcuje jeden parametr:
+//
+//   "jadro musi byt videt"     -> plne kryci oblast musi mit SIRKU (plato
+//      o polosirce core_px). Prvni verze mela plnou pruhlednost jen ve
+//      stredove drare, tedy v oblasti nulove sirky — rasterizace ji rozredila
+//      mezi sousedni pixely a cara byla sotva znat.
+//
+//   "nesmi byt videt vrstvy"   -> spad musi byt vzorkovany dost husto. Pet
+//      drah delalo v mistech zlomu viditelna rozhrani, protoze linearni
+//      interpolace mezi nimi ma v kazde draze zlom derivace.
+//
+// Proto se profil nezadava konstantami, ale POCITA: pruhlednost jde po
+// Gaussove krivce a drahy jsou rozlozene kvadraticky (husto u jadra, ridce
+// v ohonu), takze pomer sousednich pruhlednosti zustava maly i daleko od
+// stredu. Vysledek se cte jako svetlo, ne jako pas ani jako schodiste.
+// Kolik drah na stranu potrebuje zar o danem DOSAHU, aby v ni nebyly videt
+// vrstvy. Roste s LOGARITMEM dosahu, ne linearne: drahy jsou rozlozene
+// kvadraticky, takze u jadra jsou husto a v ohonu, kde uz je pruhlednost mala,
+// staci ridce. Zdvojnasobeni dosahu tedy stoji jednu dalsi drahu, ne dvojnasobek.
+//
+//    dosah    5-10 px  ->  5 drah   (vychozi vzhled panelu)
+//             32 px    ->  7
+//            100 px    ->  9
+//           1024 px    -> 12 (strop)
+//
+// Kalibrovano tak, aby na vychozim dosahu vratilo presne 5 — tedy hodnotu,
+// na ktere byl vzhled odladen. Parametr wave_glow je tim ciste aditivni:
+// dokud se nesahne, nekresli se ani o vertex jinak.
+//
+// Dosah 0 (presneji: zadny presah pres jadro) znamena HOLOU CARU — jedna draha
+// na stranu, plna pruhlednost, zadny spad. Nejlevnejsi rezim, a zaroven ten,
+// na ktery se da spadnout, kdyz na zar neni vykon.
+inline int glowLanes(float span_px) {
+    if (span_px <= 0.25f) return 1;
+    const int lanes = 2 + (int)(std::log2(span_px + 1.f) + 0.5f);
+    return std::clamp(lanes, 2, 12);
+}
+
+inline void waveGlow(ImDrawList* dl, const ImVec2* p, int n,
+                     float core_px, float glow_px, ImU32 col, float alpha) {
+    if (n < 2 || alpha <= 0.004f) return;
+    // Rozmery se OVERUJI, ne clampuji: std::clamp(NaN, lo, hi) vraci NaN,
+    // protoze vsechna porovnani s NaN jsou nepravdiva. NaN by se odsud
+    // propsal do souradnic vrcholu a grafika by kreslila nesmysly. Zapis
+    // pres negaci (`!(x >= 0)`) je zamerny — chyti NaN i zapornou hodnotu.
+    if (!(core_px >= 0.f) || !(glow_px >= core_px)) return;
+
+    constexpr float kSpace = 1.8f;   // > 1 = hustsi vzorkovani u jadra
+    constexpr float kFall  = 3.2f;   // strmost Gaussovy krivky
+    // Tri obtahy pres sebe skladaly ve stredu vic, nez byla pruhlednost
+    // kteregokoli z nich (1-(1-0.048)(1-0.108)(1-0.30) = 0.41 pri a = 0.30).
+    // Jedna vrstva to sama nedozene a cara pak pusobi vybledle, proto se jadro
+    // dosvetli na srovnatelnou uroven. tint() alfu stropuje na 1.
+    constexpr float kCore  = 1.45f;
+
+    // Pocet drah se odviji od POLOMERU zare, ne od konstanty: uzka zar nema co
+    // vzorkovat husto a siroka by pri malo drahach ukazala vrstvy.
+    const float span  = std::max(glow_px - core_px, 0.f);
+    const int   kSide = glowLanes(span);
+    const int   kLanes = kSide * 2;
+
+    const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+
+    // Profil je pro celou caru stejny — spocitat jednou, ne v kazdem bode.
+    constexpr int kMaxLanes = 24;                 // 2 * strop z glowLanes
+    IM_ASSERT(kLanes <= kMaxLanes);               // strop musi sedet s glowLanes
+    float off[kMaxLanes];
+    ImU32 colr[kMaxLanes];
+    for (int j = 0; j < kSide; ++j) {
+        const float u = (kSide > 1) ? (float)j / (float)(kSide - 1) : 0.f;
+        const float d = core_px + span * std::pow(u, kSpace);
+        // Posledni draha musi byt uplne pruhledna, jinak ma zar na svem obvodu
+        // hranu. Pri jedine draze (holá cara) to neplati — tam zadny spad neni
+        // a cara ma byt plna.
+        const float a = (kSide > 1 && j == kSide - 1) ? 0.f
+                                                     : std::exp(-kFall * u * u);
+        const ImU32 c = tint(col, alpha * a * kCore);
+        off [kSide - 1 - j] = -d;  colr[kSide - 1 - j] = c;
+        off [kSide + j]     =  d;  colr[kSide + j]     = c;
+    }
+
+    const int seg = n - 1;
+    dl->PrimReserve(seg * (kLanes - 1) * 6, n * kLanes);
+    const unsigned int base = dl->_VtxCurrentIdx;
+
+    for (int i = 0; i < n; ++i) {
+        // Normala z tecny (centralni diference). Na koncich jednostranne.
+        const ImVec2 a = p[(i > 0) ? i - 1 : 0];
+        const ImVec2 b = p[(i < n - 1) ? i + 1 : n - 1];
+        float dx = b.x - a.x, dy = b.y - a.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len > 1e-6f) { dx /= len; dy /= len; } else { dx = 1.f; dy = 0.f; }
+        const float nx = -dy, ny = dx;
+
+        const ImVec2 q = p[i];
+        for (int k = 0; k < kLanes; ++k)
+            dl->PrimWriteVtx(ImVec2(q.x + nx * off[k], q.y + ny * off[k]),
+                             uv, colr[k]);
+    }
+
+    for (int s = 0; s < seg; ++s) {
+        const unsigned int i0 = base + (unsigned)s * kLanes;
+        const unsigned int i1 = i0 + kLanes;
+        for (unsigned k = 0; k + 1 < (unsigned)kLanes; ++k) {
+            dl->PrimWriteIdx((ImDrawIdx)(i0 + k));
+            dl->PrimWriteIdx((ImDrawIdx)(i0 + k + 1));
+            dl->PrimWriteIdx((ImDrawIdx)(i1 + k + 1));
+            dl->PrimWriteIdx((ImDrawIdx)(i0 + k));
+            dl->PrimWriteIdx((ImDrawIdx)(i1 + k + 1));
+            dl->PrimWriteIdx((ImDrawIdx)(i1 + k));
+        }
+    }
 }
 
 // -- Dotykovy slider --------------------------------------------------------
@@ -191,25 +327,20 @@ inline bool button(const char* id, const char* label, float fixed_w = 0.f) {
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float px = fontPx(Fonts::small);
     const float tw = textW(Fonts::small, px, label);
-    const float w  = (fixed_w > 0.f) ? fixed_w : (tw + 44.f);
-    const float h  = L::Dims::touch * 0.62f;
+    const float w  = (fixed_w > 0.f) ? fixed_w : (tw + L::Dims::btn_pad * 2.f);
+    const float h  = L::Dims::touch * L::Dims::chip_h_f;
     // Pri mereni z popisku zustava text vlevo (tak to vypada v liste),
     // pri pevne sirce se centruje — jinak by v siroke bunce plaval u kraje.
-    const float tx = (fixed_w > 0.f) ? (o.x + (w - tw) * 0.5f) : (o.x + 22.f);
+    const float tx = (fixed_w > 0.f) ? (o.x + (w - tw) * 0.5f)
+                                     : (o.x + L::Dims::btn_pad);
 
     ImGui::SetCursorScreenPos(o);
     const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, L::Dims::touch));
     const bool down    = ImGui::IsItemActive();
 
-    if (down) {
-        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Colors::inv_bg);
-        dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
-                    Colors::inv_fg, label);
-    } else {
-        dl->AddRect(o, ImVec2(o.x + w, o.y + h), Colors::line);
-        dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
-                    Colors::ink, label);
-    }
+    chipFrame(dl, o, ImVec2(o.x + w, o.y + h), down);
+    dl->AddText(Fonts::small, px, ImVec2(tx, o.y + (h - px) * 0.5f),
+                down ? Colors::inv_fg : Colors::ink, label);
     return clicked;
 }
 
@@ -222,23 +353,17 @@ inline bool toggle(const char* id, const char* label, bool on, float fixed_w = 0
     const float px = fontPx(Fonts::small);
     const float w  = (fixed_w > 0.f) ? fixed_w
                                      : (textW(Fonts::small, px, label) + 60.f);
-    const float h  = L::Dims::touch * 0.62f;   // opticky mensi, zona plna (nize)
+    const float h  = L::Dims::touch * L::Dims::chip_h_f;  // opticky mensi, zona plna
 
-    if (on) {
-        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Colors::inv_bg);
-        dl->AddText(Fonts::small, px, ImVec2(o.x + 12.f, o.y + (h - px) * 0.5f),
-                    Colors::inv_fg, label);
-        dl->AddText(Fonts::small, px,
-                    ImVec2(o.x + w - textW(Fonts::small, px, "ON") - 12.f,
-                           o.y + (h - px) * 0.5f), Colors::inv_fg, "ON");
-    } else {
-        dl->AddRect(o, ImVec2(o.x + w, o.y + h), Colors::line);
-        dl->AddText(Fonts::small, px, ImVec2(o.x + 12.f, o.y + (h - px) * 0.5f),
-                    Colors::dim, label);
-        dl->AddText(Fonts::small, px,
-                    ImVec2(o.x + w - textW(Fonts::small, px, "OFF") - 12.f,
-                           o.y + (h - px) * 0.5f), Colors::dimmer, "OFF");
-    }
+    // Popisek vlevo, stav vpravo — cteni "co / jak". Centrovanim by se rozpadlo.
+    const char* state = on ? "ON" : "OFF";
+    const float ty    = o.y + (h - px) * 0.5f;
+    chipFrame(dl, o, ImVec2(o.x + w, o.y + h), on);
+    dl->AddText(Fonts::small, px, ImVec2(o.x + L::Dims::chip_pad, ty),
+                on ? Colors::inv_fg : Colors::dim, label);
+    dl->AddText(Fonts::small, px,
+                ImVec2(o.x + w - textW(Fonts::small, px, state) - L::Dims::chip_pad, ty),
+                on ? Colors::inv_fg : Colors::dimmer, state);
     ImGui::SetCursorScreenPos(o);
     // Dotykova zona je vyssi nez vykresleny chip.
     const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, L::Dims::touch));
@@ -253,10 +378,10 @@ inline void cell(ImDrawList* dl, ImVec2 p, ImVec2 q, const char* txt, bool on,
                  ImFont* f = nullptr) {
     if (!f) f = Fonts::small;
     const float px = fontPx(f);
-    if (on) dl->AddRectFilled(p, q, Colors::inv_bg);
-    else    dl->AddRect(p, q, Colors::line);
+    chipFrame(dl, p, q, on);
     const float tw = textW(f, px, txt);
-    dl->PushClipRect(ImVec2(p.x + 4.f, p.y), ImVec2(q.x - 4.f, q.y), true);
+    dl->PushClipRect(ImVec2(p.x + L::Dims::cell_clip, p.y),
+                     ImVec2(q.x - L::Dims::cell_clip, q.y), true);
     dl->AddText(f, px,
                 ImVec2(p.x + (q.x - p.x - tw) * 0.5f,
                        p.y + (q.y - p.y - px) * 0.5f),
@@ -278,30 +403,53 @@ inline void cell(ImDrawList* dl, ImVec2 p, ImVec2 q, const char* txt, bool on,
 // `is_on(i)` rozhoduje, ktera bunka je zvyraznena. Predikat misto indexu proto,
 // ze radek slouzi jak vyberu jedne polozky (port, buffer), tak prepinani
 // nezavislych bitu (maska MIDI kanalu).
-template <class OnFn>
-int chipRowIf(const char* id, ImVec2 pos, float w, const char* const* items,
-              int n, OnFn is_on, float h = 48.f, float hit_h = 0.f) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const L::Row row = L::splitRow(pos, w, h, n);
-    if (hit_h <= 0.f)
-        hit_h = (row.rows > 1) ? (h + row.gap) : L::Dims::touch;
-    hit_h = std::max(hit_h, h);
+// -- Jedna smycka pro VSECHNY roztazene radky -------------------------------
+// Rozdeleni sirky, generovani ID a dotykove zony jsou pokazde tataz vec; lisi
+// se jen to, co se do bunky nakresli. `draw(i, p, q)` si tedy kresli sam.
+//
+// Drive byla tahle smycka opsana ctyrikrat: v tabBar, v chipRowIf, ve volici IR
+// na strance DSP (page_params.cpp) a v dvojici tlacitek na SYS. Vcetne
+// snprintf("%s_%d") pokazde znovu.
+//
+// Dotykova zona smi byt VYSSI nez vykreslena bunka a sazi se na jeji stred;
+// volajici ji musi omezit rozteci radku, jinak by zony sousednich radku
+// zasahovaly do sebe a klepnuti by padlo do spatneho.
+template <class DrawFn>
+int itemRow(const char* id, ImVec2 pos, float w, int n, float cell_h,
+            float hit_h, float gap, DrawFn draw) {
+    const L::Row row = L::splitRow(pos, w, cell_h, n, gap);
+    hit_h = std::max(hit_h, cell_h);
     int hit = -1;
 
     for (int i = 0; i < n; ++i) {
         const ImVec2 p = row.at(i), q = row.end(i);
-        cell(dl, p, q, items[i], is_on(i));
+        draw(i, p, q);
 
-        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y - (hit_h - h) * 0.5f));
+        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y - (hit_h - cell_h) * 0.5f));
         char bid[48]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
         if (ImGui::InvisibleButton(bid, ImVec2(row.cell, hit_h))) hit = i;
     }
     return hit;
 }
 
+template <class OnFn>
+int chipRowIf(const char* id, ImVec2 pos, float w, const char* const* items,
+              int n, OnFn is_on, float h = L::Dims::chip_h, float hit_h = 0.f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (hit_h <= 0.f) {
+        // Pri zalomeni do vic radek nesmi zona presahnout rozteC.
+        const L::Row probe = L::splitRow(pos, w, h, n);
+        hit_h = (probe.rows > 1) ? (h + probe.gap) : L::Dims::touch;
+    }
+    return itemRow(id, pos, w, n, h, hit_h, L::Dims::gap_s,
+                   [&](int i, ImVec2 p, ImVec2 q) {
+                       cell(dl, p, q, items[i], is_on(i));
+                   });
+}
+
 // Vyber JEDNE polozky. Klepnuti na uz vybranou nic nedela (neni co menit).
 inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items,
-                   int n, int cur, float h = 48.f, float hit_h = 0.f) {
+                   int n, int cur, float h = L::Dims::chip_h, float hit_h = 0.f) {
     const int hit = chipRowIf(id, pos, w, items, n,
                               [cur](int i) { return i == cur; }, h, hit_h);
     return (hit == cur) ? -1 : hit;
@@ -311,14 +459,14 @@ inline int chipRow(const char* id, ImVec2 pos, float w, const char* const* items
 // a naopak; sousedni bity zustavaji, jak byly.
 inline int chipRowMask(const char* id, ImVec2 pos, float w,
                        const char* const* items, int n, uint32_t mask,
-                       int bit0 = 0, float h = 48.f, float hit_h = 0.f) {
+                       int bit0 = 0, float h = L::Dims::chip_h, float hit_h = 0.f) {
     return chipRowIf(id, pos, w, items, n,
                      [mask, bit0](int i) { return ((mask >> (bit0 + i)) & 1u) != 0u; },
                      h, hit_h);
 }
 
 // Vyska, kterou takovy radek zabere (kvuli zalomeni ji volajici nezna dopredu).
-inline float chipRowHeight(float w, int n, float h = 48.f) {
+inline float chipRowHeight(float w, int n, float h = L::Dims::chip_h) {
     return L::splitRow(ImVec2(0, 0), w, h, n).height();
 }
 
@@ -334,25 +482,27 @@ inline bool tabBar(const char* id, const char* const* labels, int n, int& sel,
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float  total = ImGui::GetContentRegionAvail().x;
+    // Sirka bunky se bere z Row, ne jako (q.x - p.x): to druhe je ve floatu
+    // o kousek jine cislo (p.x + cell - p.x != cell) a ctverce by se posunuly
+    // o zlomek pixelu.
     const L::Row row = L::splitRow(o, total, h, n, L::Dims::tab_gap);
-    bool changed = false;
 
-    for (int i = 0; i < n; ++i) {
-        const ImVec2 p = row.at(i);
-        const bool on = (i == sel);
-        if (square) {
+    const int hit = itemRow(id, o, total, n, h, h, L::Dims::tab_gap,
+        [&](int i, ImVec2 p, ImVec2 q) {
+            const bool on = (i == sel);
+            if (!square) { cell(dl, p, q, labels[i], on); return; }
+            // Ctverec vycentrovany v bunce; dotykova zona zustava cela bunka.
+            // Ctverec pres celou sirku bunky by pri sedmi zalozkach mel 175 px
+            // na vysku a stranka DSP by se uz nevesla.
             const float s  = std::min(h, row.cell);
             const float mx = p.x + row.cell * 0.5f;
             cell(dl, ImVec2(mx - s * 0.5f, p.y), ImVec2(mx + s * 0.5f, p.y + s),
                  labels[i], on);
-        } else {
-            cell(dl, p, row.end(i), labels[i], on);
-        }
+        });
 
-        ImGui::SetCursorScreenPos(p);
-        char bid[32]; std::snprintf(bid, sizeof(bid), "%s_%d", id, i);
-        if (ImGui::InvisibleButton(bid, ImVec2(row.cell, h)) && !on) { sel = i; changed = true; }
-    }
+    const bool changed = (hit >= 0 && hit != sel);
+    if (changed) sel = hit;
+
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + row.height()));
     ImGui::Dummy(ImVec2(total, 0.f));
     return changed;

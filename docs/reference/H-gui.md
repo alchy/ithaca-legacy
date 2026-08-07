@@ -1,10 +1,19 @@
 # GUI
 
-Oblast `app/gui/` implementuje **čelní panel nástroje Ithaca Legacy** nad Dear ImGui (backend GLFW + OpenGL 3.3). Není to desktopová aplikace, která umí běžet i na Pi — je to panel zabudovaný v nástroji, ovládaný prstem.
+Oblast `app/gui/` implementuje **čelní panel nástroje Ithaca Legacy** nad Dear ImGui (backend SDL3 + OpenGL 3.3, na Raspberry Pi OpenGL ES 3 přes KMSDRM). Není to desktopová aplikace, která umí běžet i na Pi — je to panel zabudovaný v nástroji, ovládaný prstem.
 
-Z toho plyne jediná tvrdá podmínka, ze které se odvozuje skoro všechno ostatní: cílem je **7" dotykový displej 1280×720 (~210 DPI)**, kde prst potřebuje ~9 mm, tedy **74 px**. Žádný interaktivní prvek nesmí být menší.
+Z toho plyne jediná tvrdá podmínka, ze které se odvozuje skoro všechno ostatní: prst potřebuje ~9 mm. Nástroj cílí na **dva panely** a obojí má prakticky stejnou hustotu, takže ta podmínka je na obou táž — **74 px**:
 
-Životní cyklus řídí `main()`: načti persistovaný `GuiState` → otevři GLFW okno (v režimu panelu bez dekorací) → inicializuj ImGui a zabudovaná písma → `AppContext` (engine, audio, MIDI; banka se načítá asynchronně) → **render loop** → finální `saveState` → shutdown v opačném pořadí.
+| panel | rozlišení | DPI | tělo stránky |
+|---|---|---|---|
+| 7,0" | 1280×720 | 210 | 1224 × 458 |
+| 4,3" | 800×480 | 217 | 744 × 286 |
+
+Rozdíl mezi nimi **není v měřítku, ale v ploše**. Škálování prvků by tedy byla špatná odpověď; správná je jiné rozvržení — viz [Profily displeje](#profily-displeje).
+
+Životní cyklus řídí `main()`: načti persistovaný `GuiState` → SDL init a okno → GL kontext → ImGui a zabudovaná písma → `AppContext` (engine, audio, MIDI; banka se načítá asynchronně) → **render loop** → finální `saveState` → shutdown v opačném pořadí.
+
+Provozní stránka (balíčky, oprávnění, boot do konzole, ladicí páky) je v [6 · Panel na Raspberry Pi](../prirucka/06-panel-a-rpi.md).
 
 ---
 
@@ -28,7 +37,7 @@ Písma jsou **zabudovaná v binárce** — za běhu se nečte žádný asset, je
 
 | Soubor | Odpovědnost |
 |---|---|
-| `main.cpp` | CLI, GLFW/ImGui init, render loop, modální overlay, debounce, shutdown |
+| `main.cpp` | CLI, SDL/ImGui init, render loop, modální overlay, debounce, tempo, shutdown |
 | `screen.cpp` | Shell: rámeček, záložky, dispatch stránek, pozadí s vlnou, spořič, patička |
 | `splash.{h,cpp}` | Úvodní obrazovka |
 | `pages.h` | Deklarace stránek + `Rect` |
@@ -40,7 +49,10 @@ Písma jsou **zabudovaná v binárce** — za běhu se nečte žádný asset, je
 | `widgets.h` | Znakové primitivy kreslené přes `ImDrawList` |
 | `theme.h` | Paleta, písma, `apply_theme()`, `load_fonts()` |
 | `layout.h` | Rozměry + `splitRow` (viz níže) |
-| `motion.h` | Tlumený doběh |
+| `motion.h` | Tlumený doběh (integruje se po pevných podkrocích, viz níže) |
+| `frame_stats.h` | Statistika snímků — percentily z histogramu + geometrie |
+| `glow_auto.h` | Regulátor dosahu záře pod tlakem |
+| `pace.h` | Přepínání tempa překreslování |
 | `app_context.{h,cpp}` | Vlastník engine/audio/MIDI + `PanelState` |
 | `dsp_state.h` | Snapshot/obnova/porovnání `IParamPage` — most `DspChain` ↔ `GuiState` |
 | `state_binding.h` | Most `GuiState` ↔ `Engine` |
@@ -48,7 +60,40 @@ Písma jsou **zabudovaná v binárce** — za běhu se nečte žádný asset, je
 | `embedded_fonts.cpp` | Zabudovaná písma |
 | `log_subscriber.{h,cpp}` | Kruhový buffer log eventů |
 
-**Testy:** `test_persistence`, `test_gui_dsp_state`, `test_gui_state_binding`, `test_log_subscriber`.
+**Testy:** `test_persistence`, `test_gui_dsp_state`, `test_gui_state_binding`, `test_log_subscriber`, `test_frame_stats`, `test_glow_auto`, `test_pace`, `test_gui_render_golden`.
+
+---
+
+## Jak se panel měří a posuzuje bez displeje
+
+Tohle je infrastruktura, na které stojí všechno ostatní: vývoj běží na PC, cílový panel je jinde, a **měření času je na desktopu bezcenné**.
+
+### Otisk snímku (`test_gui_render_golden`)
+
+ImGui žádný backend nepotřebuje — `Render()` vyprodukuje `ImDrawData` i do prázdna. Otisk vertex a index bufferu je tedy přesný popis toho, co by se nakreslilo: **když se otisk nezmění, nezměnil se ani obraz**. 15 scénářů (7 stránek × dvě rozlišení + spořič).
+
+Vše, co by četlo skutečný stroj (MIDI porty, adresáře s bankami), je předvyplněné pevnými hodnotami. Baseline je **lokální** (build adresář), ne commitnutá: rasterizace písma se liší mezi překladači a sdílená baseline by hlásila falešné poplachy.
+
+> Chytilo to chybu, kterou by nic jiného nenašlo: šířka buňky spočítaná jako `q.x - p.x` místo `row.cell` je matematicky totéž, ale ve floatu ne — čtverce záložek se posunuly o zlomek pixelu **při nezměněných počtech vertexů**.
+
+### Software rasterizér
+
+`ImDrawData` jsou obyčejné trojúhelníky s barvou a UV, takže si je jde složit do obrázku a **panel si prohlédnout bez panelu**. Zapíná se `ITHACA_GOLDEN_DUMP=<scénář>`, `tools/ppm2png.py` z výsledku udělá PNG.
+
+Režimy náhledu `ITHACA_GLOW` (jiný dosah záře) a `ITHACA_WAVE_STEP` (skok v historii místo hladkého tvaru) umí vyrobit stav, který na běžícím panelu nenastane. Otisk se v nich **neporovnává** — je to prohlížení, ne ověřování.
+
+### Statistika snímků (`frame_stats.h`)
+
+Sbírají se **dvě různé veličiny, každá odpovídá na jinou otázku**:
+
+| | povaha | k čemu |
+|---|---|---|
+| **čas** (`cpu`, `present`) | zašuměný | až na Pi; agreguje se do log-histogramu a čtou se percentily |
+| **geometrie** (`vtx`, `idx`) | **nezašuměná** | čistá funkce toho, co kreslíme — účinek optimalizace jde ověřit exaktně i na PC |
+
+Průměr se záměrně nepočítá: jedna špička z plánovače ho posune tak, že přestane cokoli znamenat. Naměřeno: `cpu p50 = 0,40 ms`, `p95 = 0,57 ms`, jeden výkyv 153 ms se projevil jen v `max` a `late`.
+
+**Kde vést hranici:** `cpu_ms` končí u `ImGui::Render()`, ne u swapu. První pokus měřil až za `SwapBuffers` a vyšel `p50 = p95 = 18,1 ms`, tedy přesně perioda snímku — ovladač na Windows na vsync neblokuje ve `SwapBuffers`, ale už v dřívějším GL volání. Rozpoznat to šlo právě podle histogramu: `p50 == p95 == jedna přihrádka` znamená hodiny, ne práci.
 
 ---
 
@@ -145,19 +190,42 @@ Vlna **plyne zleva doprava, protože se přehrává**: posuvná historie hlasito
 | Přehlcení | −9 dB → 0 dB přechod do červena |
 | Sytost | PLAY 100 %, ostatní stránky 42 % (jinak prochází textem) |
 
-### Tři chybné modely, které tomu předcházely
+### Záři nese geometrie, ne obtahování
+
+Původně to byly **tři obtahy přes sebe** (široký slabý, střední, úzký jasný). Tak se ale požadovaný tvar udělat nedá: každý obtah má konstantní průhlednost přes celou svou tloušťku, takže součet je schodiště, a ten nejvnitřnější je plný přes celou šířku. Výsledek se četl jako **plochý pás s hranou**, ne jako čára, která pohasíná do okolí.
+
+`wdg::waveGlow` proto posílá **pás trojúhelníků s průhledností přímo ve vrcholech** — grafika mezi nimi interpoluje spojitě:
+
+| vlastnost | jak |
+|---|---|
+| profil | Gaussova křivka, **plató v jádře** (bez plató má plná krycí oblast nulovou šířku a rasterizace ji rozředí — čára pak není vidět) |
+| vzorkování | dráhy rozložené kvadraticky: hustě u jádra, řídce v ohonu |
+| počet drah | dopočítá se z **dosahu** (`glowLanes`), roste s jeho logaritmem: 5–10 px → 5 drah, 32 px → 7, 1024 px → 12 |
+| jas jádra | dosvětlené (`kCore = 1,45`) na úroveň, kterou skládaly tři obtahy |
+
+Vedlejší efekty téhle změny jsou dva a oba se hodí: je to **levnější** než tři obtahy, a záře **vůbec neprochází přes ImGui rasterizaci tlustých čar** — odpadá tím závislost na tom, jestli tloušťka náhodou vyjde na celé číslo, i otázka, jak se to chová na GLES.
+
+Dosah je **parametr** (`wave_glow`) s automatikou (`glow_auto.h`), protože je to jediná věc na panelu, která roste s **výplní** — a výplň je na V3D úzké hrdlo. Podrobnosti a doporučené hodnoty v [6 · Panel na Raspberry Pi](../prirucka/06-panel-a-rpi.md#ladicí-páky).
+
+### Čtyři chybné modely, které tomu předcházely
 
 Stojí za zaznamenání, protože každý vypadal rozumně:
 
 1. **Kreslit průběh vzorků.** Neklidné při nokturnu.
 2. **Normalizovat špičku RMS referencí.** Špička je u hudby několikanásobek RMS, takže podíl trvale seděl na dorazu limiteru — vypadalo to jako clipping. Řešení: dvě nezávislé reference.
 3. **Zvuk přičítat k výchylce.** Znaménková špička přeskakuje mezi + a − každý frame → zubatá čára se schody. Řešení: zvuk moduluje *amplitudu*.
+4. **Tvarovat záři obtahy.** Viz výše — konstantní průhlednost přes tloušťku nedá spojitý spád.
 
-A jedna chyba výpočtu: prostorové vyhlazení historie se počítalo modulem přes kruhový buffer, takže na levém okraji sáhlo „před nejnovější vzorek" a přeteklo na konec kruhu (data stará dvě sekundy) — vlna se tam tvrdě lámala. Okno se teď ořezává.
+A dvě chyby výpočtu:
+
+- Prostorové vyhlazení historie se počítalo modulem přes kruhový buffer, takže na levém okraji sáhlo „před nejnovější vzorek" a přeteklo na konec kruhu (data stará dvě sekundy) — vlna se tam tvrdě lámala. Index se teď **ořezává**.
+- Totéž vyhlazení používalo **obdélníkové okno**, které má na skok odezvu ve tvaru rampy s ostrými rohy. Při náhlém zesílení se ty rohy objevily na křivce jako zlomy. Na hladkém vstupu se to neprojeví vůbec, takže to nešlo poznat ani pohledem na běžící panel — musel se vyrobit skok (`ITHACA_WAVE_STEP`). Okno je teď **Hannovo**, šířka volená tak, aby síla vyhlazení zůstala stejná (obojí má efektivní šířku ~2,0 vzorku).
 
 ### Cena
 
-Naměřeno na macOS: rozdíl mezi zapnutou a vypnutou vlnou je **v šumu** (~12,5 % vs ~12,4 % jednoho jádra), tedy hluboko pod 1 %. Na RPi5 to bude jinak — poroste výplň gradientu přes celou plochu a geometrie záře (5 stuh × 3 průchody × 128 bodů = 1920 úseček/frame). Páky, kdyby bylo těsno: zář na dva průchody, `kPts` na 96.
+Naměřeno: panel bez vlny má 600–1200 vertexů, s vlnou 7 000–8 200 — **vlna je 85–90 % veškeré geometrie**. Proto se všechny páky týkají jí.
+
+Na desktopu je rozdíl mezi zapnutou a vypnutou vlnou v šumu. Na Pi to bude jinak, a hlavní roli tam nehraje počet vertexů, ale **vyplněná plocha** — ta roste s druhou mocninou dosahu záře.
 
 ---
 
@@ -263,6 +331,46 @@ Persistence debounce porovnává **celý** `GuiState` (`operator== = default`); 
 
 ---
 
+## Profily displeje
+
+`layout::Screen` se nastavuje jednou za snímek z velikosti displeje (`setScreen`). Compact profil se zapíná pod 1024×600 a mění **rozvržení**, ne měřítko:
+
+| | Wide (1280×720) | Compact (800×480) |
+|---|---|---|
+| záložky | čtverec 172 px | obdélník 56 px (čtverec by měl 104 px = 23 % výšky) |
+| PLAY | 7 sloupců stavu | dvě řádky, 4 + 3 |
+| akční pás | `touch` (74 px) | `touch × 0,62` |
+| výtah | středěný podle **obrazovky** | podle **vlastní plochy** (na úzkém panelu padne střed obrazovky až na spodní hranu a byla by vidět jediná položka) |
+
+Na malém panelu se dřív rozpadaly tři stránky, a všechna tři selhání byla **tichá** — nic na obrazovce nenaznačovalo, že se něco nevejde:
+
+- **SYS**: rozteč řádků vyšla 31 px, ale spodní mez buňky 36 px → řádky přes sebe, dotyk 29 px místo 74. Buňka se teď nikdy nevejde do menší rozteče, než má.
+- **DSP a RESO**: na čtyři parametry zbylo 136 px, vešly se dva a smyčka na třetím dělala `break` — parametry prostě zmizely. Pás se teď smí stlačit pod `param_h_min` až na podlahu čitelnosti, a když se nevejdou ani tak, svítí cedule `+N MORE - NOT ENOUGH HEIGHT`.
+- **PLAY**: osm sloupců po 93 px, do kterých se `128/256` nevejde.
+
+---
+
+## Tempo překreslování
+
+Panel je přístroj, ne hra. Ambientní vizualizér 60 fps nepotřebuje a **poloviční tempo je poloviční práce**.
+
+| parametr | co dělá |
+|---|---|
+| `frame_divider` | dělitel vsync (1 = každý, 2 = 30 fps na 60 Hz) |
+| `frame_divider_idle` | dělitel v klidu; nahoru **okamžitě**, dolů až po 2 s |
+
+Záměrně dělitel přes `SDL_GL_SetSwapInterval`, ne vlastní časovač se `sleep`: obraz zůstává synchronizovaný s panelem a netrhá se.
+
+**Prerekvizita, bez které to nejde:** všechno vyhlazování vlny muselo přejít z „na snímek" na „na čas". Koeficienty jako `0,10` nebo `0,995` se dřív aplikovaly jednou za překreslení, takže při 12 fps by se vlna sama zpomalila pětkrát. Konstanty jsou přepočítané z původních při 60 fps (`τ = −(1/60)/ln(1−k)`) — při 60 fps tedy vypadá všechno stejně a liší se to teprve tam, kde bylo původní chování špatné.
+
+Ověřeno měřením: 60 fps před a po převodu se liší **max o 1/255 na 19 kanálech z 2 764 800**. 60 vs 30 fps po převodu: liší se 0,43 % kanálů, z toho 96 % o ±1–2 — vzor je na stejném místě.
+
+Totéž potkalo `motion::Settle`: explicitní Euler ořezával `dt` na 0,05 s kvůli stabilitě, takže při 12 fps by pružina dosedala 1,7× déle. Integruje se teď po **pevných podkrocích** — stabilita i skutečné tempo zároveň.
+
+Rozhodování „děje se něco?" je na jednom místě: `panelAnimating(PanelState)` (čistě stavová část, testovatelná bez enginu) → `AppContext::busy()` (+ hlasy, rezonance, pedál, nedávné noty, load banky) → `PaceControl` (drží prodlevu).
+
+---
+
 ## Režim panelu
 
 ```bash
@@ -271,9 +379,9 @@ Persistence debounce porovnává **celý** `GuiState` (`operator== = default`); 
 
 Okno bez dekorací přes celou plochu — **záměrně ne exkluzivní fullscreen**: ten přepíná mód obrazovky a na Pi komplikuje přepnutí na konzoli, když se něco pokazí.
 
-> GLFW potřebuje běžící display server. Z holé konzole bez X11/Wayland okno nevytvoří.
+Na **KMSDRM** žádný okenní manažer neexistuje a okno je vždy jedno přes celou obrazovku, takže je celá větev s pozicí, výčtem monitorů a off-screen clampem pod `#ifndef ITHACA_GLES` a `--fullscreen` se tam jen zaloguje jako no-op.
 
-Dvě pasti, které to má ošetřené: geometrie okna se v režimu panelu **nepersistuje** (jinak by se uložilo rozlišení panelu), a `renderScreen` dostává rozměry parametrem místo z `GuiState`.
+Dvě pasti, které to má ošetřené: geometrie okna se v režimu panelu (a na KMSDRM vždy) **nepersistuje** — jinak by se uložilo rozlišení přístroje a při příštím spuštění na PC by se okno otevřelo obří; a `renderScreen` dostává rozměry parametrem místo z `GuiState`.
 
 ---
 

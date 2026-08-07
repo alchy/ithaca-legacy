@@ -254,6 +254,17 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.cache_budget_mb     = readI("cache_budget_mb", s.cache_budget_mb);
         s.audio_block_size  = readI("audio_block_size", s.audio_block_size);
         s.audio_sample_rate = readI("audio_sample_rate", s.audio_sample_rate);
+        // Zar vlny. Strop odpovida dosahu ~1300 px, tedy vic nez cely panel —
+        // nad tim uz to neni nastaveni, ale preklep. Rucne editovany soubor
+        // muze obsahovat i NaN, proto sanitizeGlow a ne std::clamp.
+        s.wave_glow = sanitizeGlow(readF("wave_glow", s.wave_glow), kWaveGlowMax);
+        s.wave_glow_budget_ms =
+            sanitizeGlow(readF("wave_glow_budget_ms", s.wave_glow_budget_ms),
+                         kWaveBudgetMax);
+        // Delitel snimkove frekvence. Nad 4 uz to neni uspora, ale trhani.
+        s.frame_divider = std::clamp(readI("frame_divider", s.frame_divider), 1, 4);
+        s.frame_divider_idle =
+            std::clamp(readI("frame_divider_idle", s.frame_divider_idle), 0, 8);
 
         // -- Genericke sekce "<prefix><STAGE>.<Param::id>" ---------------------
         // Persistence jmena parametru nezna — proste vezme vse pod prefixem
@@ -359,6 +370,10 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"window_h\": " << s.window.h << ",\n";
         f << "  \"config_page\": "        << s.config_page          << ",\n";
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
+        f << "  \"wave_glow\": "          << s.wave_glow            << ",\n";
+        f << "  \"wave_glow_budget_ms\": " << s.wave_glow_budget_ms << ",\n";
+        f << "  \"frame_divider\": "      << s.frame_divider        << ",\n";
+        f << "  \"frame_divider_idle\": " << s.frame_divider_idle   << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate;
         // Genericke sekce: "<prefix><STAGE>.<Param::id>". Carka se pise PRED
         // kazdy radek (ne za), takze prazdna mapa nenecha visici carku.

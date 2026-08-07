@@ -16,8 +16,12 @@ DOCTEST_VER="v2.4.11"
 NLOHMANN_VER="v3.11.3"
 MINIAUDIO_VER="0.11.21"
 RTMIDI_VER="6.0.0"
-IMGUI_VER="v1.91.0"
-GLFW_VER="3.4"
+IMGUI_VER="v1.91.9b"
+# SDL3 misto GLFW: jako jedina vrstva pokryva macOS (Cocoa), Windows (Win32)
+# i Raspberry Pi (KMSDRM = primo na framebuffer, BEZ X11 a Waylandu).
+# Prave ta posledni vec je duvod cele vymeny — GLFW okno z hole konzole
+# nevytvori.
+SDL_VER="release-3.4.14"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 log()  { printf "\033[1;34m[fetch]\033[0m %s\n" "$*"; }
@@ -82,9 +86,9 @@ else
     log "  (uz je, skip)"
 fi
 
-# -- Dear ImGui (zdrojaky + GLFW/OpenGL3 backendy) -------------------------
-# Pro F8 GUI. Stahujeme cely tarball z release tagu a vytahujeme jen to
-# co linkujeme: core .cpp/.h v rootu + backends/imgui_impl_{glfw,opengl3}.*
+# -- Dear ImGui (zdrojaky + SDL3/OpenGL3 backendy) -------------------------
+# Stahujeme cely tarball z release tagu; linkujeme z nej core .cpp/.h
+# v rootu + backends/imgui_impl_{sdl3,opengl3}.*
 log "ImGui $IMGUI_VER"
 mkdir -p "$TP/imgui"
 if [ ! -f "$TP/imgui/imgui.h" ]; then
@@ -97,17 +101,17 @@ else
     log "  (uz je, skip)"
 fi
 
-# -- GLFW (vendored zdrojak, vlastni CMakeLists) ---------------------------
-# Klonuje --depth 1 a maze .git aby parent repo nepovazoval GLFW za submodule.
-log "GLFW $GLFW_VER"
+# -- SDL3 (vendored zdrojak, vlastni CMakeLists) ---------------------------
+# Tarball z release tagu, ne git clone: SDL ma velkou historii a --depth 1
+# stejne stahne cely strom, takze archiv je rychlejsi i mensi.
+log "SDL3 $SDL_VER"
 mkdir -p "$TP"
-if [ ! -f "$TP/glfw/CMakeLists.txt" ]; then
-    have git || err "git je potreba pro GLFW clone"
-    rm -rf "$TP/glfw"
-    git clone --depth 1 --branch "$GLFW_VER" \
-        https://github.com/glfw/glfw.git "$TP/glfw" >/dev/null 2>&1
-    rm -rf "$TP/glfw/.git"
-    log "  ok GLFW"
+if [ ! -f "$TP/sdl3/CMakeLists.txt" ]; then
+    curl -fsSL "https://github.com/libsdl-org/SDL/archive/refs/tags/${SDL_VER}.tar.gz" \
+        -o "$TMP/sdl3.tar.gz"
+    mkdir -p "$TP/sdl3"
+    tar -xzf "$TMP/sdl3.tar.gz" -C "$TP/sdl3" --strip-components=1
+    log "  ok SDL3"
 else
     log "  (uz je, skip)"
 fi

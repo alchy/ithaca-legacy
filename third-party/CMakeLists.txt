@@ -52,36 +52,57 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rtmidi/RtMidi.cpp")
     endif()
 endif()
 
-# -- GLFW (vendored source, vlastni CMakeLists) --
-# Vypneme docs/tests/examples PRED add_subdirectory aby se nestavely.
-# GLFW je optional — staveni jen kdyz je adresar dostupny (pro fazi 8 GUI).
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/glfw/CMakeLists.txt")
-    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-    add_subdirectory(glfw)
+# -- SDL3 (vendored source, vlastni CMakeLists) --
+# Nahradilo GLFW. Duvod je jediny, ale zasadni: SDL umi backend KMSDRM, tedy
+# kreslit primo na framebuffer BEZ X11 a Waylandu. GLFW okno z hole konzole
+# nevytvori, a prave takhle ma zabudovany panel bezet.
+#
+# Podsystemy, ktere nepouzivame, se vypinaji PRED add_subdirectory — zkrati to
+# build (na Pi znatelne) a zmensi binarku. Joystick/gamepad se NEVYPINA:
+# imgui_impl_sdl3 sahá na SDL_GetGamepads() a bez toho by se nesestavil.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdl3/CMakeLists.txt")
+    set(SDL_SHARED        OFF CACHE BOOL "" FORCE)   # linkujeme staticky
+    set(SDL_STATIC        ON  CACHE BOOL "" FORCE)
+    set(SDL_TEST_LIBRARY  OFF CACHE BOOL "" FORCE)
+    set(SDL_TESTS         OFF CACHE BOOL "" FORCE)
+    set(SDL_EXAMPLES      OFF CACHE BOOL "" FORCE)
+    set(SDL_INSTALL       OFF CACHE BOOL "" FORCE)
+    set(SDL_CAMERA        OFF CACHE BOOL "" FORCE)
+    set(SDL_SENSOR        OFF CACHE BOOL "" FORCE)
+    set(SDL_HAPTIC        OFF CACHE BOOL "" FORCE)
+    set(SDL_DIALOG        OFF CACHE BOOL "" FORCE)
+    # Audio i MIDI si nastroj resi sam (miniaudio + RtMidi); SDL audio by jen
+    # otevrelo druhou cestu k temuz zarizeni.
+    set(SDL_AUDIO         OFF CACHE BOOL "" FORCE)
+    add_subdirectory(sdl3 EXCLUDE_FROM_ALL)
 endif()
 
 # -- Dear ImGui (static lib: core + GLFW/OpenGL3 backendy) --
 # Definujeme target tady (ne v gitignored adresari) aby CMakeLists nebyl
 # soucasti vendored stromu a neztratil se pri re-fetchi.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui.cpp"
-   AND TARGET glfw)
+   AND TARGET SDL3::SDL3-static)
     add_library(imgui STATIC
         imgui/imgui.cpp
         imgui/imgui_draw.cpp
         imgui/imgui_tables.cpp
         imgui/imgui_widgets.cpp
         imgui/imgui_demo.cpp
-        imgui/backends/imgui_impl_glfw.cpp
+        imgui/backends/imgui_impl_sdl3.cpp
         imgui/backends/imgui_impl_opengl3.cpp
     )
     target_include_directories(imgui PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/imgui
         ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends
     )
-    target_link_libraries(imgui PUBLIC glfw)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
+    # OpenGL ES 3 na Pi: musi byt definovano i pro imgui, protoze prave tady
+    # se prekladá imgui_impl_opengl3.cpp. Definovat to jen na ithaca-gui by
+    # znamenalo, ze se backend prelozi pro desktopove GL a hlavicky by se
+    # rozesly s tim, co ocekava aplikace.
+    if(ITHACA_GUI_GLES)
+        target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_ES3)
+    endif()
     target_compile_features(imgui PUBLIC cxx_std_17)
     # Vendored kod — potlacit nase -Wall/-Wextra/-Wpedantic, jinak hluk.
     if(NOT MSVC)

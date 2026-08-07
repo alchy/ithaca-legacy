@@ -113,11 +113,21 @@ void pageBank(AppContext& ctx, const Rect& r) {
     const float px_s = wdg::fontPx(Fonts::small);
     const float px_u = wdg::fontPx(Fonts::ui);
 
-    // -- Zahlavi: aktualni adresar + o uroven vys --------------------------
-    dl->AddText(Fonts::small, px_s, r.lo, Colors::dimmer, ps.browse_dir.c_str());
+    // -- Rozpocet plochy ----------------------------------------------------
+    // Odshora zahlavi, odzdola akcni pas a nad nim radek faktu; co zbyde,
+    // je seznam. Drive to byl retez rucnich odectu (btn_y, fy, sep_y), ve
+    // kterem nebylo poznat, ktere cislo je vyska pasu a ktere mezera.
+    L::Band band{r};
+    const Rect head  = band.takeTop(px_s, 14.f);
+    const Rect btn   = band.takeBottom(L::Dims::touch, 16.f);
+    const Rect fact_row = band.takeBottom(px_s, 10.f);
+    const Rect list     = band.rest();
 
-    ImGui::SetCursorScreenPos(ImVec2(r.hi.x - 120.f, r.lo.y - 6.f));
-    if (ImGui::InvisibleButton("##up", ImVec2(120.f, L::Dims::touch * 0.6f))) {
+    // -- Zahlavi: aktualni adresar + o uroven vys --------------------------
+    dl->AddText(Fonts::small, px_s, head.lo, Colors::dimmer, ps.browse_dir.c_str());
+
+    ImGui::SetCursorScreenPos(ImVec2(head.hi.x - L::Dims::nav_w, head.lo.y - 6.f));
+    if (ImGui::InvisibleButton("##up", ImVec2(L::Dims::nav_w, L::Dims::touch * 0.6f))) {
         std::error_code ec;
         const fs::path p(ps.browse_dir);
         if (p.has_parent_path() && p.parent_path() != p) {
@@ -128,22 +138,14 @@ void pageBank(AppContext& ctx, const Rect& r) {
     {
         const char* up = "\xE2\x96\xB2 UP ONE LEVEL";
         dl->AddText(Fonts::small, px_s,
-                    ImVec2(r.hi.x - wdg::textW(Fonts::small, px_s, up), r.lo.y),
+                    ImVec2(head.hi.x - wdg::textW(Fonts::small, px_s, up), head.lo.y),
                     Colors::dim, up);
     }
 
-    // -- Rozpocet spodku ----------------------------------------------------
-    // RELOAD dostava CELY radek u spodni hrany: je to jedina akce stranky,
-    // a jako uzke tlacitko v rohu se na dotyku hleda hur nez pas pres celou
-    // sirku. Nad nim fakta o nactene bance, nad nimi teprve seznam.
-    const float btn_y  = r.hi.y - L::Dims::touch;
-    const float fy     = btn_y - px_s - 16.f;
-    const float sep_y  = fy - 10.f;
-
     // -- Seznam ------------------------------------------------------------
-    const float list_top = r.lo.y + px_s + 14.f;
+    const float sep_y = list.hi.y;
     const float row = L::Dims::row_h;
-    float y = list_top;
+    float y = list.lo.y;
     const int n = (int)ps.banks.size();
 
     if (n == 0) {
@@ -175,6 +177,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
     }
 
     // -- Fakta o NACTENE bance --------------------------------------------
+    const float fy = fact_row.lo.y;
     dl->AddLine(ImVec2(r.lo.x, sep_y), ImVec2(r.hi.x, sep_y), Colors::line);
 
     const char* type = "\xE2\x80\x94";
@@ -204,9 +207,10 @@ void pageBank(AppContext& ctx, const Rect& r) {
                     Colors::warn, w);
     }
 
-    // RELOAD pres celou sirku.
-    ImGui::SetCursorScreenPos(ImVec2(r.lo.x, btn_y));
-    if (wdg::button("##reload", "RELOAD", r.w()) && !ctx.state.bank_path.empty())
+    // RELOAD dostava CELY radek u spodni hrany: je to jedina akce stranky,
+    // a jako uzke tlacitko v rohu se na dotyku hleda hur nez pas pres celou sirku.
+    ImGui::SetCursorScreenPos(btn.lo);
+    if (wdg::button("##reload", "RELOAD", btn.w()) && !ctx.state.bank_path.empty())
         ctx.requestBankReload(ctx.state.bank_path);
 }
 

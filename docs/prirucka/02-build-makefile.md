@@ -165,7 +165,7 @@ cmake --build build --config Release --parallel 4
 ```
 
 Vendored deps předtím zajistí `tools/fetch-third-party.sh` (vyžaduje `curl`,
-pro GLFW i `git`). Výslednou binárku najdete v `build/` (u VS generátoru
+i `git`). Výslednou binárku najdete v `build/` (u VS generátoru
 v `build/Release/`).
 
 > Pozn.: Cross-platform (Windows/Linux/Raspberry Pi) je cíl a build soubory ho

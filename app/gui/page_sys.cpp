@@ -54,22 +54,33 @@ struct SysMetrics {
     float unit;        // rozteC jedne radky voleb
     float lab_h;       // popisek nad blokem
     float btn_y;       // horni hrana radku tlacitek
+    float btn_h;       // vyska radku tlacitek (na uzkem panelu nizsi)
 };
 
 SysMetrics sysMetrics(const Rect& r) {
     SysMetrics m{};
-    m.btn_y = r.hi.y - L::Dims::touch;
     m.lab_h = wdg::fontPx(Fonts::small) + 6.f;
+
+    // Odzdola pas tlacitek, zbytek jsou tri bloky voleb.
+    L::Band band{r};
+    const Rect btns = band.takeBottom(L::g_screen.btn_h);
+    m.btn_y = btns.lo.y;
+    m.btn_h = btns.h();
 
     // Tri bloky (MIDI IN, CHANNEL, BUFFER), z toho CHANNEL ma dve radky voleb.
     constexpr int kBlocks   = 3;
     constexpr int kChipRows = 1 + kChanRows + 1;
-    const float avail = m.btn_y - L::Dims::gap - r.lo.y;
+    const float avail = band.h();
     m.unit = (avail - (float)kBlocks * m.lab_h
                     - (float)kBlocks * L::Dims::gap_s) / (float)kChipRows;
+    // Bunka se NIKDY nesmi vejit do mensi rozteCe, nez ma k dispozici — jinak
+    // radky lezou pres sebe. Na 800x480 to drive nastavalo: rozteC vysla 31 px
+    // a spodni mez clampu 36 px ji prebila, takze se bunky prekryvaly a dotykova
+    // zona spadla na 29 px. Spodni mez proto plati jen potud, pokud se vejde.
     m.cell_h = std::clamp(m.unit - L::Dims::gap_s, 36.f, 56.f);
+    m.cell_h = std::min(m.cell_h, std::max(m.unit - 2.f, 8.f));
     // Zona se nesmi dotknout sousedni radky, jinak klepnuti padne jinam.
-    m.hit_h  = std::min(L::Dims::touch, m.unit - 2.f);
+    m.hit_h  = std::max(std::min(L::Dims::touch, m.unit - 2.f), m.cell_h);
     return m;
 }
 
@@ -115,7 +126,7 @@ void pageSys(AppContext& ctx, const Rect& r,
         for (size_t i = 0; i < ps.midi_ports.size(); ++i)
             if (ps.midi_ports[i] == ctx.state.midi_port_name) { cur = (int)i + 1; break; }
 
-        const float rescan_w = 150.f;
+        const float rescan_w = L::Dims::act_w;
         const float row_y = y + m.lab_h;   // stejna uctara jako volby vedle
         const int hit = settingRow("##midi", r, m, y, "MIDI IN",
                                    items.data(), (int)items.size(), cur,
@@ -216,7 +227,7 @@ void pageSys(AppContext& ctx, const Rect& r,
     // Na kterem profilu nastroj jede, sviti ve stitku v paticce.
     {
         const L::Row row = L::splitRow(ImVec2(r.lo.x, m.btn_y), r.w(),
-                                       L::Dims::touch, 2);
+                                       m.btn_h, 2);
 
         ImGui::SetCursorScreenPos(row.at(0));
         if (wdg::button("##setuser", "SET CURRENT AS USER PROFILE", row.cell))

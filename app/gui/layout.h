@@ -13,6 +13,20 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
+
+namespace ithaca::gui {
+
+// Obdelnik v obrazovkovych souradnicich. Vlastni typ, at nemusime tahnout
+// imgui_internal.h (ImRect je interni API). Bydli tady, protoze je to
+// layoutovy primitiv — stranky ho jen prebiraji.
+struct Rect {
+    ImVec2 lo, hi;
+    float w() const { return hi.x - lo.x; }
+    float h() const { return hi.y - lo.y; }
+};
+
+} // namespace ithaca::gui
 
 namespace ithaca::gui::layout {
 
@@ -58,10 +72,27 @@ namespace Dims {
     // do pasu pres celou sirku je snadne i kdyz je nizsi.
     inline constexpr float param_trk_min = 52.f;
     inline constexpr float param_h_min   = param_trk_min + param_gap;
+    // Tvrda podlaha citelnosti. Pod param_h_min se jde jen na uzkem panelu a
+    // jen proto, ze alternativa je parametr, ktery na obrazovce vubec neni.
+    inline constexpr float param_trk_floor = 34.f;
+    inline constexpr float param_h_floor   = param_trk_floor + param_gap;
 
     // Mezery.
     inline constexpr float gap    = 10.f;
     inline constexpr float gap_s  = 6.f;
+
+    // -- Chipy (bunka radku, tlacitko, prepinac) ----------------------------
+    // Drive byly tyhle rozmery rozsete jako cisla primo ve widgets.h a ve
+    // strankach, prestoze tenhle soubor o sobe tvrdi, ze je jediny zdroj
+    // pravdy. Krome citelnosti to blokovalo i druhy layoutovy profil: kdyz
+    // cisla nejsou na jednom miste, neni co preskalovat.
+    inline constexpr float chip_h     = 48.f;   // vyska bunky v radku voleb
+    inline constexpr float chip_h_f   = 0.62f;  // vyska tlacitka/prepinace vuci touch
+    inline constexpr float btn_pad    = 22.f;   // vodorovne odsazeni textu v tlacitku
+    inline constexpr float chip_pad   = 12.f;   // odsazeni textu v prepinaci
+    inline constexpr float cell_clip  = 4.f;    // orez textu na hranu bunky
+    inline constexpr float act_w      = 150.f;  // uzke akcni tlacitko v radku (RESCAN)
+    inline constexpr float nav_w      = 120.f;  // navigace v zahlavi (UP ONE LEVEL)
 
     // Metry a bary.
     inline constexpr float bar_h  = 14.f;   // sustain / peak
@@ -75,6 +106,63 @@ namespace Dims {
     // Neni to dotykovy cil (ten je `touch`) — je to mez citelnosti: uzsi pole
     // uz neuveze ani kratky popisek.
     inline constexpr float cell_min = 56.f;
+}
+
+// -- Profil displeje --------------------------------------------------------
+// Nastroj cili na DVA panely a mezi nimi neni rozdil v meritku, ale v PLOSE:
+//
+//   7,0"  1280x720   210 DPI   telo stranky 1224 x 458
+//   4,3"   800x480   217 DPI   telo stranky  744 x 286   (61 % / 62 %)
+//
+// Hustota je prakticky stejna, takze `touch` = 74 px plati na obou a nic se
+// nezmensuje — jen se toho na obrazovku vejde min. Skalovani (--ui-scale) je
+// tedy spatny nastroj; spravna odpoved je JINE ROZVRZENI, ne mensi prvky.
+//
+// Compact profil resi tri mista, kde se rozvrzeni na malem panelu rozpadalo:
+//   - pas zalozek: ctverec by mel 104 px, tedy 23 % vysky displeje
+//   - SYS: rozteC radku vysla mensi nez vyska bunky (radky se prekryvaly)
+//   - PLAY: osm sloupcu po 93 px, do kterych se cisla nevejdou
+struct Screen {
+    bool  compact  = false;
+    float tab_h    = Dims::tab_h_max;  // vyska pasu zalozek
+    float btn_h    = Dims::touch;      // vyska akcniho pasu u spodni hrany
+    int   stat_cols = 7;               // sloupcu na PLAY v jednom radku
+};
+
+// Nastavuje ho renderScreen jednou za snimek, cte cely panel. Stejna kategorie
+// jako g_scale vyse — az se GUI vycleni do knihovny, stane se z obojiho
+// parametr, ktery si volajici drzi sam.
+inline Screen g_screen;
+
+// Strana ctvercove dlazdice hlavniho menu: SIRKA bunky, ne vyska radku.
+// Zalozky jsou hlavni mechanismus prepinani, takze dostavaji nejvetsi plochu
+// na panelu — ctverec se odviji od delsi (vodorovne) osy, ne od kratsi.
+// Strop je tab_h_max a ctvrtina vysky displeje, aby v sirokem okne na PC
+// nesnedly celou obrazovku.
+inline float squareTabH(float w, int n, float lcd_h) {
+    if (n <= 0) return Dims::tab_h_max;
+    const float cell = (w - Dims::tab_gap * (float)(n - 1)) / (float)n;
+    return std::min(std::min(cell, Dims::tab_h_max), lcd_h * 0.26f);
+}
+
+inline void setScreen(float lcd_w, float lcd_h, float content_w, int n_tabs) {
+    Screen s;
+    // Prah je plocha, ne uhlopricka: rozhoduje, kolik radku a sloupcu se vejde.
+    s.compact = (lcd_w < 1024.f || lcd_h < 600.f);
+
+    if (s.compact) {
+        // Obdelnikove zalozky. Ctverec by na 800x480 mel 104 px a snedl by
+        // ctvrtinu displeje; 56 px je porad nad prstem, protoze zalozka je
+        // siroka pres celou bunku (~104 px).
+        s.tab_h = Dims::subtab_h;
+        // Nizsi akcni pas. Tlacitka jsou siroka pres pul obrazovky, takze
+        // nizsi pas se porad trefuje snadno — a uvolni 28 px pro obsah.
+        s.btn_h = Dims::touch * Dims::chip_h_f;
+        s.stat_cols = 4;                // PLAY: dve radky, 4 + 3
+    } else {
+        s.tab_h = squareTabH(content_w, n_tabs, lcd_h);
+    }
+    g_screen = s;
 }
 
 // -- Roztazeny radek --------------------------------------------------------
@@ -112,16 +200,36 @@ struct Row {
     float height() const { return (float)rows * cell_h + (float)(rows - 1) * gap; }
 };
 
-// Strana ctvercove dlazdice hlavniho menu: SIRKA bunky, ne vyska radku.
-// Zalozky jsou hlavni mechanismus prepinani, takze dostavaji nejvetsi plochu
-// na panelu — ctverec se odviji od delsi (vodorovne) osy, ne od kratsi.
-// Strop je tab_h_max a ctvrtina vysky displeje, aby v sirokem okne na PC
-// nesnedly celou obrazovku.
-inline float squareTabH(float w, int n, float lcd_h) {
-    if (n <= 0) return Dims::tab_h_max;
-    const float cell = (w - Dims::tab_gap * (float)(n - 1)) / (float)n;
-    return std::min(std::min(cell, Dims::tab_h_max), lcd_h * 0.26f);
-}
+// -- Svisly rozpocet --------------------------------------------------------
+// Protejsek splitRow: ten deli vodorovny pas na sloupce, tenhle ukrajuje pasy
+// odshora a odzdola a zbytek nechava jako obsah.
+//
+// Proc: kazda stranka si to drive pocitala sama a pokazde jinak —
+//   page_bank:   btn_y = r.hi.y - touch;  fy = btn_y - px_s - 16;  sep_y = fy - 10
+//   page_log:    sel_y = r.hi.y - touch;  list_h = sel_y - gap - r.lo.y
+//   page_sys:    m.btn_y = r.hi.y - touch;  avail = m.btn_y - gap - r.lo.y
+// Ctyrikrat tataz myslenka ("ukroj pas u spodni hrany, zbytek je obsah")
+// ctyrmi ruznymi vyrazy a s jinymi mezerami. Zaroven to bylo hlavni misto,
+// kde se stranky spatne cetly.
+//
+// `gap` je mezera mezi ukrojenym pasem a zbytkem, ne uvnitr pasu.
+struct Band {
+    Rect r;
+
+    Rect takeTop(float h, float gap = Dims::gap) {
+        const Rect out{ r.lo, ImVec2(r.hi.x, r.lo.y + h) };
+        r.lo.y = std::min(r.lo.y + h + gap, r.hi.y);
+        return out;
+    }
+    Rect takeBottom(float h, float gap = Dims::gap) {
+        const Rect out{ ImVec2(r.lo.x, r.hi.y - h), r.hi };
+        r.hi.y = std::max(r.hi.y - h - gap, r.lo.y);
+        return out;
+    }
+    Rect  rest() const { return r; }
+    float h()    const { return r.h(); }
+    float w()    const { return r.w(); }
+};
 
 inline Row splitRow(ImVec2 origin, float w, float cell_h, int n,
                     float gap = Dims::gap_s) {

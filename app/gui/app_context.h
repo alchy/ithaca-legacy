@@ -12,8 +12,10 @@
 #include "midi/midi_input.h"
 #include "sample/sample_store.h"   // BankLoadProgress
 
+#include "glow_auto.h"
 #include "log_subscriber.h"
 #include "motion.h"
+#include "pace.h"
 #include "persistence.h"
 
 #include <atomic>
@@ -100,8 +102,16 @@ struct PanelState {
         // z nej dlouha klidna vlna, opticky odlisna od zivych L/R.
         float hist_p[kHist]{};
         int   head = 0;                   // pozice nejnovejsiho vzorku
+        // Zlomek kroku historie, ktery jeste nedosel. Posun je vazany na CAS
+        // (60 polozek/s), ne na snimek — jinak by se vlna pri usporne snimkove
+        // frekvenci sama zpomalila. Viz screen.cpp::waveUpdate.
+        float hist_acc = 0.f;
     };
     Wave wave;
+    // Regulator dosahu zare. Drzi nasobitel, ktery se skutecne kresli — smi
+    // byt nizsi nez state.wave_glow, kdyz kresleni stuh prekroci rozpocet.
+    GlowAuto glow;
+    float    glow_want = -1.f;   // posledni videna hodnota parametru (detekce zmeny)
     // Svisly stred plochy displeje. Nastavuje shell; PLAY na nej sazi vybrany
     // nastroj, aby byl na stredu OBRAZOVKY a ne na stredu sve vlastni plochy
     // (ta je nesymetricka: lista nahore je vyssi nez paticka dole).
@@ -150,6 +160,23 @@ struct PanelState {
     std::vector<log::LogEntry> log_scratch = std::vector<log::LogEntry>(kLogSnapshot);
 };
 
+// Hybe se na panelu neco, co potrebuje plne tempo prekreslovani?
+//
+// Ciste stavova cast predikatu — nesaha na engine, takze jde otestovat bez
+// nej. Vsechny tri polozky jsou PROBIHAJICI PRECHODY, ne ustalene stavy:
+// vytah dosedava, zavoj sporice se prolina, modalni overlay nabiha nebo mizi.
+// V ustalenem stavu (chrome_a == 1 nebo 0) uz se nic nemeni a tempo smi klesnout.
+inline bool panelAnimating(const PanelState& ps) {
+    if (!ps.splash_done)                       return true;
+    if (ps.reel.moving() || ps.reel_dragging)  return true;
+    if (ps.overlay_a > 0.004f)                 return true;
+    if (ps.chrome_a > 0.004f && ps.chrome_a < 0.996f) return true;
+    // Nedavny dotek. Prah je stejny jako u MIDI lamp: pod pul vteriny je to
+    // porad tataz interakce.
+    if (ps.idle_t < 0.5f)                      return true;
+    return false;
+}
+
 struct AppContext {
     ithaca::Engine                       engine;
     std::unique_ptr<ithaca::AudioDevice> audio;
@@ -171,6 +198,25 @@ struct AppContext {
     // Cisty shutdown: midi close, audio stop, subscriber clear. Volat pred
     // destrukci ImGui/GLFW. Engine destruktor sam uvolni voice/stream/resonance.
     void shutdown();
+
+    // Deje se neco, co potrebuje plne tempo prekreslovani? Jedno misto, kde se
+    // to rozhoduje — spojuje stav panelu (panelAnimating) se stavem nastroje.
+    //
+    // Pedal je tu zamerne: drzeny pedal kresli v pozadi vlastni stuhu, a ta se
+    // hybe i kdyz uz zadny hlas nezni.
+    bool busy() const {
+        if (panelAnimating(panels))                 return true;
+        if (reloadInProgress())                     return true;
+        if (engine.activeVoices() > 0)              return true;
+        if (engine.resonanceVoices() > 0)           return true;
+        if (engine.pedalCC() > 0)                   return true;
+        if (engine.noteOnRecent(500.f))             return true;
+        if (engine.noteOffRecent(500.f))            return true;
+        return false;
+    }
+
+    // Prepinani tempa; drzi prodlevu pred zpomalenim (viz pace.h).
+    PaceControl pace;
 
     // -- Async reload banky (spec 2026-06-10, cast A) --
     // requestBankReload: spusti worker thread, ktery vola engine.reloadBank

@@ -14,7 +14,7 @@ imgui.ini
 /third-party/miniaudio/
 /third-party/rtmidi/
 /third-party/imgui/
-/third-party/glfw/
+/third-party/sdl3/
 /third-party/.staging/
 
 # test outputs

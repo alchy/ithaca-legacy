@@ -47,18 +47,20 @@ void pageLog(AppContext& ctx, const Rect& r) {
 
     // Volba urovne u SPODNI hrany, vypis nad ni: nejnovejsi radky tak lezi
     // hned nad ovladanim, kterym se s nimi hybe.
-    const float cell_h = 48.f;
-    const float sel_y  = r.hi.y - L::Dims::touch;
-    logLevelRow(ctx, ImVec2(r.lo.x, sel_y + (L::Dims::touch - cell_h) * 0.5f),
-                r.w(), cell_h, L::Dims::touch);
+    const float cell_h = L::Dims::chip_h;
+    L::Band band{r};
+    const Rect sel  = band.takeBottom(L::Dims::touch);
+    const Rect list = band.rest();
 
-    const float list_h = sel_y - L::Dims::gap - r.lo.y;
+    // Volba je opticky nizsi nez jeji dotykova zona, proto se sazi na stred pasu.
+    logLevelRow(ctx, ImVec2(sel.lo.x, sel.lo.y + (L::Dims::touch - cell_h) * 0.5f),
+                sel.w(), cell_h, L::Dims::touch);
 
     // Kolik radku se vejde; zobrazujeme konec (nejnovejsi dole).
-    const int fits = (int)((list_h - 4.f) / row);
+    const int fits = (int)((list.h() - 4.f) / row);
     const int from = (n > fits) ? n - fits : 0;
 
-    float y = r.lo.y;
+    float y = list.lo.y;
     for (int i = from; i < n; ++i, y += row) {
         const auto& e = tmp[(size_t)i];
         char line[256];

@@ -81,7 +81,7 @@ soubory nezahodit. Aktuální schéma je **`schema_version` 4**.
 - **Ošetření hodnot při načtení.** `midi_channel` se ořízne na `[-1, 15]`
   (mimo rozsah → `-1` = OMNI). Geometrie okna se hlídá: `window_w < 320` spadne
   zpět na `1280`, `window_h < 240` na `720`. (Minimalizované okno na Windows
-  perzistuje jako 0×0 a `glfwCreateWindow(0,0)` by při dalším startu selhalo.)
+  perzistuje jako 0×0 a okno by se při dalším startu nevytvořilo.)
 - **Migrace BBE → Enhancer.** Dřívější fáze „BBE" se přejmenovala na „Enhancer".
   Klíče `enhancer_*` spadnou zpět na starší klíče `bbe_*`, pokud chybí:
   `enhancer_process` ← `bbe_definition`, `enhancer_contour` ← `bbe_bass`,
@@ -156,6 +156,24 @@ najdete na stránkách CONFIGu **MASTER** a **RESONANCE**.
 | `resonance_window_ms`  | int   | `12000`  | ≥ 0 (ms)       | ms   | Okno RAM-cache cílové rezonanční vrstvy pro každou notu. **Jen v JSONu — záměrně bez ovládacího prvku v GUI**; upravte ručně. Větší = delší rezonanční ocasy držené v RAM (více paměti). | jen JSON |
 | `preload_ms`           | int   | `150`    | ≥ 0 (ms)       | ms   | Délka hlavy (head) každého samplu předem nahraná v RAM (zbytek se streamuje z disku). **Jen v JSONu.** Větší = víc dat rezidentních v RAM, méně streamování z disku (méně podtečení) — užitečné na embedded s rychlou RAM / pomalým úložištěm; zvednutím lze celé krátké samply nahrát naráz. | jen JSON |
 | `cache_budget_mb`      | int   | `0`      | `0`=auto, jinak MB | MB | RAM rozpočet pro načtení banky. `0` = **auto** (~60 % fyzické RAM, přes `sysinfo`). `>0` = tvrdý strop. Při překročení se načítání **přeruší** (nekompletní banka + chyba v logu), místo aby spadlo na `bad_alloc`. **Jen v JSONu.** Chrání embedded (RPi5 / 4 GB) před OOM. | jen JSON |
+
+### Panel — vzhled a tempo
+
+Všechna tato pole mají i CLI přepínač (`--wave-glow`, `--wave-glow-budget`,
+`--frame-divider`, `--frame-divider-idle`), který persistovanou hodnotu při
+startu přepíše. Doporučené hodnoty pro Raspberry Pi jsou v
+[6 · Panel na Raspberry Pi](06-panel-a-rpi.md#ladicí-páky).
+
+| Klíč | Typ | Default | Rozsah | Význam | Kdo mění |
+|---|---|---|---|---|---|
+| `wave_glow` | float | `1.0` | `0` … `128` | Násobitel **dosahu záře** vlny v pozadí. `0` = holá čára bez záře (nejlevnější), `1` = výchozí vzhled, `>1` = širší rozostření. Záře je jediná věc na panelu, která roste s **výplní** — hlavní páka pro slabší grafiku. | CLI / JSON |
+| `wave_glow_budget_ms` | float | `0` | `0` … `1000` | Strop **periody snímku** [ms]; při překročení regulátor dosah sám sníží. `0` = automatika vypnutá. Na panelu 60 Hz je nominál 16,7 ms, takže ~25 znamená zmeškaný snímek. | CLI / JSON |
+| `frame_divider` | int | `1` | `1` … `4` | Dělitel snímkové frekvence panelu. `2` = 30 fps na 60 Hz, tedy poloviční práce. | CLI / JSON |
+| `frame_divider_idle` | int | `0` | `0` … `8` | Dělitel **v klidu** (nástroj mlčí, nikdo se ho nedotýká). `0` nebo hodnota ≤ `frame_divider` = nezpomalovat. Nahoru se přepíná okamžitě, dolů až po 2 s. | CLI / JSON |
+
+> Hodnoty se **sanitizují**, ne clampují: `std::clamp(NaN, lo, hi)` vrací NaN,
+> protože všechna porovnání s NaN jsou nepravdivá. Ručně editovaný soubor tedy
+> může obsahovat cokoli — `nan` i `-5` skončí jako `0`, `1e9` jako strop.
 
 ### DSP řetěz
 

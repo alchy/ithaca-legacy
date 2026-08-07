@@ -31,6 +31,26 @@ const char* const kTabs[PAGE_COUNT] = {
     "PLAY", "BANK", "TONE", "RESO", "DSP", "SYS", "LOG"
 };
 
+// -- Prostorove vyhlazeni modulace vlny -------------------------------------
+// Historie hlasitosti moduluje amplitudu nosne vlny. Vzorek na vzorek umi
+// skocit (uhoz do akordu), takze se okoli prumeruje — ale ZALEZI CIM.
+//
+// Puvodne to bylo obdelnikove okno sedmi vzorku s rovnymi vahami. Obdelnik ma
+// na skok odezvu ve tvaru RAMPY s ostrymi rohy na obou koncich, a prave tyhle
+// rohy byly na vlne videt jako zlomy ve chvilich naraznych zmen — na hladkem
+// vstupu se neprojevily, takze to dlouho neslo poznat.
+//
+// Hannovo okno vahy na krajich stahuje k nule, takze odezva na skok je
+// esovka bez rohu. Sirka je volena tak, aby sila vyhlazeni zustala stejna:
+// obdelnik o sedmi vzorcich ma efektivni sirku ~2,0 vzorku, tohle devitivzorkove
+// Hannovo take. Vlna tedy neztratila zivost, jen prestala mit rohy.
+constexpr int   kHistHalf = 4;
+constexpr float kHistW[2 * kHistHalf + 1] = {
+    0.09549f, 0.34549f, 0.65451f, 0.90451f, 1.00000f,
+    0.90451f, 0.65451f, 0.34549f, 0.09549f
+};
+constexpr float kHistWNorm = 1.f / 5.f;      // soucet vah je presne 5
+
 // Kontrolky. Zhasle jsou taky videt — aby bylo poznat, ze existuji.
 // Jsou na KAZDE strance: co je bezpecnostne dulezite, nesmi zmizet jen proto,
 // ze uzivatel zrovna neco ladi.
@@ -38,19 +58,42 @@ const char* const kTabs[PAGE_COUNT] = {
 // Sedi ve stejnem radku jako paticka, ne ve vlastnim pasu: samostatny pruh
 // ukrajel 36 px vysky na kazde strance, coz je na 7" panelu citelne — a jde
 // o tyz druh informace jako zbytek paticky (stav pristroje).
+// NOTE a OFF sem pribyly z PLAY. Je to stav PRISTROJE, ne stranky: ze do
+// nastroje chodi MIDI potrebujes vedet i ve chvili, kdy zrovna nastavujes DSP
+// a nic nehraje — presne jako u UNDERRUN nebo CLIP. Na PLAY tim navic zbyl
+// jeden sloupec, ktery na uzkem panelu chybel.
 void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
+    auto& ps = ctx.panels;
     const bool ur = ctx.engine.mainStreamUnderrunRecent(4000.f) ||
                     ctx.engine.resonanceStreamUnderrunRecent(4000.f);
     const bool clip = ctx.engine.masterPeakL() >= 0.999f ||
                       ctx.engine.masterPeakR() >= 0.999f;
+
+    // Vyhlazeni MIDI lamp: engine dava jen ano/ne s oknem 120 ms, bez nej by
+    // lampa cvakala. Vazane na CAS, ne na snimek, takze vypada stejne pri
+    // jakemkoli fps.
+    const float dt = ImGui::GetIO().DeltaTime;
+    const float k  = 1.f - std::exp(-dt / 0.20f);
+    ps.lamp_note += ((ctx.engine.noteOnRecent(120.f)  ? 1.f : 0.f) - ps.lamp_note) * k;
+    ps.lamp_off  += ((ctx.engine.noteOffRecent(120.f) ? 1.f : 0.f) - ps.lamp_off)  * k;
+
+    struct Lamp { const char* label; float on; ImU32 col; };
+    const Lamp lamps[] = {
+        { "NOTE",     ps.lamp_note,                  Colors::ink  },
+        { "OFF",      ps.lamp_off,                   Colors::dim  },
+        { "UNDERRUN", ur ? 1.f : 0.f,                Colors::warn },
+        { "CLIP",     clip ? 1.f : 0.f,              Colors::warn },
+        { "LOG",      ps.log_unseen ? 1.f : 0.f,     Colors::warn },
+    };
+
     // Na stred paticky, mezi stitek a audio rezim.
-    const float total = wdg::lampW("UNDERRUN") + wdg::lampW("CLIP") + wdg::lampW("LOG");
+    float total = 0.f;
+    for (const Lamp& l : lamps) total += wdg::lampW(l.label);
     float x = pos.x + (w - total) * 0.5f;
-    wdg::lamp(dl, ImVec2(x, pos.y), "UNDERRUN", ur ? 1.f : 0.f, Colors::warn);
-    x += wdg::lampW("UNDERRUN");
-    wdg::lamp(dl, ImVec2(x, pos.y), "CLIP", clip ? 1.f : 0.f, Colors::warn);
-    x += wdg::lampW("CLIP");
-    wdg::lamp(dl, ImVec2(x, pos.y), "LOG", ctx.panels.log_unseen ? 1.f : 0.f, Colors::warn);
+    for (const Lamp& l : lamps) {
+        wdg::lamp(dl, ImVec2(x, pos.y), l.label, l.on, l.col);
+        x += wdg::lampW(l.label);
+    }
 }
 
 // Paticka: stitek nastroje vlevo, audio rezim vpravo. Stitek je tu proto,
@@ -76,49 +119,90 @@ void footer(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w,
                 Colors::dimmer, buf);
 }
 
-// Pozadi ve stylu PS3 XMB: gradient do svetla vpravo nahore + nekolik mekce
-// se vlnicich stuh.
-//
-// KLICOVE: tvar NENI prubeh zvuku. Kreslit vzorky primo bylo pri pomalem tempu
-// prilis neklidne — pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal
-// cist tvar vlny. Tvar je proto parametricky (soucet tri pomalych sinusovek
-// s driftujici fazi) a zvuk mu jen MODULUJE amplitudu pres pomalou obalku.
-// Vysledek pri hre dycha, v tichu se sotva znatelne vlni.
-// `vis` skaluje sytost vlny. PLAY je ambientni obrazovka, tam je vlna hvezda;
-// ostatni jsou pracovni, tam ustoupi, aby neprochazela textem. Vypnout ji ale
-// nelze — indikace, ze zvuk hraje, ma platit vsude.
-void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
-                ImVec2 wave_lo, ImVec2 wave_hi, float vis) {
-    const float w = hi.x - lo.x;
-
-    // Gradient: vpravo nahore svetlejsi, vlevo dole tmavsi.
+// Vypln plochy displeje. Gradient: vpravo nahore svetlejsi, vlevo dole tmavsi.
+void backgroundFill(ImDrawList* dl, ImVec2 lo, ImVec2 hi) {
     dl->AddRectFilledMultiColor(lo, hi,
         Colors::lcd,
         IM_COL32(0x18, 0x46, 0xa8, 255),
         IM_COL32(0x0c, 0x27, 0x66, 255),
         IM_COL32(0x08, 0x1c, 0x4c, 255));
+}
 
-    // -- Obalka ze zvuku ---------------------------------------------------
+// Stav vlny — JEDNOU ZA SNIMEK, oddelene od kresleni.
+//
+// Drive to bylo v jedne funkci s kreslenim, a ta se pri zapnutem sporici volala
+// DVAKRAT (jednou pod ovladani, podruhe nad zavoj). Historie se tim posouvala
+// dvakrat za snimek, takze vlna ve sporici plynula dvojnasobnou rychlosti a
+// obalky mely polovicni casovou konstantu. Rozdeleni to resi z podstaty: stav
+// se aktualizuje jednou, kreslit se smi kolikrat je potreba.
+// -- Casove konstanty vlny --------------------------------------------------
+// Vsechno vyhlazovani vlny bylo puvodne vazane na SNIMEK: koeficienty jako
+// 0,10 nebo 0,995 se aplikovaly jednou za prekresleni. Pri 60 fps to vypadalo
+// spravne, ale znamenalo to, ze animace zavisi na snimkove frekvenci —
+// zahozeny snimek ji zmenil a pri 12 fps by se vlna sama zpomalila petkrat.
+// Bez teto opravy nejde snizit tempo prekreslovani (a to je na Pi ta nejvetsi
+// uspora, jaka je k dispozici).
+//
+// Konstanty jsou prepocitane z puvodnich koeficientu pri 60 fps:
+//   tau = -(1/60) / ln(1 - k)
+// takze pri 60 fps vypada vsechno PRESNE jako predtim a lisi se to teprve
+// tam, kde bylo puvodni chovani spatne.
+namespace wave_tau {
+    inline constexpr float env_up   = 0.158f;   // bylo k = 0,10  (nastup noty)
+    inline constexpr float env_down = 0.825f;   // bylo k = 0,020 (dozniv)
+    inline constexpr float vis_up   = 0.110f;   // bylo k = 0,14
+    inline constexpr float vis_down = 2.770f;   // bylo k = 0,006 (~4 s vyhasnuti)
+    inline constexpr float ped_up   = 0.0747f;  // bylo k = 0,20
+    inline constexpr float ped_down = 0.200f;   // bylo k = 0,08
+    inline constexpr float norm     = 3.325f;   // bylo *0,995 za snimek
+}
+
+// Historie plyne v PEVNEM tempu, ne po snimcich: 60 polozek za vterinu, tedy
+// pruchod sirkou (128 polozek) trva 2,13 s bez ohledu na to, kolikrat se
+// mezitim prekreslilo.
+constexpr float kHistRate  = 60.f;
+// Dlouhy vypadek (load banky, prepnuti okna) se NEDOHANI — jinak by vlna
+// skokem poskocila a obalky by se propadly. Stejna uvaha jako clamp
+// v motion::Settle.
+constexpr float kWaveDtMax = 0.10f;
+
+void waveUpdate(AppContext& ctx) {
     auto& wv = ctx.panels.wave;
     constexpr int kN = ithaca::Engine::kScopeSize;
-    static float raw_l[kN], raw_r[kN];
+    // Lokalni, ne `static`: 8 KB na zasobniku je levnejsi nez skryty globalni
+    // stav, ktery by po vyclenení GUI do knihovny sdilely vsechny instance.
+    float raw_l[kN], raw_r[kN];
     ctx.engine.scopeSnapshot(raw_l, raw_r, kN);
 
-    float sl = 0.f, sr = 0.f;
-    for (int i = 0; i < kN; ++i) { sl += raw_l[i] * raw_l[i]; sr += raw_r[i] * raw_r[i]; }
+    // JEDEN pruchod pro obe veliciny. Drive to byly tri (suma ctvercu + dvakrat
+    // absPeak) pres tychz 2048 vzorku. Poradi akumulace je zachovane, takze
+    // vysledek je bitove tentyz.
+    float sl = 0.f, sr = 0.f, pk_l = 0.f, pk_r = 0.f;
+    for (int i = 0; i < kN; ++i) {
+        const float a = raw_l[i], b = raw_r[i];
+        sl += a * a; sr += b * b;
+        pk_l = std::max(pk_l, std::fabs(a));
+        pk_r = std::max(pk_r, std::fabs(b));
+    }
     const float rms_l = std::sqrt(sl / (float)kN);
     const float rms_r = std::sqrt(sr / (float)kN);
 
+    // Krok casu misto "jednoho snimku" — viz wave_tau vyse.
+    const float dt   = std::min(ImGui::GetIO().DeltaTime, kWaveDtMax);
+    const auto  lag  = [dt](float tau) { return 1.f - std::exp(-dt / tau); };
+    const float decay = std::exp(-dt / wave_tau::norm);
+
     // Auto-rozsah, aby vlna vypadala stejne pri tichem i hlasitem hrani —
     // pozadi neni meridlo. Spodni mez drzi ticho klidne.
-    wv.norm_rms = std::max(std::max(rms_l, rms_r), wv.norm_rms * 0.995f);
+    wv.norm_rms = std::max(std::max(rms_l, rms_r), wv.norm_rms * decay);
     const float ref = std::max(wv.norm_rms, 0.005f);
 
     // Pomaly follower: svizne nahoru (aby nastup noty byl videt), liny dolu
     // (aby dozniv plynul misto skoku). Tohle je to, co dela klid.
-    auto follow = [](float& env, float target) {
-        const float k = (target > env) ? 0.10f : 0.020f;
-        env += (target - env) * k;
+    const float k_up   = lag(wave_tau::env_up);
+    const float k_down = lag(wave_tau::env_down);
+    auto follow = [k_up, k_down](float& env, float target) {
+        env += (target - env) * ((target > env) ? k_up : k_down);
     };
     follow(wv.env_l, std::clamp(rms_l / ref, 0.f, 1.f));
     follow(wv.env_r, std::clamp(rms_r / ref, 0.f, 1.f));
@@ -129,7 +213,8 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     // v tichu zesilil sum a vlna by nezhasla nikdy.
     const float lvl = std::max(rms_l, rms_r);
     const float vis_target = (lvl > 2.0e-4f) ? 1.f : 0.f;
-    wv.vis += (vis_target - wv.vis) * (vis_target > wv.vis ? 0.14f : 0.006f);
+    wv.vis += (vis_target - wv.vis)
+            * lag(vis_target > wv.vis ? wave_tau::vis_up : wave_tau::vis_down);
 
     // Blizkost prehlceni: od -9 dB (0) k 0 dB (1). Bere skutecny peak metr,
     // ktery ma vlastni decay, takze kratka spicka zustane chvili videt.
@@ -138,30 +223,54 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     wv.clip = std::clamp((pk_db + 9.f) / 9.f, 0.f, 1.f);
 
     // Nova hodnota do historie: HLASITOST bloku (0..1), ne znamenkova spicka.
-    auto absPeak = [](const float* v, int n) {
-        float m = 0.f;
-        for (int i = 0; i < n; ++i) m = std::max(m, std::fabs(v[i]));
-        return m;
-    };
-    const float pk_l = absPeak(raw_l, kN);
-    const float pk_r = absPeak(raw_r, kN);
-    wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * 0.995f);
+    // pk_l/pk_r uz jsou spocitane vyse ve spolecnem pruchodu.
+    wv.norm_peak = std::max(std::max(pk_l, pk_r), wv.norm_peak * decay);
     const float pref = std::max(wv.norm_peak, 0.01f);
 
     // Pedal: vlastni obalka i historie. Neni to zvuk, takze se nenormalizuje —
     // 0..127 je uz absolutni skala.
     const float ped = std::clamp((float)ctx.engine.pedalCC() / 127.f, 0.f, 1.f);
-    wv.env_p += (ped - wv.env_p) * ((ped > wv.env_p) ? 0.20f : 0.08f);
+    wv.env_p += (ped - wv.env_p)
+              * lag((ped > wv.env_p) ? wave_tau::ped_up : wave_tau::ped_down);
 
-    const int prev = wv.head;
-    wv.head = (wv.head + 1) % PanelState::Wave::kHist;
-    // Casove vyhlazeni pri vstupu: bez nej by kazdy frame skocil jinam a podel
-    // vlny by vznikaly schody.
-    wv.hist_l[wv.head] = 0.55f * std::clamp(pk_l / pref, 0.f, 1.f)
-                       + 0.45f * wv.hist_l[prev];
-    wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
-                       + 0.45f * wv.hist_r[prev];
-    wv.hist_p[wv.head] = 0.35f * wv.env_p + 0.65f * wv.hist_p[prev];
+    // Posun historie je vazany na CAS, ne na snimek: nova polozka vstupuje
+    // 60x za vterinu at se kresli jakkoli casto. Drive to byla jedna polozka
+    // na snimek, takze pruchod sirkou trval 2,1 s pri 60 fps, ale 10,7 s pri
+    // 12 fps — vlna by se pri usporne snimkove frekvenci sama zpomalila.
+    wv.hist_acc += dt * kHistRate;
+    // Strop poctu kroku: po dlouhem vypadku nema smysl dohanet, vlna by
+    // poskocila. dt uz je omezene, tohle je jen pojistka.
+    int steps = (int)wv.hist_acc;
+    if (steps > 8) { steps = 8; wv.hist_acc = 0.f; }
+    wv.hist_acc -= (float)steps;
+
+    for (int s = 0; s < steps; ++s) {
+        const int prev = wv.head;
+        wv.head = (wv.head + 1) % PanelState::Wave::kHist;
+        // Casove vyhlazeni pri vstupu: bez nej by kazdy krok skocil jinam a
+        // podel vlny by vznikaly schody.
+        wv.hist_l[wv.head] = 0.55f * std::clamp(pk_l / pref, 0.f, 1.f)
+                           + 0.45f * wv.hist_l[prev];
+        wv.hist_r[wv.head] = 0.55f * std::clamp(pk_r / pref, 0.f, 1.f)
+                           + 0.45f * wv.hist_r[prev];
+        wv.hist_p[wv.head] = 0.35f * wv.env_p + 0.65f * wv.hist_p[prev];
+    }
+}
+
+// Stuhy. Cte stav, ktery pripravil waveUpdate — sam nic nemeni, takze se smi
+// volat vickrat za snimek (pod ovladanim i nad zavojem sporice).
+//
+// KLICOVE: tvar NENI prubeh zvuku. Kreslit vzorky primo bylo pri pomalem tempu
+// prilis neklidne — pozadi ma indikovat, ze zvuk hraje, ne aby se z nej dal
+// cist tvar vlny. Tvar je proto parametricky (soucet tri pomalych sinusovek
+// s driftujici fazi) a zvuk mu jen MODULUJE amplitudu pres pomalou obalku.
+// Vysledek pri hre dycha, v tichu se sotva znatelne vlni.
+// `vis` skaluje sytost vlny. PLAY je ambientni obrazovka, tam je vlna hvezda;
+// ostatni jsou pracovni, tam ustoupi, aby neprochazela textem. Vypnout ji ale
+// nelze — indikace, ze zvuk hraje, ma platit vsude.
+void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
+                 ImVec2 wave_lo, ImVec2 wave_hi, float vis) {
+    const auto& wv = ctx.panels.wave;
 
     // -- Tvar --------------------------------------------------------------
     const float wh = wave_hi.y - wave_lo.y;
@@ -171,7 +280,8 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
     const float t = (float)ImGui::GetTime();
 
     constexpr int kPts = 128;
-    static float pts[kPts];
+    float  pts[kPts];             // lokalni, ne `static` — viz waveUpdate
+    ImVec2 poly[kPts];            // body jednoho tahu; sdili je vsechny tri prujezdy zare
 
     // Ctyri stuhy ve dvou rodinach. KAZDY KANAL JE JINAK PROSVICEN — levy
     // svetly, pravy hlubsi modry — takze je od sebe poznas, i kdyz se prolinaji
@@ -195,15 +305,35 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
         { 5.2f, 0.19f, 0.55f, 0.86f, 0.20f, 3.0f, Colors::dim,    2 },
     };
 
-    // Zar: tyz tvar trikrat pres sebe — siroky a slaby vespod, uzky a jasny
-    // nahore. Levny bloom, ktery z care udela svetlo.
+    // Zar kolem krivky. Jadro je uzke a jasne, kolem nej spojity spad do ztracena
+    // — cara ma pohasinat do okoli, ne byt pas s hranou. Tvar nese primo
+    // geometrie (pruhlednost ve vrcholech), viz wdg::waveGlow.
+    //
+    // Jadro se drzi POD jednim pixelem polomeru: nad nim uz cara opticky
+    // ztloustne a spojity spad se ztrati v plose. Dosah zare zustava tam, kde
+    // byl nejsirsi z byvalych tri obtahu (th * 3.4).
+    // Dosah zare je nasobeny parametrem (GuiState::wave_glow) pres regulator,
+    // ktery ho smi snizit pod tlakem — viz glow_auto.h. Nula = hola cara.
+    const float glow_scale = ctx.panels.glow.scale();
     auto glow = [&](const float* p, int n, float amp, ImU32 col, float a, float th) {
-        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a * 0.16f, th * 3.4f);
-        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a * 0.36f, th * 1.9f);
-        wdg::waveLine(dl, wave_lo.x, w, axis, p, n, amp, 1.f, col, a,         th);
+        if (a <= 0.004f) return;
+        const int m = wdg::waveBuild(poly, kPts, wave_lo.x, w, axis, p, n, amp, 1.f);
+        if (m < 2) return;
+        // Nasobitel skaluje SPAD, ne cely polomer: pri 1 vyjde presne puvodni
+        // dosah (th * 3.4), pri 0 zbyde jadro, tedy hola cara.
+        //
+        // Strop na VYSCE PLOCHY: zar se stejne orezava na `wave_hi/lo`, takze
+        // za tou hranici uz je kazdy dalsi pixel jen vyplna navic pri naprosto
+        // stejnem obrazu. Bez toho by --wave-glow 1000 vypadalo identicky jako
+        // --wave-glow 50 a jen by to zabijelo grafiku.
+        const float core = std::min(0.8f, th * 0.30f);
+        const float span = std::min(std::max(th * 3.4f - core, 0.f) * glow_scale,
+                                    wave_hi.y - wave_lo.y);
+        wdg::waveGlow(dl, poly, m, core, core + span, col, a);
     };
 
     dl->PushClipRect(wave_lo, wave_hi, true);
+
     for (const Ribbon& R : ribs) {
         const float env = (R.src == 2) ? wv.env_p : (R.src == 1 ? wv.env_r : wv.env_l);
         // Pedalova stuha ma VLASTNI viditelnost: seslapnuty pedal ma byt videt
@@ -236,23 +366,23 @@ void background(AppContext& ctx, ImDrawList* dl, ImVec2 lo, ImVec2 hi,
             // hodnota je vlevo, starsi se odsouvaji.
             const int hn = PanelState::Wave::kHist;
             const int c = (int)(u * (hn - 1));
-            float hsum = 0.f; int hcnt = 0;
-            // Prostorove vyhlazeni. Okno se MUSI orezat na rozsah historie:
-            // pri modulu pres kruhovy buffer by na levem okraji sahlo "pred
-            // nejnovejsi vzorek" a pretecklo na konec kruhu, kde lezi data
-            // stara dve vteriny — amplituda tam skocila a vlna se tvrde zlomila.
-            for (int d = -3; d <= 3; ++d) {
-                const int cd = c + d;
-                if (cd < 0 || cd >= hn) continue;
-                const int k = (wv.head - cd + hn * 3) % hn;
-                hsum += hist[k]; ++hcnt;
+            float hsum = 0.f;
+            for (int d = -kHistHalf; d <= kHistHalf; ++d) {
+                // Index se ORIZNE na rozsah historie (opakuje se krajni
+                // vzorek). Preskakovani by u kraju zuzilo okno a zmenila by se
+                // tam sila vyhlazeni; a modulo pres kruhovy buffer by na levem
+                // okraji sahlo "pred nejnovejsi vzorek" a pretecklo na konec
+                // kruhu, kde lezi data stara dve vteriny.
+                const int cd = std::clamp(c + d, 0, hn - 1);
+                const int k  = (wv.head - cd + hn * 3) % hn;
+                hsum += hist[k] * kHistW[d + kHistHalf];
             }
-            if (hcnt == 0) hcnt = 1;
-            const float hv = hsum / (float)hcnt;
+            const float hv = hsum * kHistWNorm;
             pts[i] = v * (0.28f + 0.72f * hv);
         }
         glow(pts, kPts, amp, col, R.alpha * vis * vis_r, R.th);
     }
+
     dl->PopClipRect();
 }
 
@@ -282,9 +412,12 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
 
     // Rozvrzeni se pocita PRED kreslenim, protoze pozadi potrebuje vedet,
     // kde konci lista a kde zacinaji kontrolky.
-    // Zalozky jsou ctverce o strane rovne SIRCE bunky (viz squareTabH), takze
-    // vyska radku se pocita az tady, kdyz je znama sirka displeje.
-    const float tab_h  = L::squareTabH(cw, PAGE_COUNT, lcd_hi.y - lcd_lo.y);
+    // Profil displeje: na sirokem panelu ctvercove zalozky, na uzkem
+    // obdelnikove (ctverec by tam snedl ctvrtinu vysky). Vyska radku se proto
+    // pocita az tady, kdyz je znama velikost displeje. Nastavuje se JEDNOU za
+    // snimek a cte ho cely panel — viz layout::Screen.
+    L::setScreen(lcd_hi.x - lcd_lo.x, lcd_hi.y - lcd_lo.y, cw, PAGE_COUNT);
+    const float tab_h = L::g_screen.tab_h;
     const float top    = lcd_lo.y + pad + tab_h + L::Dims::gap;
     // Paticka sedi u SPODNI hrany se stejnym odsazenim, jake ma pas zalozek
     // od horni (`pad`). Drive mela vlastni pasmo `foot_h` a text se kreslil
@@ -297,7 +430,30 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
     ctx.panels.lcd_center_y = (lcd_lo.y + lcd_hi.y) * 0.5f;
 
     const float wave_vis = (ctx.panels.page == PAGE_PLAY) ? 1.0f : 0.42f;
-    background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi, wave_vis);
+    const float lcd_w    = lcd_hi.x - lcd_lo.x;
+
+    // Stav vlny se posune JEDNOU za snimek, at se pak kresli kolikrat chce.
+    waveUpdate(ctx);
+    backgroundFill(dl, lcd_lo, lcd_hi);
+
+    // Dosah zare: rucni zmena parametru prebije to, kam dosel regulator.
+    // Vstupem regulace je PERIODA snimku, ne cas kresleni — viz glow_auto.h.
+    if (ctx.panels.glow_want != ctx.state.wave_glow) {
+        ctx.panels.glow_want = ctx.state.wave_glow;
+        ctx.panels.glow.reset(ctx.state.wave_glow);
+    }
+    {
+        const float dt = ImGui::GetIO().DeltaTime;
+        ctx.panels.glow.step(dt * 1000.f, ctx.state.wave_glow,
+                             ctx.state.wave_glow_budget_ms, dt);
+    }
+
+    // Stuhy POD ovladanim. Ve sporici je prekryje zavoj, takze kdyz uz je
+    // temer neprusvitny, nema smysl je kreslit — prah je tentyz, jaky pouziva
+    // wdg::waveGlow pro zanedbatelnou pruhlednost.
+    const float veil0 = 1.f - ctx.panels.chrome_a;
+    if (veil0 < 0.996f)
+        waveRibbons(ctx, dl, lcd_w, body.lo, body.hi, wave_vis);
 
     // -- Sporic ------------------------------------------------------------
     // Po peti minutach bez DOTYKU se ovladaci prvky pomalu vytrati a zustane
@@ -373,7 +529,9 @@ void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
             IM_COL32(0x0c, 0x27, 0x66, (int)(veil * 255)),
             IM_COL32(0x08, 0x1c, 0x4c, (int)(veil * 255)));
         ImGui::PopClipRect();
-        background(ctx, dl, lcd_lo, lcd_hi, body.lo, body.hi, wave_vis * veil);
+        // Jen stuhy — vypln uz je pod zavojem. Drive se tady volalo cele
+        // pozadi vcetne gradientu a vcetne posunu historie vlny.
+        waveRibbons(ctx, dl, lcd_w, body.lo, body.hi, wave_vis * veil);
     }
 
     ImGui::End();
