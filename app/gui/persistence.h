@@ -66,6 +66,12 @@ struct GuiState {
     // Strop, kolik smi kresleni stuh stat na snimek [ms]. Kdyz se prekroci,
     // regulator dosah SNIZI (viz glow_auto.h). 0 = automatika vypnuta.
     float wave_glow_budget_ms = 0.f;
+    // Delitel snimkove frekvence panelu (glfwSwapInterval). 1 = kazdy vsync,
+    // 2 = kazdy druhy, tedy 30 fps na panelu 60 Hz. Panel je pristroj, ne hra;
+    // vlna je ambientni vizualizer, kteremu 30 snimku bohate staci, a je to
+    // presne polovina prace. Delitel (ne cilove fps) proto, ze takhle zustava
+    // obraz synchronizovany s panelem a netrha se.
+    int   frame_divider = 1;
     // -- Audio (Faze 8) --
     int   audio_block_size  = 256;    // runtime-menitelny z GUI (BUFFER combo)
     int   audio_sample_rate = 48000;  // jen z JSONu; GUI zobrazuje read-only

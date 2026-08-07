@@ -55,6 +55,10 @@ static void printUsage(const char* argv0) {
         "                     strop PERIODY snimku; nad nim regulator dosah sam\n"
         "                     snizi (0 = vypnuto). Na panelu 60 Hz je nominal\n"
         "                     16,7 ms, takze ~25 znamena zmesknuty snimek.\n"
+        "  --frame-divider <n> delitel snimkove frekvence panelu (1..4, default 1):\n"
+        "                     1 = kazdy vsync, 2 = kazdy druhy (30 fps na 60 Hz).\n"
+        "                     Panel je pristroj, ne hra — polovicni tempo je\n"
+        "                     polovicni prace. Persistovano v state.json.\n"
         "  --fullscreen       rezim panelu: okno bez dekoraci pres celou obrazovku.\n"
         "                     Na displeji zabudovanem v nastroji nema byt videt\n"
         "                     titulek okna. Vyzaduje bezici display server (X11/\n"
@@ -203,6 +207,7 @@ int main(int argc, char* argv[]) {
     std::string cli_bank_dir;
     std::string cli_log_level;
     std::optional<float> cli_glow, cli_glow_budget;
+    std::optional<int>   cli_divider;
     bool cli_fullscreen = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -215,6 +220,8 @@ int main(int argc, char* argv[]) {
             cli_glow = std::strtof(argv[++i], nullptr);
         } else if (a == "--wave-glow-budget" && i + 1 < argc) {
             cli_glow_budget = std::strtof(argv[++i], nullptr);
+        } else if (a == "--frame-divider" && i + 1 < argc) {
+            cli_divider = std::atoi(argv[++i]);
         } else if (a == "--fullscreen") {
             cli_fullscreen = true;
         } else {
@@ -239,23 +246,34 @@ int main(int argc, char* argv[]) {
     if (cli_glow)        st.wave_glow = sanitizeGlow(*cli_glow, kWaveGlowMax);
     if (cli_glow_budget) st.wave_glow_budget_ms = sanitizeGlow(*cli_glow_budget,
                                                                kWaveBudgetMax);
+    if (cli_divider)     st.frame_divider = std::clamp(*cli_divider, 1, 4);
     // Kdyz nastroj nejede na vychozim vzhledu, ma to byt videt v logu — jinak
     // se "proc je vlna jina" hleda hodne blbe.
     if (st.wave_glow != 1.f || st.wave_glow_budget_ms > 0.f) {
         LOG_INFO("gui", "Wave glow: %.2f%s", (double)st.wave_glow,
                  st.wave_glow_budget_ms > 0.f ? " (auto)" : "");
     }
+    if (st.frame_divider != 1)
+        LOG_INFO("gui", "Frame divider: %d", st.frame_divider);
 
-    // 2. GLFW window. Pozice nastavime az po vytvoreni (GLFW nema
-    //    GLFW_POSITION_X hint v 3.3; v 3.4+ ano, ale my vendorujeme starsi).
+    // 2. GLFW window.
     glfwSetErrorCallback(glfwErrorCb);
     if (!glfwInit()) return 1;
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    // Hinty PREZIVAJI mezi volanimi glfwCreateWindow, dokud se nezavolá
+    // glfwDefaultWindowHints(). Kdyz tedy selze vytvoreni okna v rezimu panelu
+    // a spadne se na zalozni cestu, zdedilo by zalozni okno GLFW_DECORATED
+    // FALSE — okno bez titulku, ktere nejde ani presunout, ani zavrit.
+    // Kazde vytvoreni proto zacina od cistych hintu.
+    auto baseHints = [] {
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
+    };
     // Rezim panelu: bez dekoraci pres celou obrazovku. Na displeji zabudovanem
     // v nastroji nema byt videt titulek okna ani ramecek okenniho manazera —
     // ramecek panelu si kreslime sami (a je to mrtva zona pro dotyk).
@@ -267,27 +285,34 @@ int main(int argc, char* argv[]) {
             // Bez dekoraci a pres celou plochu, ale NE exkluzivni fullscreen:
             // ten prepina rezim obrazovky a na Pi zbytecne komplikuje prepnuti
             // na konzoli, kdyz se neco pokazi.
+            int mx = 0, my = 0;
+            glfwGetMonitorPos(mon, &mx, &my);
+            baseHints();
             glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
             glfwWindowHint(GLFW_RED_BITS, mode->redBits);
             glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
             glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
             glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
+            glfwWindowHint(GLFW_POSITION_X, mx);
+            glfwWindowHint(GLFW_POSITION_Y, my);
             w = glfwCreateWindow(mode->width, mode->height,
                                  "Ithaca Legacy", nullptr, nullptr);
             if (w) {
-                int mx = 0, my = 0;
-                glfwGetMonitorPos(mon, &mx, &my);
-                glfwSetWindowPos(w, mx, my);
                 st.window.w = mode->width;
                 st.window.h = mode->height;
             }
         }
     }
     if (!w) {
+        // Pozice se zadava HINTEM, ne presunem po vytvoreni (GLFW 3.4+). Okno
+        // tak rovnou vznikne, kde ma; pri presouvani po vytvoreni ho nektere
+        // okenni manazery staci ukazat na svem miste a byl videt skok.
+        baseHints();
+        glfwWindowHint(GLFW_POSITION_X, st.window.x);
+        glfwWindowHint(GLFW_POSITION_Y, st.window.y);
         w = glfwCreateWindow(st.window.w, st.window.h,
                              "Ithaca Legacy", nullptr, nullptr);
         if (!w) { glfwTerminate(); return 1; }
-        glfwSetWindowPos(w, st.window.x, st.window.y);
     }
     // Off-screen clamp: pokud byl pred ulozenim pripojeny extra monitor a po
     // restartu uz neni, restorovana pozice muze byt mimo viditelne plochy.
@@ -319,7 +344,16 @@ int main(int argc, char* argv[]) {
         st.window.y = 100;
     }
     glfwMakeContextCurrent(w);
-    glfwSwapInterval(1); // vsync
+    // Vsync s delitelem. Delitel 2 = prekresluje se kazdy druhy snimek panelu,
+    // tedy 30 fps na 60 Hz — a to je presne polovicni prace.
+    //
+    // Zamerne pres swap interval, ne pres vlastni casovac se sleepem: obraz
+    // tak zustava synchronizovany s panelem a netrha se. Vlastni tempovani by
+    // muselo cekat mimo vsync a driv nebo pozdeji by se rozeslo.
+    //
+    // Bezpecne je to teprve od C0: vyhlazovani vlny je vazane na cas, takze
+    // polovicni tempo nezmeni rychlost animace. Pred tim by se vlna zpomalila.
+    glfwSwapInterval(st.frame_divider);
 
     // 3. ImGui init.
     IMGUI_CHECKVERSION();

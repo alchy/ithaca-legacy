@@ -261,6 +261,8 @@ std::optional<GuiState> loadState(const std::filesystem::path& path) {
         s.wave_glow_budget_ms =
             sanitizeGlow(readF("wave_glow_budget_ms", s.wave_glow_budget_ms),
                          kWaveBudgetMax);
+        // Delitel snimkove frekvence. Nad 4 uz to neni uspora, ale trhani.
+        s.frame_divider = std::clamp(readI("frame_divider", s.frame_divider), 1, 4);
 
         // -- Genericke sekce "<prefix><STAGE>.<Param::id>" ---------------------
         // Persistence jmena parametru nezna — proste vezme vse pod prefixem
@@ -368,6 +370,7 @@ bool saveState(const std::filesystem::path& path, const GuiState& s) {
         f << "  \"audio_block_size\": "   << s.audio_block_size     << ",\n";
         f << "  \"wave_glow\": "          << s.wave_glow            << ",\n";
         f << "  \"wave_glow_budget_ms\": " << s.wave_glow_budget_ms << ",\n";
+        f << "  \"frame_divider\": "      << s.frame_divider        << ",\n";
         f << "  \"audio_sample_rate\": "  << s.audio_sample_rate;
         // Genericke sekce: "<prefix><STAGE>.<Param::id>". Carka se pise PRED
         // kazdy radek (ne za), takze prazdna mapa nenecha visici carku.
