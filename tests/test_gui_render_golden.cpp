@@ -145,12 +145,22 @@ struct Harness {
     void seedWaveHistory() {
         auto& w = ctx.panels.wave;
         w.head = 0;
+        // Rezim nahledu ITHACA_WAVE_STEP: misto hladkeho tvaru se do historie
+        // da SKOK. Odpovida to naraznemu zesileni (uhoz do akordu) a je to
+        // jediny stav, ve kterem je videt, jak se chova prostorove vyhlazeni
+        // modulace — pri hladkem vstupu vypada dobre kazde okno.
+        const bool step = std::getenv("ITHACA_WAVE_STEP") != nullptr;
         for (int i = 0; i < PanelState::Wave::kHist; ++i) {
-            // Pevny nemonotonni tvar — jen aby historie nebyla konstantni.
             const float u = (float)i / (float)PanelState::Wave::kHist;
-            w.hist_l[i] = 0.50f + 0.40f * std::sin(u * 12.f);
-            w.hist_r[i] = 0.45f + 0.35f * std::sin(u * 9.f + 1.3f);
-            w.hist_p[i] = 0.30f + 0.20f * std::sin(u * 3.f + 0.7f);
+            if (step) {
+                const float s = (i > PanelState::Wave::kHist / 2) ? 0.95f : 0.10f;
+                w.hist_l[i] = s; w.hist_r[i] = s; w.hist_p[i] = s;
+            } else {
+                // Pevny nemonotonni tvar — jen aby historie nebyla konstantni.
+                w.hist_l[i] = 0.50f + 0.40f * std::sin(u * 12.f);
+                w.hist_r[i] = 0.45f + 0.35f * std::sin(u * 9.f + 1.3f);
+                w.hist_p[i] = 0.30f + 0.20f * std::sin(u * 3.f + 0.7f);
+            }
         }
     }
 };
@@ -391,7 +401,7 @@ TEST_CASE("otisk vykresleneho panelu") {
 
     // Nahled varianty vzhledu — otisk by nutne nesedel, protoze se kresli
     // neco jineho, nez na cem byla baseline porizena.
-    if (std::getenv("ITHACA_GLOW")) {
+    if (std::getenv("ITHACA_GLOW") || std::getenv("ITHACA_WAVE_STEP")) {
         std::printf("[golden] rezim nahledu (ITHACA_GLOW), otisk se neporovnava\n");
         ImGui::DestroyContext();
         return;

@@ -31,6 +31,26 @@ const char* const kTabs[PAGE_COUNT] = {
     "PLAY", "BANK", "TONE", "RESO", "DSP", "SYS", "LOG"
 };
 
+// -- Prostorove vyhlazeni modulace vlny -------------------------------------
+// Historie hlasitosti moduluje amplitudu nosne vlny. Vzorek na vzorek umi
+// skocit (uhoz do akordu), takze se okoli prumeruje — ale ZALEZI CIM.
+//
+// Puvodne to bylo obdelnikove okno sedmi vzorku s rovnymi vahami. Obdelnik ma
+// na skok odezvu ve tvaru RAMPY s ostrymi rohy na obou koncich, a prave tyhle
+// rohy byly na vlne videt jako zlomy ve chvilich naraznych zmen — na hladkem
+// vstupu se neprojevily, takze to dlouho neslo poznat.
+//
+// Hannovo okno vahy na krajich stahuje k nule, takze odezva na skok je
+// esovka bez rohu. Sirka je volena tak, aby sila vyhlazeni zustala stejna:
+// obdelnik o sedmi vzorcich ma efektivni sirku ~2,0 vzorku, tohle devitivzorkove
+// Hannovo take. Vlna tedy neztratila zivost, jen prestala mit rohy.
+constexpr int   kHistHalf = 4;
+constexpr float kHistW[2 * kHistHalf + 1] = {
+    0.09549f, 0.34549f, 0.65451f, 0.90451f, 1.00000f,
+    0.90451f, 0.65451f, 0.34549f, 0.09549f
+};
+constexpr float kHistWNorm = 1.f / 5.f;      // soucet vah je presne 5
+
 // Kontrolky. Zhasle jsou taky videt — aby bylo poznat, ze existuji.
 // Jsou na KAZDE strance: co je bezpecnostne dulezite, nesmi zmizet jen proto,
 // ze uzivatel zrovna neco ladi.
@@ -294,19 +314,18 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
             // hodnota je vlevo, starsi se odsouvaji.
             const int hn = PanelState::Wave::kHist;
             const int c = (int)(u * (hn - 1));
-            float hsum = 0.f; int hcnt = 0;
-            // Prostorove vyhlazeni. Okno se MUSI orezat na rozsah historie:
-            // pri modulu pres kruhovy buffer by na levem okraji sahlo "pred
-            // nejnovejsi vzorek" a pretecklo na konec kruhu, kde lezi data
-            // stara dve vteriny — amplituda tam skocila a vlna se tvrde zlomila.
-            for (int d = -3; d <= 3; ++d) {
-                const int cd = c + d;
-                if (cd < 0 || cd >= hn) continue;
-                const int k = (wv.head - cd + hn * 3) % hn;
-                hsum += hist[k]; ++hcnt;
+            float hsum = 0.f;
+            for (int d = -kHistHalf; d <= kHistHalf; ++d) {
+                // Index se ORIZNE na rozsah historie (opakuje se krajni
+                // vzorek). Preskakovani by u kraju zuzilo okno a zmenila by se
+                // tam sila vyhlazeni; a modulo pres kruhovy buffer by na levem
+                // okraji sahlo "pred nejnovejsi vzorek" a pretecklo na konec
+                // kruhu, kde lezi data stara dve vteriny.
+                const int cd = std::clamp(c + d, 0, hn - 1);
+                const int k  = (wv.head - cd + hn * 3) % hn;
+                hsum += hist[k] * kHistW[d + kHistHalf];
             }
-            if (hcnt == 0) hcnt = 1;
-            const float hv = hsum / (float)hcnt;
+            const float hv = hsum * kHistWNorm;
             pts[i] = v * (0.28f + 0.72f * hv);
         }
         glow(pts, kPts, amp, col, R.alpha * vis * vis_r, R.th);
