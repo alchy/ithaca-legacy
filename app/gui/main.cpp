@@ -4,6 +4,7 @@
 // (engine, audio, MIDI; banka se nacita asynchronne) → render loop
 // (screen.cpp kresli panel, sem patri jen debounce a overlay) → uloz → shutdown.
 #include "app_context.h"
+#include "frame_stats.h"
 #include "pages.h"
 #include "splash.h"
 #include "master_page.h"
@@ -13,6 +14,8 @@
 #include "theme.h"
 #include "widgets.h"
 #include "layout.h"
+
+#include "util/log.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -367,7 +370,13 @@ int main(int argc, char* argv[]) {
     if (ctx.state.config_page < 0 || ctx.state.config_page >= kPages)
         ctx.state.config_page = 0;
 
+    // Statistika snimku. Sype se do logu jednou za minutu na urovni `debug`,
+    // takze se zapina prepnutim urovne na strance LOG — bez rekompilace, i na
+    // hotovem pristroji. Viz frame_stats.h, proc percentily a proc geometrie.
+    FrameStats stats;
+
     while (!glfwWindowShouldClose(w)) {
+        const auto t_frame0 = std::chrono::steady_clock::now();
         glfwPollEvents();
         // Drz ctx.state.window_* aktualni kazdy frame, aby panely mohly
         // pocitat layout pri resize. Predtim se aktualizovalo jen pri shutdown.
@@ -442,12 +451,32 @@ int main(int argc, char* argv[]) {
             ctx.engine.rebuildResonanceCache(ctx.state.resonance_layer_db);
 
         ImGui::Render();
+
+        // Hranice mereni. Vsechno VYSE je nase prace: udalosti, logika panelu
+        // a stavba draw listu (tam vznikaji vertexy stuh, ktere optimalizujeme).
+        // Nic z toho neblokuje. Vsechno NIZE je ovladac — a vcetne cekani na
+        // vsync, ktere na Windows nespadne do SwapBuffers, ale uz do drivejsiho
+        // GL volani. Proto se to nedeli jemneji: bylo by to deleni sumu.
+        const auto t_cpu1 = std::chrono::steady_clock::now();
+
         int fbw, fbh; glfwGetFramebufferSize(w, &fbw, &fbh);
         glViewport(0, 0, fbw, fbh);
         glClearColor(0.1f, 0.1f, 0.1f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(w);
+        const auto t_present1 = std::chrono::steady_clock::now();
+
+        const auto ms = [](auto a, auto b) {
+            return std::chrono::duration<float, std::milli>(b - a).count();
+        };
+        const ImDrawData* dd = ImGui::GetDrawData();
+        stats.add(ms(t_frame0, t_cpu1), ms(t_cpu1, t_present1),
+                  dd ? dd->TotalVtxCount : 0, dd ? dd->TotalIdxCount : 0,
+                  dd ? dd->CmdListsCount : 0);
+        char statline[192];
+        if (stats.maybeReport(ImGui::GetTime(), statline, sizeof(statline)))
+            LOG_DEBUG("gui", "%s", statline);
     }
 
     // 7. Save state pred shutdown. ctx.state.window_* uz je aktualni z render

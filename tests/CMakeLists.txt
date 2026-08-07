@@ -197,6 +197,47 @@ add_executable(test_decrypting_handle test_decrypting_handle.cpp)
 target_link_libraries(test_decrypting_handle PRIVATE ithaca_core doctest)
 add_test(NAME test_decrypting_handle COMMAND test_decrypting_handle)
 
+# Statistika snimku GUI (frame_stats.h je header-only a nezna ani ImGui, ani
+# engine — proto staci doctest).
+add_executable(test_frame_stats test_frame_stats.cpp)
+target_include_directories(test_frame_stats PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui)
+target_compile_features(test_frame_stats PRIVATE cxx_std_20)
+target_link_libraries(test_frame_stats PRIVATE doctest)
+add_test(NAME test_frame_stats COMMAND test_frame_stats)
+
+# Otisk vykresleneho panelu bez displeje. ImGui zadny backend nepotrebuje —
+# Render() vyprodukuje ImDrawData i do prazdna, a jeho otisk je presny popis
+# toho, co by se nakreslilo. Stavi se jen kdyz je ImGui vendorovane (stejna
+# podminka jako u cile ithaca-gui).
+#
+# Linkuji se stejne GUI zdrojaky jako do ithaca-gui, bez main.cpp — GUI nema
+# vlastni knihovnu, je to entry-point binary (viz test_log_subscriber).
+if(TARGET imgui)
+    add_executable(test_gui_render_golden
+        test_gui_render_golden.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/app_context.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/embedded_fonts.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/log_subscriber.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/persistence.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/screen.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/splash.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/page_play.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/page_bank.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/page_params.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/page_sys.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui/page_log.cpp)
+    target_include_directories(test_gui_render_golden PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/gui
+        ${CMAKE_BINARY_DIR}/generated)
+    add_dependencies(test_gui_render_golden ithaca_fonts)
+    target_link_libraries(test_gui_render_golden PRIVATE ithaca_core imgui doctest)
+    if(NOT MSVC)
+        target_compile_options(test_gui_render_golden PRIVATE -Wno-nontrivial-memcall)
+    endif()
+    add_test(NAME test_gui_render_golden COMMAND test_gui_render_golden)
+endif()
+
 # End-to-end round-trip pakovane banky: bake_soundbank.py (numpy) + engine
 # --inspect. SKIP (77) kdyz python3 nema numpy. Vyzaduje cil ithaca-cli.
 if(TARGET ithaca-cli)
