@@ -61,12 +61,20 @@ automaticky.
 ## Verzování schématu a migrace
 
 Soubor v sobě nese číslo verze formátu, aby ho šlo bezpečně rozvíjet a starší
-soubory nezahodit. Aktuální schéma je **`schema_version` 4**.
+soubory nezahodit. Aktuální schéma je **`schema_version` 7**.
 
-- `loadState()` přijme soubory se `schema_version` **3 nebo 4**. Jakákoli jiná
+- `loadState()` přijme soubory se `schema_version` **3 až 7**. Jakákoli jiná
   hodnota (nebo chybějící `schema_version`) způsobí, že se načtení nezdaří a GUI
   startuje z výchozích hodnot. Po úspěšném načtení se `schema_version` v paměti
-  bezpodmínečně nastaví na `4`, takže **další uložení soubor přepíše jako v4**.
+  bezpodmínečně nastaví na `7`, takže **další uložení soubor přepíše jako v7**.
+
+- **Co která verze přinesla:**
+
+  | verze | změna | migrace ze starší |
+  |---|---|---|
+  | v5 | DSP řetěz přestal být sada plochých klíčů a stal se **generickou sekcí** `dsp.<STAGE>.<Param::id>` | staré ploché klíče (`convolver_mix`, `agc_target`, …, včetně ještě staršího `bbe_*` → `ENHANCER`) se namapují do nové sekce |
+  | v6 | přibyla sekce `defaults.` (uživatelský profil) | čistě aditivní — starý soubor sekci prostě nemá a `RESET` jede tovární |
+  | v7 | `midi_channel` (jeden kanál) → `midi_channel_mask` (maska) | odvodí se: `−1` → `0xFFFF` (OMNI), *n* → `1 << n` |
 - **Všechny klíče se čtou defenzivně.** Chybějící **nebo poškozený** (nečíselný)
   klíč spadne zpět na výchozí hodnotu struktury `GuiState` *jen pro to jedno
   pole* — zbytek souboru se i tak načte. (`loadState` čte každé číselné/bool
@@ -78,8 +86,7 @@ soubory nezahodit. Aktuální schéma je **`schema_version` 4**.
   default. Jediný špatný klíč už nezahodí celý stav; jen chybějící nebo cizí
   `schema_version` vrátí z `loadState` `nullopt` (a tím úplný pád na výchozí
   hodnoty).
-- **Ošetření hodnot při načtení.** `midi_channel` se ořízne na `[-1, 15]`
-  (mimo rozsah → `-1` = OMNI). Geometrie okna se hlídá: `window_w < 320` spadne
+- **Ošetření hodnot při načtení.** Geometrie okna se hlídá: `window_w < 320` spadne
   zpět na `1280`, `window_h < 240` na `720`. (Minimalizované okno na Windows
   perzistuje jako 0×0 a okno by se při dalším startu nevytvořilo.)
 - **Migrace BBE → Enhancer.** Dřívější fáze „BBE" se přejmenovala na „Enhancer".
@@ -88,8 +95,7 @@ soubory nezahodit. Aktuální schéma je **`schema_version` 4**.
   `enhancer_enabled` ← `bbe_enabled`. Soubor zapsaný před přejmenováním si tedy
   při prvním načtení převede staré hodnoty BBE do Enhanceru a poté se přepíše s
   novými klíči.
-- `log_level` má při prázdné/chybějící hodnotě default `"info"`; `midi_channel`
-  má při prázdné/chybějící hodnotě default `-1`.
+- `log_level` má při prázdné/chybějící hodnotě default `"info"`.
 
 ## Přehled všech polí
 
@@ -104,7 +110,7 @@ rozsahy při nastavení přes ovládací prvek a DSP fáze ořezávají navíc j
 
 | JSON klíč        | Typ  | Default | Povolené hodnoty | Význam | Nastavuje |
 |------------------|------|---------|------------------|--------|-----------|
-| `schema_version` | int  | `4`     | při načtení přijme 3 nebo 4; vždy se zapíše jako 4 | Verze formátu souboru | jen init/migrace |
+| `schema_version` | int  | `7`     | při načtení přijme 3 až 7; vždy se zapíše jako 7 | Verze formátu souboru | jen init/migrace |
 
 ### Geometrie okna
 
@@ -137,7 +143,7 @@ cestou. Výběr banky v GUI i CLI je tak jako tak stejný.
 | JSON klíč        | Typ    | Default | Rozsah/hodnoty | Význam | Nastavuje |
 |------------------|--------|---------|----------------|--------|-----------|
 | `midi_port_name` | string | `""`    | podřetězec názvu reálného portu | MIDI vstupní port. Při startu se hledá jako podřetězec v seznamu živých portů; při shodě se zpět zapíše přesný název portu. Bez shody → varování, žádný port se neotevře. | GUI / init |
-| `midi_channel`   | int    | `-1`    | `-1` = OMNI, `0`–`15` = kanál (od nuly) | MIDI přijímací kanál. OMNI přijímá všechny kanály — nutné pro vícekanálový materiál (např. levá/pravá ruka v Synthesii na kanálech 0/1). | GUI / init |
+| `midi_channel_mask` | int | `65535` | bitová maska, bit *i* = kanál *i*+1 | MIDI přijímacé kanály. `0xFFFF` (65535) = všech šestnáct, tedy OMNI; `0` = nepřijde nic (panel to hlásí jako `NONE - MIDI MUTED`). Maska místo jednoho indexu proto, že jde zapnout libovolná **podmnožina** kanálů — třeba jen 1 a 3. | GUI (SYS → CHANNEL) |
 
 ### Parametry hlasů a rezonance
 
@@ -175,61 +181,66 @@ startu přepíše. Doporučené hodnoty pro Raspberry Pi jsou v
 > protože všechna porovnání s NaN jsou nepravdivá. Ručně editovaný soubor tedy
 > může obsahovat cokoli — `nan` i `-5` skončí jako `0`, `1e9` jako strop.
 
-### DSP řetěz
+### DSP řetěz — generická sekce `dsp.`
 
-DSP řetěz zpracovává smíchaný stereo buffer v tomto pevném audio pořadí:
-**Convolver → AGC → Enhancer → Limiter**. Každá fáze má svůj příznak `enabled`
-(všechny jsou defaultně **vypnuté**, takže čerstvá konfigurace zní transparentně)
-plus vlastní parametry. (Pozor: pořadí *klíčů* v JSONu se liší od pořadí v řetězu,
-protože klíče Convolveru přibyly později — viz příklad. Parser na pořadí nehledí.)
+DSP řetěz zpracovává smíchaný stereo buffer v pevném pořadí
+**Convolver → AGC → Enhancer → Limiter**. Všechny fáze jsou defaultně **vypnuté**,
+takže čerstvá konfigurace zní transparentně.
 
-#### Convolver — simulace ozvučnice/těla (fáze 0 řetězu)
+Od schematu **v5** už to nejsou ploché klíče jako `convolver_mix`, ale jedna
+generická sekce tvaru:
 
-Přidává „tělo" nástroje ke vzorkům snímaným zblízka, a to krátkou FIR konvolucí.
-Rozsahy z `Convolver::kParams` (`engine/dsp/convolver.cpp`).
+```
+"dsp.<STÁGE>.<Param::id>": <hodnota>
+```
 
-| JSON klíč           | Typ   | Default | Rozsah         | Význam | Nastavuje |
-|---------------------|-------|---------|----------------|--------|-----------|
-| `convolver_enabled` | bool  | `false` | `true`/`false` | Zapnout fázi Convolver | GUI (stránka CONVOLVER) |
-| `convolver_mix`     | float | `0.15`  | `0` … `1`      | Poměr wet/dry (nízko = jemné tělo) | GUI (CONVOLVER) |
-| `convolver_choice`  | int   | `0`     | `0` nebo `1`   | Výběr IR: `0` = „Body soft (modal)", `1` = „Body bright (modal)". Obě se syntetizují procedurálně (`ir_modal.cpp`), nejsou to soubory. | GUI (CONVOLVER) |
-| `convolver_decay`   | float | `0.5`   | `0` … `1`      | Tvarování doznívání IR (kratší ↔ delší tělo) | GUI (CONVOLVER) |
-| `convolver_tone`    | float | `0.6`   | `0` … `1`      | Dolní propust IR (barva) | GUI (CONVOLVER) |
-| `convolver_size`    | float | `0.5`   | `0` … `1`      | Velikost těla (modální frekvenční posun: menší ↔ větší) | GUI (CONVOLVER) |
+Proč: dřív byl každý parametr vypsaný ručně na **šesti místech** (struktura,
+načtení, uložení, aplikace na engine, zrcadlení, porovnání) a zapomenutí
+kteréhokoli byla **tichá** chyba — parametr se prostě neuložil. Teď se přidání
+parametru do stage nikde jinde neprojeví.
 
-#### AGC (fáze 1 řetězu)
+Klíčem je `Param::id`, tedy stabilní identifikátor určený právě pro persistenci
+(ne popisek v GUI). Neznámý klíč se při načtení ignoruje, chybějící nechá stage
+její vlastní default — starší i ručně editovaný soubor tedy prochází.
 
-Rozsahy z `AGC::kParams` (`engine/dsp/agc.cpp`).
+Ke každé stáge se navíc ukládá `enabled` (bool) a u Convolveru `choice`
+(index voliče IR; `-1` = stránka volič nemá).
 
-| JSON klíč         | Typ   | Default | Rozsah         | Jednotka | Význam | Nastavuje |
-|-------------------|-------|---------|----------------|----------|--------|-----------|
-| `agc_enabled`     | bool  | `false` | `true`/`false` | —    | Zapnout fázi AGC | GUI (stránka AGC) |
-| `agc_target`      | float | `0.15`  | `0.01` … `0.5` | RMS (lineárně) | Cílové RMS, ke kterému AGC stahuje | GUI (AGC) |
-| `agc_release_ms`  | float | `200.0` | `10` … `2000`  | ms   | Doba release AGC (attack je pevně 5 ms) | GUI (AGC) |
-| `agc_floor`       | float | `0.05`  | `0` … `1`      | zisk (lineárně) | Minimální podlaha zisku (AGC nikdy nezeslabí pod ni) | GUI (AGC) |
+| Stáge | `Param::id` | Default | Rozsah | Jednotka | Význam |
+|---|---|---|---|---|---|
+| `CONVOLVER` | `mix`          | `0.15` | `0` … `1` | — | Poměr wet/dry (nízko = jemné tělo) |
+| `CONVOLVER` | `decay`        | `0.50` | `0` … `1` | — | Tvarování doznìvání IR |
+| `CONVOLVER` | `tone`         | `0.60` | `0` … `1` | — | Dolní propust IR (barva) |
+| `CONVOLVER` | `size`         | `0.50` | `0` … `1` | — | Velikost těla (modální frekvenční posun) |
+| `AGC` | `target_rms`         | `0.15` | `0.01` … `0.5` | RMS | Cílové RMS, ke kterému AGC stahuje |
+| `AGC` | `release_ms`         | `200`  | `10` … `2000` | ms | Release AGC (attack je pevně 5 ms) |
+| `AGC` | `gain_floor`         | `0.05` | `0` … `1` | zisk | Minimální podlaha zisku |
+| `ENHANCER` | `process`       | `0`    | `0` … `12` | dB | Dynamický boost vyššího pásma + exciter |
+| `ENHANCER` | `contour`       | `0`    | `0` … `12` | dB | Boost nízkého pásma |
+| `ENHANCER` | `mid`           | `0`    | `-6` … `6` | dB | Presence zvon (~2,7 kHz) |
+| `LIMITER` | `threshold_db`   | `0`    | `-40` … `0` | dB | Práh peaku (stereo-linkovaný) |
+| `LIMITER` | `release_ms`     | `200`  | `10` … `2000` | ms | Release limiteru (attack je pevně 1 ms) |
 
-#### Enhancer (fáze 2 řetězu) — dříve „BBE"
+Rozsahy pocházejí z tabulek `Param` v
+`engine/dsp/{convolver,agc,enhancer,limiter}.cpp`.
 
-Originální klavírní enhancer (paralelní boost 3 pásem + dynamické výšky +
-harmonický exciter + all-pass fáze). Rozsahy z `Enhancer::kParams`
-(`engine/dsp/enhancer.cpp`).
+### Sekce `defaults.` — uživatelský profil
 
-| JSON klíč           | Typ   | Default | Rozsah      | Jednotka | Význam | Nastavuje |
-|---------------------|-------|---------|-------------|----------|--------|-----------|
-| `enhancer_enabled`  | bool  | `false` | `true`/`false` | — | Zapnout fázi Enhancer | GUI (stránka ENHANCER) |
-| `enhancer_process`  | float | `0.0`   | `0` … `12`  | dB   | PROCESS — dynamický boost vyššího pásma + exciter (boost, když je hlasité) | GUI (ENHANCER) |
-| `enhancer_contour`  | float | `0.0`   | `0` … `12`  | dB   | CONTOUR — boost nízkého pásma | GUI (ENHANCER) |
-| `enhancer_mid`      | float | `0.0`   | `-6` … `6`  | dB   | MID — presence zvon (~2,7 kHz) | GUI (ENHANCER) |
+Stejný tvar, jiný prefix. Je to snapshot, na který vrací tlačítko
+`RESET TO FACTORY PROFILE` … respektive to, co si uživatel uložil jako svůj
+výchozí stav:
 
-#### Limiter (fáze 3 řetězu)
+```
+"dsp.CONVOLVER.mix": 0.4,          <- živý stav
+"defaults.CONVOLVER.mix": 0.25,    <- uživatelský default
+```
 
-Rozsahy z `Limiter::kParams` (`engine/dsp/limiter.cpp`).
+Pokrývá **všechny** stránky parametrů, tedy i `MASTER` a `RESONANCE`, které
+žádná DSP stage nejsou — klíčem je jméno stránky. Prázdná sekce znamená, že si
+uživatel žádný profil neuložil a `RESET` jede na tovární `Param::def`.
 
-| JSON klíč              | Typ   | Default | Rozsah         | Jednotka | Význam | Nastavuje |
-|------------------------|-------|---------|----------------|----------|--------|-----------|
-| `limiter_enabled`      | bool  | `false` | `true`/`false` | —    | Zapnout fázi limiteru | GUI (stránka LIMITER) |
-| `limiter_threshold_db` | float | `0.0`   | `-40` … `0`    | dB   | Práh peaku (stereo-linkovaný) | GUI (LIMITER) |
-| `limiter_release_ms`   | float | `200.0` | `10` … `2000`  | ms   | Doba release limiteru (attack je pevně 1 ms) | GUI (LIMITER) |
+USER profil se ukládá **sám při ukončení** — čím nástroj vypnete, s tím ho zase
+zapnete. Podrobnosti v [H · GUI](../reference/H-gui.md).
 
 ### Volič stránky CONFIGu
 
@@ -257,36 +268,36 @@ výstup.
 
 ## Přepsání z příkazové řádky
 
-`ithaca-gui` přijímá dva přepínače (`app/gui/main.cpp`), které **při startu**
+`ithaca-gui` přijímá přepínače (`app/gui/main.cpp`), které **při startu**
 přepíšou perzistované hodnoty — ještě předtím, než se stav aplikuje na engine:
 
-| Přepínač             | Přepisuje         | Chování |
-|----------------------|-------------------|---------|
-| `--bank-dir <cesta>` | `bank_search_dir` | Nastaví adresář pro hledání bank. Aplikuje se, jen pokud není prázdný. |
-| `--log-level <úr>`   | `log_level`       | `debug` \| `info` \| `warn` \| `error` \| `fatal`. Aplikuje se, jen pokud není prázdný. |
+| Přepínač | Přepisuje | Chování |
+|---|---|---|
+| `--bank-dir <cesta>` | `bank_search_dir` | Adresář pro hledání bank. Aplikuje se, jen pokud není prázdný. |
+| `--log-level <úr>` | `log_level` | `debug` \| `info` \| `warn` \| `error` \| `fatal`. |
+| `--wave-glow <f>` | `wave_glow` | Dosah záře vlny, `0` … `128`. |
+| `--wave-glow-budget <ms>` | `wave_glow_budget_ms` | Strop periody snímku pro automatiku, `0` = vypnuto. |
+| `--frame-divider <n>` | `frame_divider` | Dělitel snímkové frekvence, `1` … `4`. |
+| `--frame-divider-idle <n>` | `frame_divider_idle` | Dělitel v klidu, `0` … `8`. |
+
+Nepersistované (platí jen pro daný běh):
+
+| Přepínač | Chování |
+|---|---|
+| `--fullscreen` | Režim panelu. Na KMSDRM je to výchozí stav a přepínač se jen zaloguje. |
+| `--video-driver <n>` | Vynutí SDL backend (`kmsdrm`, `x11`, `wayland`, …). |
 
 `--help` / `-h` vypíše nápovědu a skončí.
 
 Důležité: přepsaná hodnota se **perzistuje** jako každá jiná. Jakmile jednou
-předáte `--bank-dir` nebo `--log-level`, nová hodnota se zapíše zpět do
-`state.json` (při dalším debounce zápisu nebo při ukončení), takže každý přepínač
-typicky stačí předat jednou.
-
-## Komentovaný příklad `state.json`
-
-Následující odpovídá přesnému pořadí klíčů a formátu, který zapisuje `saveState`,
-s vestavěnými výchozími hodnotami. (JSON nepovoluje komentáře; koncové poznámky za
-`//` jsou tu jen pro dokumentaci — když tohle vkládáte do reálného souboru,
-odstraňte je.)
-
-```json
+před```json
 {
-  "schema_version": 4,                 // vzdy 4
-  "bank_search_dir": "/Users/me/banks",// adresar pro hledani bank
+  "schema_version": 7,                 // vzdy 7
+  "bank_search_dir": "/home/me/banks", // adresar pro hledani bank
   "bank_path": "",                     // banka nactena pri startu ("" = zadna)
   "midi_port_name": "",                // MIDI port hledany podle podretezce
   "log_level": "info",                 // debug|info|warn|error|fatal
-  "midi_channel": -1,                  // -1 = OMNI, 0..15 = kanal
+  "midi_channel_mask": 65535,          // 0xFFFF = vsech 16 kanalu (OMNI)
   "master_gain_db": 0,                 // -60 .. 6 dB
   "resonance_enabled": true,           // sympaticka rezonance zapnuta
   "resonance_gain_db": -12,            // -60 .. 0 dB
@@ -298,22 +309,30 @@ odstraňte je.)
   "preload_ms": 150,                   // preload hlavy na sampl (jen JSON)
   "cache_budget_mb": 0,                // 0=auto (~60% RAM); RAM rozpocet (jen JSON)
   "window_x": 100,                     // px (mimo obrazovku se orizne)
-  "window_y": 100,                     // px (mimo obrazovku se orizne)
+  "window_y": 100,                     // px
   "window_w": 1280,                    // px
   "window_h": 720,                     // px (HW cil 1280x720)
-  "agc_enabled": false,                // faze AGC defaultne vypnuta
-  "agc_target": 0.15,                  // 0.01 .. 0.5 RMS
-  "agc_release_ms": 200,               // 10 .. 2000 ms
-  "agc_floor": 0.05,                   // 0 .. 1 zisk
-  "enhancer_enabled": false,           // faze Enhancer defaultne vypnuta
-  "enhancer_process": 0,               // 0 .. 12 dB
-  "enhancer_contour": 0,               // 0 .. 12 dB
-  "enhancer_mid": 0,                   // -6 .. 6 dB
-  "limiter_enabled": false,            // limiter defaultne vypnuty
-  "limiter_threshold_db": 0,           // -40 .. 0 dB
-  "limiter_release_ms": 200,           // 10 .. 2000 ms
   "config_page": 0,                    // 0=MASTER 1=RESONANCE 2=CONVOLVER 3=AGC 4=ENHANCER 5=LIMITER
-  "convolver_enabled": false,          // convolver defaultne vypnuty
+  "audio_block_size": 256,             // 32 .. 8192
+  "wave_glow": 1,                      // dosah zare vlny; 0 = hola cara
+  "wave_glow_budget_ms": 0,            // 0 = automatika vypnuta
+  "frame_divider": 1,                  // 1 = kazdy vsync, 2 = 30 fps na 60 Hz
+  "frame_divider_idle": 0,             // 0 = v klidu nezpomalovat
+  "audio_sample_rate": 48000,          // jen JSON / v GUI read-only
+
+  // Genericke sekce: "<prefix><STAGE>.<Param::id>". Carka se pise PRED kazdy
+  // radek, takze prazdna mapa nenecha visici carku.
+  "dsp.CONVOLVER.mix": 0.15,
+  "dsp.CONVOLVER.decay": 0.5,
+  "dsp.AGC.target_rms": 0.15,
+  "dsp.LIMITER.threshold_db": 0,
+  "dsp.CONVOLVER.enabled": false,      // kazda stage ma enabled
+  "dsp.CONVOLVER.choice": 0,           // volic IR (jen Convolver)
+
+  "defaults.MASTER.master_db": 0,      // uzivatelsky profil, stejny tvar
+  "defaults.CONVOLVER.mix": 0.25
+}
+```onvolver_enabled": false,          // convolver defaultne vypnuty
   "convolver_mix": 0.15,               // 0 .. 1 wet/dry
   "convolver_choice": 0,               // 0=Body soft, 1=Body bright (modal)
   "convolver_decay": 0.5,              // 0 .. 1
@@ -329,9 +348,9 @@ Booly se zapisují jako `true`/`false`; floaty používají výchozí formátov�
 
 ## Poznámky a nástrahy
 
-- **DSP defaulty = všechny fáze vypnuté.** `convolver_enabled`, `agc_enabled`,
-  `enhancer_enabled` i `limiter_enabled` jsou defaultně `false`, takže čerstvá
-  konfigurace nijak nemění zvuk skrz DSP řetěz.
+- **DSP defaulty = všechny fáze vypnuté.** `dsp.<STÁGE>.enabled` je u všech
+  čtyř fází defaultně `false`, takže čerstvá konfigurace nijak nemění zvuk skrz
+  DSP řetěz.
 - **Rezonance je defaultně zapnutá** (`resonance_enabled: true`), na rozdíl od
   DSP fází.
 - **Význam indexu `config_page`:** `0`=MASTER, `1`=RESONANCE, `2`=CONVOLVER,
@@ -354,15 +373,17 @@ Booly se zapisují jako `true`/`false`; floaty používají výchozí formátov�
 - **Banka a MIDI jsou best-effort.** Nenačitatelný `bank_path` nebo nenalezený
   `midi_port_name` jen zaloguje varování; GUI i tak nastartuje. Nalezenému MIDI
   portu se přesný název zapíše zpět do `midi_port_name`.
-- **Sledováno pro debounce vs. ukládaná pole.** Detekce změn pro debounce v
-  `main.cpp` hlídá pole banky/MIDI/hlasů/rezonance/DSP/logu/stránky CONFIGu
-  (včetně `max_resonance_voices` a všech šesti polí `convolver_*`), ale *ne* pole
-  `window_*`, `bank_search_dir`, `resonance_window_ms` ani `audio_sample_rate`.
-  Tahle nesledovaná pole se přesto perzistují, protože celý stav se zapisuje při
-  ukončení (a kdykoli proběhne nějaký debounce zápis).
+- **Debounce porovnává CELÝ stav.** Detekce změn v `main.cpp` už není ruční
+  řetěz porovnání jednotlivých polí — používá `GuiState::operator==` (default),
+  takže nové pole se hlídá samo. Dřívější ruční řetěz na `bank_search_dir`
+  zapomínal.
 
-Výchozí rozsahy v `persistence.h` a tabulky `Param` se **shodují** — viz přehled
-polí výše (žádné nesrovnalosti nenalezeny).
+  Jediná výjimka je **geometrie okna**, která je z porovnání vyřazená: mění se
+  při každém posunu okna a spouštěla by ukládání pořád dokola. Ukládá se stejně
+  při každém zápisu i při ukončení.
+
+Výchozí rozsahy v `persistence.h` a tabulky `Param` se **shodují** — a od schematu
+v5 už ani shodovat nemusí: rozsahy žijí **jen** v `Param` a persistence je nezná.
 
 ## Kudy dál
 

@@ -53,7 +53,9 @@ Písma jsou **zabudovaná v binárce** — za běhu se nečte žádný asset, je
 | `frame_stats.h` | Statistika snímků — percentily z histogramu + geometrie |
 | `glow_auto.h` | Regulátor dosahu záře pod tlakem |
 | `pace.h` | Přepínání tempa překreslování |
-| `app_context.{h,cpp}` | Vlastník engine/audio/MIDI + `PanelState` |
+| `master_page.h` | `IParamPage` adaptér nad MASTER gain + RELEASE (žádná DSP stage) |
+| `resonance_page.h` | `IParamPage` adaptér nad parametry rezonance; rozsah `RESONANCE LAYER` se odvozuje z načtené banky |
+| `app_context.{h,cpp}` | Vlastník engine/audio/MIDI + `PanelState`, predikát `busy()` |
 | `dsp_state.h` | Snapshot/obnova/porovnání `IParamPage` — most `DspChain` ↔ `GuiState` |
 | `state_binding.h` | Most `GuiState` ↔ `Engine` |
 | `persistence.{h,cpp}` | `state.json`, schema v7 |
@@ -402,7 +404,8 @@ Dvě pasti, které to má ošetřené: geometrie okna se v režimu panelu (a na 
 
 ### Otevřené
 
-Žádné.
+- **SDL3/KMSDRM cesta není ověřená na HW.** Přeloženo a spuštěno na Windows, otisk potvrzuje, že výměna platformy nezměnila ani jeden vertex — ale první běh na Raspberry Pi teprve proběhne. Co přesně ověřit je v [plan2do E0](../plan2do.md) a v [6 · Panel na Raspberry Pi](../prirucka/06-panel-a-rpi.md).
+- **Dvě ručně psané smyčky zůstávají mimo `wdg::itemRow`** — dvojice tlačítek na SYS a volič IR na DSP. Mají dotykovou zónu zarovnanou k horní hraně buňky (ne na střed) a `button()` navíc kreslí až PO interakci. Přepsat je by tichá posunulo dotykové zóny o 14 px — a to je změna, kterou **otisk neuvidí**, protože nemění ani jeden vertex. Záměrně tedy zůstává duplicita, která je vidět.
 
 ### Mimo rozsah (čeká na rozhodnutí)
 
