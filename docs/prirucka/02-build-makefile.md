@@ -93,6 +93,30 @@ Seznam přesně odpovídá cílům v `Makefile` (`Makefile:74`–`164`):
 | `clean` | Smaže `$(BUILD_DIR)/`. |
 | `new-license` | Zabalí dynamickou banku do **šifrované** `soundbank.ithaca` + vytvoří `license.ithaca`. Vyžaduje `SRC` a `DST`. |
 
+## Testy vázané na prostředí
+
+Většina testů je přenositelná a má projít všude. **Několik jich ale závisí na
+platformě, a je to vlastnost, ne rozbitý build.** Když je nečekáte, vypadá to
+při prvním `make test` na novém stroji jako poplach.
+
+| Test | Kde selže | Proč |
+|---|---|---|
+| `test_render_regression` | **na jiném toolchainu, než na kterém vznikly konstanty** | Bit-exact strážce audio výstupu: hashuje výstup deterministické scény. Pořadí plovoucích operací a implementace `libm` se mezi překladači liší, takže hash nesedí. Vypovídající detail: **selže 7 z 8** kontrolních bodů — první, který je čistý render hlasu bez transcendentních funkcí, prochází všude; rozchod začíná u rezonance, kde se počítá `exp` a `log`. |
+| `test_persistence`, `test_ithaca_bank`, `test_sample_read`, `test_packed_bank_load`, `test_packed_stream` | **na Windows** | Používají natvrdo POSIX cesty (`/tmp/...`) a mažou soubory, které si Windows ještě drží otevřené. Aserce v nich procházejí — padá až úklid. |
+| `roundtrip_packed_bank` | **kde není `bash`** nebo chybí `numpy` | Shell skript + python bake. Bez `numpy` se korektně přeskočí (SKIP 77); bez použitelného `bash` selže. |
+
+### Jak přegenerovat `test_render_regression`
+
+Postup je popsaný v hlavičce testu: vynulovat pole `kExpected`, spustit test —
+vypíše skutečné hodnoty — a ty vložit zpět.
+
+> **Pozor na past:** jedna sada konstant nemůže sloužit více platformám. Když je
+> přegenerujete na Pi, rozbijete tím macOS a naopak. A hlavně: přegenerováním
+> **ztratíte právě tu informaci, kvůli které test existuje** — nepoznáte, jestli
+> se změnil překladač, nebo engine. Dokud test slouží jedné referenční
+> platformě, je v pořádku; kdyby měl hlídat víc, musel by mít buď sadu konstant
+> per platforma, nebo tolerancí porovnávané body místo bit-exact hashe.
+
 ## Override proměnné
 
 Všechny mají rozumný default; měníte je jen, když potřebujete (`Makefile:42`–`67`):

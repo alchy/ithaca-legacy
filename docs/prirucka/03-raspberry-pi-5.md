@@ -336,8 +336,13 @@ build na cílovém zařízení.)
 make test     # ctest
 ```
 
-Všechny testy by měly projít. `M_PI` na Linux GCC není problém (na rozdíl od
-MSVC), takže `test_ir_modal` i `test_convolver` projdou bez `_USE_MATH_DEFINES`.
+`M_PI` na Linux GCC není problém (na rozdíl od MSVC), takže `test_ir_modal` i
+`test_convolver` projdou bez `_USE_MATH_DEFINES`.
+
+> **Jeden test na Pi selže a je to očekávané.** `test_render_regression` je
+> bit-exact strážce audio výstupu a jeho konstanty jsou **vázané na toolchain** —
+> po změně platformy se musí přegenerovat. Podrobnosti a postup jsou v
+> [2 · Build a Makefile](02-build-makefile.md#testy-vázané-na-prostředí).
 
 ### CLI smoke test
 
