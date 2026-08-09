@@ -215,25 +215,25 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     };
 
     char v[16], rs[16], pk[16], ds[16], su[16], rg[24], rgr[24];
+    const auto& dg = ps.diag;   // snapshot z renderScreen, jednou za frame
     std::snprintf(v,  sizeof(v),  "%d", (int)holdMax(ps.h_voices,
-                  (float)ctx.engine.activeVoices(), now_s));
+                  (float)dg.active_voices, now_s));
     std::snprintf(rs, sizeof(rs), "%d", (int)holdMax(ps.h_reso,
-                  (float)ctx.engine.resonanceVoices(), now_s));
+                  (float)dg.resonance_voices, now_s));
     // Peak metr drzi spicku za okno — presne to, co peak metr ma delat.
     std::snprintf(pk, sizeof(pk), "%.1f",
                   toDb(holdMax(ps.h_peak,
-                       std::max(ctx.engine.masterPeakL(), ctx.engine.masterPeakR()),
-                       now_s)));
+                       std::max(dg.master_peak_l, dg.master_peak_r), now_s)));
     std::snprintf(ds, sizeof(ds), "%.0f%%",
-                  holdMax(ps.h_load, ctx.engine.dspLoadPeak(), now_s) * 100.f);
+                  holdMax(ps.h_load, dg.dsp_load_peak, now_s) * 100.f);
     std::snprintf(su, sizeof(su), "%d",
-                  (int)holdLast(ps.h_sustain, (float)ctx.engine.pedalCC(), now_s));
+                  (int)holdLast(ps.h_sustain, (float)dg.pedal_cc, now_s));
     std::snprintf(rg,  sizeof(rg),  "%d/%d",
-                  (int)holdMax(ps.h_main_rings, (float)ctx.engine.mainRingsUsed(), now_s),
-                  ctx.engine.mainRingsTotal());
+                  (int)holdMax(ps.h_main_rings, (float)dg.main_rings_used, now_s),
+                  dg.main_rings_total);
     std::snprintf(rgr, sizeof(rgr), "%d/%d",
-                  (int)holdMax(ps.h_reso_rings, (float)ctx.engine.resonanceRingsUsed(), now_s),
-                  ctx.engine.resonanceRingsTotal());
+                  (int)holdMax(ps.h_reso_rings, (float)dg.reso_rings_used, now_s),
+                  dg.reso_rings_total);
 
     statNum(dl, cell_at(0), "VOICES",    v);
     statNum(dl, cell_at(1), "RESO",      rs);
@@ -241,7 +241,7 @@ void pagePlay(AppContext& ctx, const Rect& r) {
     statNum(dl, cell_at(3), "RING RESO", rgr);
     statNum(dl, cell_at(4), "PEAK dB",   pk);
     statNum(dl, cell_at(5), "DSP",       ds,
-            ctx.engine.overloadRecent(4000.f) ? Colors::warn : Colors::ink);
+            dg.overload_age_ms < 4000.f ? Colors::warn : Colors::ink);
     // Pedal uz nema vlastni bar — jeho INDIKACE je pata stuha v pozadi
     // (viz screen.cpp). Tady zustava jen cislo, protoze udaj se ma cist presne.
     statNum(dl, cell_at(6), "SUSTAIN",   su);

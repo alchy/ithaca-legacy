@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-#include "resonance/resonance_layer_select.h"
+#include "sample/resonance_layer_select.h"
 using namespace ithaca;
 
 static NoteSlots makeNote(std::initializer_list<float> rms) {

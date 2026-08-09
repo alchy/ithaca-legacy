@@ -19,7 +19,10 @@ public:
     void process(float* L, float* R, int n) {
         for (auto* s : stages_) if (s->enabled()) s->process(L, R, n);
     }
-    int stageCount() const { return 4; }
+    // Z velikosti pole, ne literal: pridani stage = pridat member a radek
+    // do stages_, pocet se dopocita sam. Vse ostatni (GUI, persistence,
+    // profily) se prizpusobi genericky pres IParamPage/Param::id.
+    int stageCount() const { return (int)(sizeof(stages_) / sizeof(stages_[0])); }
     DspStage& stage(int i) { return *stages_[i]; }
 
 private:

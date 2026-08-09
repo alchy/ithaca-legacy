@@ -3,7 +3,7 @@
 
 #include "io/sample_read.h"
 #include "io/wav_reader.h"
-#include "resonance/resonance_layer_select.h"
+#include "sample/resonance_layer_select.h"
 #include "sample/bank_index.h"
 #include "sample/ithaca_bank.h"
 #include "sample/sample_loader.h"

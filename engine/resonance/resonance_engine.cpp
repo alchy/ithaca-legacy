@@ -24,7 +24,7 @@
 
 #include "pedal/pedal_state.h"
 #include "resonance/harmonic_proximity.h"
-#include "resonance/resonance_layer_select.h"
+#include "sample/resonance_layer_select.h"
 #include "sample/sample_types.h"
 #include "util/log.h"
 #include "voice/voice_pool.h"

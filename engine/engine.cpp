@@ -214,20 +214,51 @@ void Engine::noteOff(int midi, int channel) {
             "MIDI fronta plna — NoteOff midi=%d ZAHOZEN", midi);
 }
 
-bool Engine::noteOnRecent(float ms) const noexcept {
-    const uint64_t t = last_note_on_us_.load(std::memory_order_relaxed);
-    if (t == 0) return false;
-    return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
-}
-bool Engine::noteOffRecent(float ms) const noexcept {
-    const uint64_t t = last_note_off_us_.load(std::memory_order_relaxed);
-    if (t == 0) return false;
-    return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
-}
 bool Engine::overloadRecent(float ms) const noexcept {
     const uint64_t t = last_overload_us_.load(std::memory_order_relaxed);
     if (t == 0) return false;
     return (nowMicros() - t) < (uint64_t)(ms * 1000.f);
+}
+
+EngineDiag Engine::diag() const noexcept {
+    // Tytez atomic loady jako drivejsi jednotlive gettery, jen v jednom
+    // volani. `now` se cte JEDNOU — vsechna stari jsou vuci temuz okamziku.
+    const uint64_t now = nowMicros();
+    const auto age = [now](uint64_t t) {
+        return (t == 0 || t > now) ? EngineDiag::kNever
+                                   : (float)(now - t) / 1000.f;
+    };
+
+    EngineDiag d;
+    d.active_voices    = pool_ ? pool_->activeCount() : 0;
+    d.resonance_voices = resonanceVoices();
+
+    if (stream_main_) {
+        d.main_rings_used  = stream_main_->numRingsUsed();
+        d.main_rings_total = stream_main_->numRings();
+        d.main_underrun_age_ms = stream_main_->underrunAgeMs();
+    }
+    if (stream_resonance_) {
+        d.reso_rings_used  = stream_resonance_->numRingsUsed();
+        d.reso_rings_total = stream_resonance_->numRings();
+        d.reso_underrun_age_ms = stream_resonance_->underrunAgeMs();
+    }
+
+    d.master_peak_l = master_peak_l_.load(std::memory_order_relaxed);
+    d.master_peak_r = master_peak_r_.load(std::memory_order_relaxed);
+    d.dsp_load_peak = dsp_load_peak_.load(std::memory_order_relaxed);
+    d.pedal_cc      = pedalCC();
+
+    d.note_on_age_ms  = age(last_note_on_us_.load(std::memory_order_relaxed));
+    d.note_off_age_ms = age(last_note_off_us_.load(std::memory_order_relaxed));
+    d.overload_age_ms = age(last_overload_us_.load(std::memory_order_relaxed));
+
+    d.bank_type      = bank_.format;
+    d.loaded_samples = bank_.loaded_samples;
+    int rn = 0;
+    for (int i = 0; i < 128; ++i) if (bank_.notes[i].recorded) ++rn;
+    d.recorded_notes = rn;
+    return d;
 }
 void Engine::allNotesOff() {
     if (!midi_q_.push({MidiEvent::AllNotesOff, 0, 0}))
@@ -544,13 +575,6 @@ void Engine::activeMidiNotes(bool out[128]) const noexcept {
             out[v.midi()] = true;
         }
     }
-}
-
-void Engine::resonatingMidiNotes(bool out[128]) const noexcept {
-    std::memset(out, 0, 128 * sizeof(bool));
-    if (!resonance_) return;
-    for (int n = 0; n < 128; ++n)
-        if (resonance_->isResonating(n)) out[n] = true;
 }
 
 float Engine::currentGainFor(int midi) const noexcept {
