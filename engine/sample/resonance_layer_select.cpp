@@ -1,5 +1,5 @@
-// engine/resonance/resonance_layer_select.cpp — viz .h
-#include "resonance/resonance_layer_select.h"
+// engine/sample/resonance_layer_select.cpp — viz .h
+#include "sample/resonance_layer_select.h"
 #include <cmath>
 
 namespace ithaca {

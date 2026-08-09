@@ -114,6 +114,7 @@ add_library(ithaca_core STATIC
     engine/sample/ithaca_bank.cpp
     engine/sample/sample_loader.cpp
     engine/sample/sample_store.cpp
+    engine/sample/resonance_layer_select.cpp
     engine/stream/stream_engine.cpp
     engine/stream/streamed_reader.cpp
     engine/voice/patch_manager.cpp
@@ -123,7 +124,6 @@ add_library(ithaca_core STATIC
     engine/midi/midi_input.cpp
     engine/pedal/pedal_state.cpp
     engine/resonance/harmonic_proximity.cpp
-    engine/resonance/resonance_layer_select.cpp
     engine/resonance/resonance_engine.cpp
     engine/engine.cpp
     engine/dsp/limiter.cpp
