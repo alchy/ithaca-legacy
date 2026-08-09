@@ -274,6 +274,13 @@ void StreamEngine::noteUnderrun() noexcept {
     last_underrun_us_.store(nowMicrosSE(), std::memory_order_relaxed);
 }
 
+float StreamEngine::underrunAgeMs() const noexcept {
+    const uint64_t t = last_underrun_us_.load(std::memory_order_relaxed);
+    if (t == 0) return 1e12f;
+    const uint64_t now = nowMicrosSE();
+    return (t > now) ? 1e12f : (float)(now - t) / 1000.f;
+}
+
 bool StreamEngine::underrunRecent(float ms) const noexcept {
     const uint64_t t = last_underrun_us_.load(std::memory_order_relaxed);
     if (t == 0) return false;

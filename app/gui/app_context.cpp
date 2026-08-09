@@ -151,9 +151,10 @@ void AppContext::pollReloadCompletion() {
     const float lo = engine.bankPeakRmsMinDb(), hi = engine.bankPeakRmsMaxDb();
     if (hi > lo && state.resonance_layer_db == -30.f)
         state.resonance_layer_db = lo + (hi - lo) / 3.f;
+    const ithaca::EngineDiag dg = engine.diag();
     log::Logger::default_().log("gui", log::Severity::Info,
         "Bank loaded: %s (%d notes, %d samples)%s", reload_dir_.c_str(),
-        engine.recordedNotes(), engine.loadedSamples(),
+        dg.recorded_notes, dg.loaded_samples,
         bank_truncated_ ? " - INCOMPLETE (RAM budget)" : "");
 }
 

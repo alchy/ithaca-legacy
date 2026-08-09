@@ -181,7 +181,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
     dl->AddLine(ImVec2(r.lo.x, sep_y), ImVec2(r.hi.x, sep_y), Colors::line);
 
     const char* type = "\xE2\x80\x94";
-    switch (ctx.engine.bankType()) {
+    switch (ctx.panels.diag.bank_type) {
         case BankFormat::FixedVelocity:   type = "FIXED";    break;
         case BankFormat::DynamicVelocity: type = "DYNAMIC";  break;
         case BankFormat::Extended:        type = "EXTENDED"; break;
@@ -196,7 +196,7 @@ void pageBank(AppContext& ctx, const Rect& r) {
 
     char facts[64];
     std::snprintf(facts, sizeof(facts), "%d notes \xC2\xB7 %d samples",
-                  ctx.engine.recordedNotes(), ctx.engine.loadedSamples());
+                  ctx.panels.diag.recorded_notes, ctx.panels.diag.loaded_samples);
     dl->AddText(Fonts::small, px_s, ImVec2(x, fy), Colors::dim, facts);
 
     // Varovani na tentyz radek vpravo — pod nim uz je akcni pas.

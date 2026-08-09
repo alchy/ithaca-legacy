@@ -64,18 +64,19 @@ constexpr float kHistWNorm = 1.f / 5.f;      // soucet vah je presne 5
 // jeden sloupec, ktery na uzkem panelu chybel.
 void lampRow(AppContext& ctx, ImDrawList* dl, ImVec2 pos, float w) {
     auto& ps = ctx.panels;
-    const bool ur = ctx.engine.mainStreamUnderrunRecent(4000.f) ||
-                    ctx.engine.resonanceStreamUnderrunRecent(4000.f);
-    const bool clip = ctx.engine.masterPeakL() >= 0.999f ||
-                      ctx.engine.masterPeakR() >= 0.999f;
+    const auto& dg = ctx.panels.diag;
+    const bool ur = dg.main_underrun_age_ms < 4000.f ||
+                    dg.reso_underrun_age_ms < 4000.f;
+    const bool clip = dg.master_peak_l >= 0.999f ||
+                      dg.master_peak_r >= 0.999f;
 
     // Vyhlazeni MIDI lamp: engine dava jen ano/ne s oknem 120 ms, bez nej by
     // lampa cvakala. Vazane na CAS, ne na snimek, takze vypada stejne pri
     // jakemkoli fps.
     const float dt = ImGui::GetIO().DeltaTime;
     const float k  = 1.f - std::exp(-dt / 0.20f);
-    ps.lamp_note += ((ctx.engine.noteOnRecent(120.f)  ? 1.f : 0.f) - ps.lamp_note) * k;
-    ps.lamp_off  += ((ctx.engine.noteOffRecent(120.f) ? 1.f : 0.f) - ps.lamp_off)  * k;
+    ps.lamp_note += ((dg.note_on_age_ms  < 120.f ? 1.f : 0.f) - ps.lamp_note) * k;
+    ps.lamp_off  += ((dg.note_off_age_ms < 120.f ? 1.f : 0.f) - ps.lamp_off)  * k;
 
     struct Lamp { const char* label; float on; ImU32 col; };
     const Lamp lamps[] = {
@@ -218,7 +219,8 @@ void waveUpdate(AppContext& ctx) {
 
     // Blizkost prehlceni: od -9 dB (0) k 0 dB (1). Bere skutecny peak metr,
     // ktery ma vlastni decay, takze kratka spicka zustane chvili videt.
-    const float pk = std::max(ctx.engine.masterPeakL(), ctx.engine.masterPeakR());
+    const float pk = std::max(ctx.panels.diag.master_peak_l,
+                              ctx.panels.diag.master_peak_r);
     const float pk_db = (pk > 1e-6f) ? 20.f * std::log10(pk) : -120.f;
     wv.clip = std::clamp((pk_db + 9.f) / 9.f, 0.f, 1.f);
 
@@ -229,7 +231,7 @@ void waveUpdate(AppContext& ctx) {
 
     // Pedal: vlastni obalka i historie. Neni to zvuk, takze se nenormalizuje —
     // 0..127 je uz absolutni skala.
-    const float ped = std::clamp((float)ctx.engine.pedalCC() / 127.f, 0.f, 1.f);
+    const float ped = std::clamp((float)ctx.panels.diag.pedal_cc / 127.f, 0.f, 1.f);
     wv.env_p += (ped - wv.env_p)
               * lag((ped > wv.env_p) ? wave_tau::ped_up : wave_tau::ped_down);
 
@@ -390,6 +392,9 @@ void waveRibbons(AppContext& ctx, ImDrawList* dl, float w,
 
 void renderScreen(AppContext& ctx, ithaca::dsp::IParamPage** pages, int n_pages,
                   float W, float H) {
+    // Diagnosticky snapshot JEDNOU za frame — vsechno dole (pozadi, paticka,
+    // stranky) cte uz jen ctx.panels.diag, ne Engine gettery.
+    ctx.panels.diag = ctx.engine.diag();
 
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({W, H});

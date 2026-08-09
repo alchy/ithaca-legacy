@@ -84,3 +84,66 @@ TEST_CASE("noteOn/noteOff s out-of-range parametry jsou bezpecne (clamp/zahozeni
     e.processBlock(L.data(), R.data(), 64);   // nesmi spadnout / UB (overi i ASan)
     CHECK(true);
 }
+
+// -- EngineDiag snapshot (R2 z ARCHITECTURE_REVIEW) --------------------------
+// diag() je kanonicka ctecí cesta pro GUI — jedno volani misto tuctu getteru.
+// Testuje se proti zbyvajicim getterum (kde existuji) a proti ocekavanemu
+// stavu tam, kde getter zanikl (bank fakta, note ages).
+
+TEST_CASE("diag: cerstvy engine — nuly, kNever stari, Unknown banka") {
+    Engine eng;
+    EngineConfig cfg;
+    REQUIRE(eng.init(cfg));
+    const EngineDiag d = eng.diag();
+
+    CHECK(d.active_voices == 0);
+    CHECK(d.resonance_voices == 0);
+    CHECK(d.pedal_cc == 0);
+    CHECK(d.bank_type == BankFormat::Unknown);
+    CHECK(d.loaded_samples == 0);
+    CHECK(d.recorded_notes == 0);
+    // Zadna udalost jeste nenastala → stari je "nikdy", ne nula. Na tom stoji
+    // GUI lampy: age < okno nesmi pri startu bliknout.
+    CHECK(d.note_on_age_ms  > 1e9f);
+    CHECK(d.note_off_age_ms > 1e9f);
+    CHECK(d.overload_age_ms > 1e9f);
+    CHECK(d.main_underrun_age_ms > 1e9f);
+    CHECK(d.reso_underrun_age_ms > 1e9f);
+    // Ring pooly existuji hned po init a souhlasi s gettery drzenymi testy.
+    CHECK(d.main_rings_total == eng.mainRingsTotal());
+    CHECK(d.reso_rings_total == eng.resonanceRingsTotal());
+    CHECK(d.main_rings_total > 0);
+}
+
+TEST_CASE("diag: zrcadli zive gettery a bank fakta po nacteni") {
+    namespace fs = std::filesystem;
+    std::string dir = "/tmp/ithaca_diag_fixture";
+    fs::remove_all(dir); fs::create_directories(dir);
+    writeConstWav(dir + "/m060-vel4-f48.wav", 0.5f);
+
+    Engine eng;
+    EngineConfig cfg; cfg.sample_rate = 48000; cfg.block_size = 256;
+    REQUIRE(eng.init(cfg));
+    REQUIRE(eng.loadBank(dir));
+    fs::remove_all(dir);
+
+    eng.noteOn(60, 100);
+    eng.sustainPedal(64);
+    std::vector<float> L(256, 0.f), R(256, 0.f);
+    eng.processBlock(L.data(), R.data(), 256);
+
+    const EngineDiag d = eng.diag();
+    CHECK(d.active_voices == eng.activeVoices());
+    CHECK(d.active_voices >= 1);
+    CHECK(d.pedal_cc == eng.pedalCC());
+    CHECK(d.pedal_cc == 64);
+    CHECK(d.master_peak_l == doctest::Approx(eng.masterPeakL()));
+    CHECK(d.dsp_load_peak == doctest::Approx(eng.dspLoadPeak()).epsilon(0.5));
+    // Note-on prave probehl → stari je male; note-off zadny nebyl.
+    CHECK(d.note_on_age_ms < 60000.f);
+    CHECK(d.note_off_age_ms > 1e9f);
+    // Fixture banka: 1 nota, 1 sample, format detekovan (ne Unknown).
+    CHECK(d.bank_type != BankFormat::Unknown);
+    CHECK(d.recorded_notes == 1);
+    CHECK(d.loaded_samples >= 1);
+}

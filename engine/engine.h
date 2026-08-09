@@ -26,6 +26,43 @@ namespace ithaca {
 
 struct BankLoadProgress;   // viz sample/sample_store.h (GUI progress overlay)
 
+// Diagnosticky snapshot pro GUI/monitor — JEDNO volani Engine::diag() misto
+// tuctu rozprasenych getteru. Vsechna pole se plni tymiz atomic loady jako
+// drive; snapshot nema zadnou synchronizacni zaruku NAVZAJEM mezi poli
+// (kazde pole je jiny okamzik, stejne jako kdyz se gettery volaly po jednom)
+// — pro diagnostiku to nevadi a zamek do audio cesty by byl mnohem horsi.
+//
+// Recence udalosti se hlasi jako STARI v ms (kNever = jeste nenastala), ne
+// jako bool s oknem: okno si voli konzument (lampy 120 ms, prehreti 4 s)
+// a engine nema co vedet, jak dlouho ma GUI blikat.
+struct EngineDiag {
+    static constexpr float kNever = 1e12f;   // "nikdy" — starsi nez cokoliv
+
+    int   active_voices    = 0;
+    int   resonance_voices = 0;
+
+    int   main_rings_used  = 0;
+    int   main_rings_total = 0;
+    int   reso_rings_used  = 0;
+    int   reso_rings_total = 0;
+
+    float master_peak_l    = 0.f;
+    float master_peak_r    = 0.f;
+    float dsp_load_peak    = 0.f;   // 1.0 = deadline; >1 = blok se nestihl
+    uint8_t pedal_cc       = 0;     // sustain CC64, 0..127
+
+    float note_on_age_ms       = kNever;
+    float note_off_age_ms      = kNever;
+    float overload_age_ms      = kNever;
+    float main_underrun_age_ms = kNever;
+    float reso_underrun_age_ms = kNever;
+
+    // Fakta o nactene bance (0/Unknown dokud zadna neni).
+    BankFormat bank_type   = BankFormat::Unknown;
+    int   loaded_samples   = 0;
+    int   recorded_notes   = 0;
+};
+
 struct EngineConfig {
     int   sample_rate    = 48000;
     int   block_size     = 256;
@@ -109,16 +146,6 @@ public:
 
     int  sampleRate() const { return cfg_.sample_rate; }
     int  blockSize()  const { return cfg_.block_size; }
-    // Detekovany format nactene banky (fixed-velocity / dynamic-velocity / …).
-    // Unknown dokud neni nactena zadna banka. Pro GUI TYPE badge.
-    BankFormat bankType() const noexcept { return bank_.format; }
-    // Realna fakta o nactene bance (pro GUI). 0 dokud neni banka.
-    int loadedSamples() const noexcept { return bank_.loaded_samples; }
-    int recordedNotes() const noexcept {
-        int n = 0;
-        for (int i = 0; i < 128; ++i) if (bank_.notes[i].recorded) ++n;
-        return n;
-    }
     int  activeVoices() const { return pool_ ? pool_->activeCount() : 0; }
     void setMasterGain(float g) { master_gain_.store(g, std::memory_order_relaxed); }
 
@@ -128,32 +155,25 @@ public:
     // threshold. Vraci nove platny block size (clamped do rozumnych mezi).
     int  setBlockSize(int new_block_size) noexcept;
 
-    // Pristup ke streaming enginu (potreba pro inspect / diag / GUI).
-    StreamEngine* streamEngine() { return stream_main_.get(); }   // back-compat (main)
-
     // -- Diagnostika (GUI/monitor; thread-safe atomic loads) --
+    // JEDEN snapshot per frame — viz EngineDiag nahore. GUI nema cist stav
+    // po jednotlivych getterech; ty nize zustavaji pro testy a specialni
+    // pripady, nove udaje pribyvaji UZ JEN do EngineDiag.
+    EngineDiag diag() const noexcept;
+
     // Pocet aktivnich rezonancnich hlasu (sympaticka rezonance, faze 5).
     int     resonanceVoices() const noexcept;
     // Pocet aktualne pouzitych streaming ringu (in_use_ flag).
     int     numRingsUsed()    const noexcept;
-    int  mainRingsUsed()      const noexcept { return stream_main_ ? stream_main_->numRingsUsed() : 0; }
     int  mainRingsTotal()     const noexcept { return stream_main_ ? stream_main_->numRings() : 0; }
-    int  resonanceRingsUsed() const noexcept { return stream_resonance_ ? stream_resonance_->numRingsUsed() : 0; }
     int  resonanceRingsTotal()const noexcept { return stream_resonance_ ? stream_resonance_->numRings() : 0; }
     bool mainStreamUnderrunRecent(float ms)      const noexcept { return stream_main_ && stream_main_->underrunRecent(ms); }
     bool resonanceStreamUnderrunRecent(float ms) const noexcept { return stream_resonance_ && stream_resonance_->underrunRecent(ms); }
     // Aktualni hodnota sustain pedalu (CC64, 0..127).
     uint8_t pedalCC()         const noexcept;
-    // Blikani indikatoru: true kdyz posledni note-on / note-off event nastal
-    // pred mene nez `ms` ms (GUI lampy NOTE/OFF). Cas drzi engine (steady_clock).
-    bool    noteOnRecent(float ms)  const noexcept;
-    bool    noteOffRecent(float ms) const noexcept;
     // Maska aktivnich main voice midi cisel; vyplni 128 bool out.
     // out[i] = true kdyz aspon jeden hlas s midi=i je active() (vc. releasing).
     void    activeMidiNotes(bool out[128]) const noexcept;
-    // Maska sympaticky rezonujicich strun; out[i] = true kdyz nota i prave
-    // rezonuje (sekundarni hlas). Pro odliseni na klaviature od primarnich.
-    void    resonatingMidiNotes(bool out[128]) const noexcept;
     // Max currentLevel pres vsechny voicy te midi (pro keyboard viz alpha).
     // midi mimo rozsah <0,127> → 0.f. Nezohlednuje releasing samostatne.
     float   currentGainFor(int midi) const noexcept;

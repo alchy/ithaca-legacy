@@ -183,6 +183,9 @@ public:
     //    GUI cte underrunRecent (vzor jako Engine::noteOnRecent). --
     void noteUnderrun() noexcept;                 // orazitkuje steady_clock micros
     bool underrunRecent(float ms) const noexcept; // true kdyz posledni underrun < ms
+    // Stari posledniho underrunu v ms; EngineDiag::kNever-styl (obrovska
+    // hodnota) kdyz zadny nenastal. Pro Engine::diag().
+    float underrunAgeMs() const noexcept;
 
     // Refill threshold v stereo frames. Voice si pravidlo "kdyz je v ringu
     // mene nez refill_threshold a soubor nedohran → posli refill" cte odsud.

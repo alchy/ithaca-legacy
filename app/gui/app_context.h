@@ -38,6 +38,11 @@ struct BankEntry {
 // function-local `static` promenne primo v render funkcich — skryty globalni
 // stav, ktery nesel ani otestovat, ani resetovat pri reloadu.
 struct PanelState {
+    // Diagnosticky snapshot enginu pro tento frame. Plni ho shell
+    // (renderScreen) JEDNOU pred dispatchem stranek — stranky uz na Engine
+    // gettery nesahaji, ctou odsud. Viz EngineDiag v engine.h.
+    ithaca::EngineDiag diag;
+
     // -- Navigace --
     int page      = 0;   // PLAY BANK TONE RESO DSP SYS LOG
     int dsp_stage = 0;   // podzalozka na strance DSP
@@ -205,13 +210,16 @@ struct AppContext {
     // Pedal je tu zamerne: drzeny pedal kresli v pozadi vlastni stuhu, a ta se
     // hybe i kdyz uz zadny hlas nezni.
     bool busy() const {
+        // Cte snapshot z panels.diag (max o frame stary) — pri rozhodovani
+        // o tempu prekreslovani je frame stare okno bez vyznamu.
+        const auto& d = panels.diag;
         if (panelAnimating(panels))                 return true;
         if (reloadInProgress())                     return true;
-        if (engine.activeVoices() > 0)              return true;
-        if (engine.resonanceVoices() > 0)           return true;
-        if (engine.pedalCC() > 0)                   return true;
-        if (engine.noteOnRecent(500.f))             return true;
-        if (engine.noteOffRecent(500.f))            return true;
+        if (d.active_voices > 0)                    return true;
+        if (d.resonance_voices > 0)                 return true;
+        if (d.pedal_cc > 0)                         return true;
+        if (d.note_on_age_ms  < 500.f)              return true;
+        if (d.note_off_age_ms < 500.f)              return true;
         return false;
     }
 
