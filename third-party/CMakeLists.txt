@@ -6,8 +6,9 @@
 #   nlohmann_json   INTERFACE  (header-only, config + banky v dalsich fazich)
 #   miniaudio_inc   INTERFACE  (header-only, audio out v dalsich fazich)
 #   rtmidi          STATIC     (MIDI in v dalsich fazich)
-#   glfw            STATIC     (okno + GL context pro F8 GUI; vlastni CMake)
-#   imgui           STATIC     (Dear ImGui core + GLFW/OpenGL3 backendy)
+#   SDL3-static     STATIC     (okno + GL/GLES context; nahradilo GLFW —
+#                               KMSDRM na RPi bezi bez X11/Waylandu)
+#   imgui           STATIC     (Dear ImGui core + SDL3/OpenGL3 backendy)
 
 # -- doctest (header-only) --
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/doctest/doctest.h")
