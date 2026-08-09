@@ -117,8 +117,8 @@ mezi sebou sdílejí data a jaké invarianty musí platit za všech okolností.
 | `master_gain_` | `atomic<float>` | GUI vlákno (`setMasterGain`) → audio vlákno (`processBlock`) | relaxed/relaxed | Okamžitá změna hlasitosti bez zámku |
 | `master_peak_l_`, `master_peak_r_` | `atomic<float>` | audio vlákno (processBlock) → GUI vlákno (peak metr) | relaxed/relaxed | Peak metr pro VU indikátor; decay ~100 ms |
 | `bank_loading_` | `atomic<bool>` | GUI vlákno / `reloadBank` (`store release`) → audio vlákno (`load acquire`) | release/acquire | „Graceful pause" guard pro bank reload; při `true` audio vrátí ticho |
-| `last_note_on_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOn`) → GUI vlákno (`noteOnRecent`) | relaxed/relaxed | Blikání NOTE indikátoru; 64b write je atomické na x86/arm64 |
-| `last_note_off_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOff`) → GUI vlákno (`noteOffRecent`) | relaxed/relaxed | Blikání OFF indikátoru |
+| `last_note_on_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOn`) → GUI vlákno (`diag().note_on_age_ms`) | relaxed/relaxed | Blikání NOTE indikátoru; 64b write je atomické na x86/arm64 |
+| `last_note_off_us_` | `atomic<uint64_t>` | MIDI/GUI vlákno (`noteOff`) → GUI vlákno (`diag().note_off_age_ms`) | relaxed/relaxed | Blikání OFF indikátoru |
 | `dsp_load_peak_` | `atomic<float>` | audio vlákno (processBlock, peak-hold s decay ~0.5 s) → GUI vlákno (`dspLoadPeak`) | relaxed/relaxed | Sloupec `DSP` na stránce PLAY: čas renderu / perioda bloku |
 | `last_overload_us_` | `atomic<uint64_t>` | audio vlákno (load ≥ 1.0) → GUI vlákno (`overloadRecent`) | relaxed/relaxed | Indikace přetížení při minutí deadline |
 | `block_epoch_` | `atomic<uint64_t>` | audio vlákno (tik na začátku každého `processBlock`) → non-RT (`waitForAudioQuiesce`, `blockEpoch()`) | seq_cst/seq_cst | **Block-epoch handshake** pro reload/recache: epoch+2 = in-flight blok doběhl a další blok viděl aktuální flagy |
@@ -331,7 +331,7 @@ handshaku je realokace `preload_resonance` bezpečná — audio do ní už nesah
 
 ### Známé výjimky a technické dluhy
 
-1. **`steady_clock::now()` na audio vláknu** — `Engine::noteOnRecent()` a
+1. **`steady_clock::now()` na audio vláknu** — výpočty stáří v `Engine::diag()` a
    `StreamEngine::underrunRecent()` volají `nowMicros()` (steady_clock) z GUI
    vlákna, ale `StreamEngine::noteUnderrun()` — volaný z Voice na audio vláknu
    po underrunu — volá `nowMicrosSE()` (steady_clock) **na audio vláknu**

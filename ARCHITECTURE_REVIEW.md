@@ -7,6 +7,12 @@ v [docs/architecture/dependencies.md](docs/architecture/dependencies.md);
 tento dokument hodnotí a navrhuje. Během revize nebyl proveden žádný
 refactoring.
 
+> **Stav provedení:** kroky **R1+R2** (commit `3ccb8dd`) a **R3+R5**
+> (commit `ef8cad8`) jsou hotové; R4 zůstává podmíněný rozhodnutím
+> o druhém hostu. Diff proti baseline je v dependencies.md, kapitola
+> „Architecture diff". Nálezy níže jsou ponechány v původním znění
+> s doplněným stavem u F2/F4/F5.
+
 ---
 
 ## 1. Executive summary
@@ -225,7 +231,9 @@ která naplní snapshot jedním voláním (uvnitř tytéž atomic loady). Getter
 zprvu ponechat (mechanická migrace GUI, pak smazat). Settery nechat, jak
 jsou — jsou po jednom správně.
 
-**Priority:** Medium.
+**Priority:** Medium. — **PROVEDENO** (`3ccb8dd`): `EngineDiag` + `diag()`,
+recence jako stáří v ms (`kNever`), GUI čte `PanelState::diag` jednou za
+frame; smazáno 9 getterů bez zbývajících volajících, testy pinují zbytek.
 
 ### F3 — DspChain je konkrétní typ s pevnými čtyřmi stagi
 
@@ -271,7 +279,8 @@ křičely.
 v dependencies.md — už je), nebo rozdělit na `midi/` (queue, hold) a
 adaptér přesunout k `io/` vedle `AudioDevice`, kde už adaptéry žijí.
 
-**Priority:** Low.
+**Priority:** Low. — **PROVEDENO** (`ef8cad8`): soubor přesunut, pseudo-cyklus
+`sample⇄resonance` zanikl; u `midi/` zvolena varianta „nic + komentář".
 
 ### F5 — Mrtvé veřejné API
 
@@ -287,7 +296,8 @@ cena odstranění.
 
 **Recommendation:** Smazat (krok R1).
 
-**Priority:** Low.
+**Priority:** Low. — **PROVEDENO** (`3ccb8dd`); spolu s ním smazáno i
+`resonatingMidiNotes()` (mrtvé od odstranění klávesnice starého GUI).
 
 ### F6 — Logger singleton
 
