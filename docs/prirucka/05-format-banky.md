@@ -318,6 +318,11 @@ flowchart LR
     dyn -- "bake_soundbank.py --license" --> lic["soundbank.ithaca (šifr.)<br/>+ license.ithaca"]
 ```
 
+- **Z nahrávek do dynamic-velocity banky** — střih úderů, určení noty z audia a
+  převod na 48 kHz / 16 bit dělá samostatný nástroj
+  [sample-slicer](https://github.com/alchy/sample-slicer) (`sample-slicer build
+  <nahrávky> --original <orig> --out <banka>`); ithaca výsledný adresář jen
+  načte. Jak nahrávat, popisuje jeho `RECORDING.md`.
 - **`tools/make_dynamic_bank.sh <plochá> <dynamic>`** — převede fixed-velocity na
   dynamic-velocity (přejmenuje na hashe; `velN` tag se zahodí, RMS řazení při
   načtení pořadí zrekonstruuje). Audio se nepřekóduje.
